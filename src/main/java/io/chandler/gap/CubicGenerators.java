@@ -86,7 +86,8 @@ public class CubicGenerators {
         //doExhaustive3DSearchPI();
 
         //diTests();
-        printM24_dot_puzzle_Depth_Classes();
+        //printM24_dot_puzzle_Depth_Classes();
+        doExhaustive3DSearchPI();
 	}
 
     private static void printM24_dot_puzzle_Depth_Classes() {
@@ -241,6 +242,17 @@ public class CubicGenerators {
     }
 
     private static void doExhaustive3DSearchPI() {
+        {
+        VertexColorSearch2 vcs = VertexColorSearch2.pentagonalIcositrahedron_3D_180_32Vertices();
+        System.out.println(vcs.generateAllSelections().size());
+        vcs.filterOutIdenticalGenerators();
+        System.out.println(vcs.generateAllSelections().size());
+        vcs.forEachGeneratorWithInversions((gen, justCycles) -> {
+            boolean good = checkGenerator(false, 8, gen);
+            if (good) PentagonalIcositrahedron.printVertexGeneratorNotations(justCycles.generator());
+        });
+        }
+        
         VertexColorSearch2 vcs = VertexColorSearch2.pentagonalIcositrahedron_3D_180();
         System.out.println(vcs.generateAllSelections().size());
         vcs.filterOutIdenticalGenerators();

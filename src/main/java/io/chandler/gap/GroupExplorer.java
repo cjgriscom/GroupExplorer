@@ -519,7 +519,7 @@ public class GroupExplorer implements AbstractGroupProperties {
     public static List<int[][][]> genIsomorphisms(int[][][] a) {
         List<int[][][]> checks = new ArrayList<>();
         Permu.applyGeneratorPermutationsAndRotations(a, (aPerm) -> {
-            checks.add(renumberGenerators(aPerm));
+            checks.add(renumberGenerators_fast(aPerm));
         });
         return checks;
     }
@@ -530,7 +530,7 @@ public class GroupExplorer implements AbstractGroupProperties {
 
     public static void genIsomorphisms_Callback(int[][][] a, boolean renumber, Consumer<int[][][]> callback) {
         Permu.applyGeneratorPermutationsAndRotations(a, (aPerm) -> {
-            int[][][] check = renumber ? renumberGenerators(aPerm) : aPerm;
+            int[][][] check = renumber ? renumberGenerators_fast(aPerm) : aPerm;
             callback.accept(check);
         });
     }

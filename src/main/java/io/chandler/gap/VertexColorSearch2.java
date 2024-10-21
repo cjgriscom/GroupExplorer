@@ -28,8 +28,26 @@ public class VertexColorSearch2 {
 			accept.run();
 		};
 		return new VertexColorSearch2(
-			4, new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries3)), patternFacesAboutSymm,
+			3, new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries3)), patternFacesAboutSymm,
 			24, PentagonalIcositrahedron::getFacesFromVertex, PentagonalIcositrahedron::getMatchingVertexFromFaces);
+	}
+	public static VertexColorSearch2 pentagonalIcositrahedron_3D_180_32Vertices() {
+		BiConsumer<GroupExplorer, Runnable> patternFacesAboutSymm = (ge, accept) -> {
+			ge.resetElements(true);
+			accept.run();
+			ge.applyOperation(0);
+			ge.applyOperation(0);
+			accept.run();
+			ge.applyOperation(1);
+			ge.applyOperation(1);
+			accept.run();
+			ge.applyOperation(0);
+			ge.applyOperation(0);
+			accept.run();
+		};
+		return new VertexColorSearch2(
+			4, new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries3)), patternFacesAboutSymm,
+			32, PentagonalIcositrahedron::getFacesFromVertex, PentagonalIcositrahedron::getMatchingVertexFromFaces);
 	}
 
 	public static VertexColorSearch2 pentagonalHexecontahedron_3D_180_60vertices() {

@@ -2,17 +2,21 @@ package io.chandler.gap;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.TreeMap;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 
 import io.chandler.gap.GroupExplorer.Generator;
 import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.cache.LongStateCache;
-
+import io.chandler.gap.cache.M12StateCache;
 import static io.chandler.gap.GeneratorPairSearch.findGeneratorPairs;
 
 public class IcosahedralGenerators {
@@ -96,13 +100,12 @@ public class IcosahedralGenerators {
         //bauhinia_ree3_3();
         //M24_Search();
         //M12_snub_tetrahedron();
-        printM12_dot_puzzle_Depth_Classes();
-
+        //printM12_dot_puzzle_Depth_Classes();
         
     }
 
     public static void printM12_dot_puzzle_Depth_Classes() {
-
+        
         String m12_dodot = "[(8,9,11)(12,1,5)(7,6,4),(1,8,5)(10,9,2)(12,4,3),(9,1,2)(7,8,11)(10,3,6),(4,5,7)(2,12,3)(6,11,10),(11,9,8)(5,1,12)(4,6,7),(5,8,1)(2,9,10)(3,4,12),(2,1,9)(11,8,7)(6,3,10),(7,5,4)(3,12,2)(10,11,6)]";
         GroupExplorer group = new GroupExplorer(m12_dodot, MemorySettings.COMPACT, new LongStateCache(8,24), new HashSet<>(), new HashSet<>(), false);
 
@@ -119,6 +122,41 @@ public class IcosahedralGenerators {
                 System.out.println("  " + conjugacyClass.getKey() + ": " + conjugacyClass.getValue());
             }
         });
+
+        int[][][] g = GroupExplorer.parseOperationsArr(m12_dodot);
+        int[][][] edgeGenerator = new int[g.length][][];
+        int[][][] generatorsCombined = new int[g.length][][];
+        for (int i = 0; i < g.length; i++) {
+            edgeGenerator[i] = new int[g[i].length][];
+            generatorsCombined[i] = new int[g[i].length*2][];
+            for (int j = 0; j < g[i].length; j++) {
+                edgeGenerator[i][j] = new int[3];
+                generatorsCombined[i][j] = new int[3];
+                generatorsCombined[i][j+g[i].length] = g[i][j].clone();
+                int v = -1;
+                int[] facesAroundVertex = g[i][j];
+                for (int x = 0; x < 20; x++) {
+                    int[] match = Dodecahedron.vertexFaces[x];
+                    // Check if match contains same contents as facesAroundVertex
+                    int[] a = match.clone();
+                    int[] b = facesAroundVertex.clone();
+                    Arrays.sort(a);
+                    Arrays.sort(b);
+                    if (Arrays.equals(a, b)) {
+                        v = x;
+                        break;
+                    }
+                }
+                
+                edgeGenerator[i][j] = Dodecahedron.vertexEdges[v].clone();
+                generatorsCombined[i][j] = edgeGenerator[i][j].clone();
+                for (int k = 0; k < 3; k++) {
+                    generatorsCombined[i][j][k] = generatorsCombined[i][j][k] + 20;
+                }
+            }
+        }
+        System.out.println(GroupExplorer.generatorsToString(edgeGenerator));
+        System.out.println(GroupExplorer.generatorsToString(generatorsCombined));
     }
 
 
