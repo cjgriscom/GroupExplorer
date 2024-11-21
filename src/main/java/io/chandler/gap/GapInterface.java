@@ -71,7 +71,7 @@ public class GapInterface {
                 String generator = "["+extractGenerator(input)+"]";
                 if (generator != null) {
                     //System.out.println(generator);
-                    List<String> out = gap.runGapCommands(gapPath, generator, 3);
+                    List<String> out = gap.runGapCommands(generator, 3);
                     int order = Integer.parseInt(out.get(1).trim());
                     String groupKey = out.get(2).trim();
                     if (!map.containsKey(order)) map.put(order, new TreeMap<>());
@@ -149,7 +149,7 @@ public class GapInterface {
         process.destroy();
     }
 
-    public List<String> runGapCommands(String gapPath, String generator, int readNLines) {
+    public List<String> runGapCommands(String generator, int readNLines) {
         try {
             // Send commands to GAP
             writer.write("g := Group(" + generator + ");");

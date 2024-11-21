@@ -46,6 +46,23 @@ public class FullSelectionSearch {
         IcosahedralGenerators.exploreGroup(symmEx, null);
         //System.exit(0);
 
+        System.out.println("Searching for 3x2 selections");
+        exhaustiveMultiAxisSearch(3, 2, 95040+2, symm);
+        System.out.println("Searching for 4x2 selections");
+        exhaustiveMultiAxisSearch(4, 2, 95040+2, symm);
+        System.out.println("Searching for 5x2 selections");
+        exhaustiveMultiAxisSearch(5, 2, 95040+2, symm);
+        System.out.println("Searching for 6x2 selections");
+        exhaustiveMultiAxisSearch(6, 2, 95040+2, symm);
+        System.out.println("Searching for 7x2 selections");
+        exhaustiveMultiAxisSearch(7, 2, 95040+2, symm);
+        System.out.println("Searching for 8x2 selections");
+        exhaustiveMultiAxisSearch(8, 2, 95040+2, symm);
+        System.out.println("Searching for 9x2 selections");
+        exhaustiveMultiAxisSearch(9, 2, 95040+2, symm);
+        System.out.println("Searching for 10x2 selections");
+        exhaustiveMultiAxisSearch(10, 2, 95040+2, symm);
+
         System.out.println("Searching for 2x3 selections");
         exhaustiveMultiAxisSearch(2, 3, 95040+2, symm);
         System.out.println("Searching for 3x3 selections");
@@ -77,10 +94,30 @@ public class FullSelectionSearch {
 
         exhaustiveMultiAxisSearch(cache, n, nAxesPerSelection, maxGroupSize, selections, results, symm);
 
+        GapInterface gap;
+        try {
+            gap = new GapInterface();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return;
+        }
+        
+        
         for (Entry<Integer, List<int[][][]>> entry : results.entrySet()) {
             System.out.println(entry.getKey() + ": " + entry.getValue().size());
             for (int[][][] result : entry.getValue()) {
-                System.out.println("   " + GroupExplorer.generatorsToString(result));
+                HashSet<Integer> elements = new HashSet<>();
+                int nElements = 0;
+                for (int[][] cycle : result) {
+                    for (int[] element : cycle) {
+                        for (int e : element) {
+                            elements.add(e);
+                        }
+                    }
+                }
+                nElements = elements.size();
+                String gapResult = gap.runGapCommands(GroupExplorer.generatorsToString(result), 3).get(2).trim();
+                System.out.println("   " + GroupExplorer.generatorsToString(result) + " - elements=" + nElements + " - " + gapResult);
             }
         }
     }
