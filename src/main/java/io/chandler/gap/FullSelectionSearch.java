@@ -23,7 +23,7 @@ public class FullSelectionSearch {
 	}
 
 	public static int[] getDodecahedronFaceAboutVertex(int i) {
-		return IcosahedralGenerators.dodecahedronFaceAboutVertex_Shallow[i-1];
+		return IcosahedralGenerators.dodecahedronFaceAboutVertex_Shallow[Math.abs(i)-1];
 	}
 
 	public static void runDodecahedralSearch() {
@@ -47,47 +47,48 @@ public class FullSelectionSearch {
         //System.exit(0);
 
 
-        int limit = 95040*2+2;
-        
+        int limit = 95040+2;
+        boolean considerReverse = true;
+
         System.out.println("Searching for 3x2 selections");
-        exhaustiveMultiAxisSearch(3, 2, limit, symm);
+        exhaustiveMultiAxisSearch(3, 2, limit, symm, considerReverse);
         System.out.println("Searching for 4x2 selections");
-        exhaustiveMultiAxisSearch(4, 2, limit, symm);
+        exhaustiveMultiAxisSearch(4, 2, limit, symm, considerReverse);
         System.out.println("Searching for 5x2 selections");
-        exhaustiveMultiAxisSearch(5, 2, limit, symm);
+        exhaustiveMultiAxisSearch(5, 2, limit, symm, considerReverse);
         System.out.println("Searching for 6x2 selections");
-        exhaustiveMultiAxisSearch(6, 2, limit, symm);
+        exhaustiveMultiAxisSearch(6, 2, limit, symm, considerReverse);
         System.out.println("Searching for 7x2 selections");
-        exhaustiveMultiAxisSearch(7, 2, limit, symm);
+        exhaustiveMultiAxisSearch(7, 2, limit, symm, considerReverse);
         System.out.println("Searching for 8x2 selections");
-        exhaustiveMultiAxisSearch(8, 2, limit, symm);
+        exhaustiveMultiAxisSearch(8, 2, limit, symm, considerReverse);
         System.out.println("Searching for 9x2 selections");
-        exhaustiveMultiAxisSearch(9, 2, limit, symm);
+        exhaustiveMultiAxisSearch(9, 2, limit, symm, considerReverse);
         System.out.println("Searching for 10x2 selections");
-        exhaustiveMultiAxisSearch(10, 2, limit, symm);
+        exhaustiveMultiAxisSearch(10, 2, limit, symm, considerReverse);
 
         System.out.println("Searching for 2x3 selections");
-        exhaustiveMultiAxisSearch(2, 3, limit, symm);
+        exhaustiveMultiAxisSearch(2, 3, limit, symm, considerReverse);
         System.out.println("Searching for 3x3 selections");
-        exhaustiveMultiAxisSearch(3, 3, limit, symm);
+        exhaustiveMultiAxisSearch(3, 3, limit, symm, considerReverse);
         System.out.println("Searching for 4x3 selections");
-        exhaustiveMultiAxisSearch(4, 3, limit, symm);
+        exhaustiveMultiAxisSearch(4, 3, limit, symm, considerReverse);
         System.out.println("Searching for 5x3 selections");
-        exhaustiveMultiAxisSearch(5, 3, limit, symm);
+        exhaustiveMultiAxisSearch(5, 3, limit, symm, considerReverse);
         System.out.println("Searching for 6x3 selections");
-        exhaustiveMultiAxisSearch(6, 3, limit, symm);
+        exhaustiveMultiAxisSearch(6, 3, limit, symm, considerReverse);
 
         System.out.println("Searching for 2x4 selections");
-        exhaustiveMultiAxisSearch(2, 4, limit, symm);
+        exhaustiveMultiAxisSearch(2, 4, limit, symm, considerReverse);
         System.out.println("Searching for 3x4 selections");
-        exhaustiveMultiAxisSearch(3, 4, limit, symm);
+        exhaustiveMultiAxisSearch(3, 4, limit, symm, considerReverse);
         System.out.println("Searching for 4x4 selections");
-        exhaustiveMultiAxisSearch(4, 4, limit, symm);
+        exhaustiveMultiAxisSearch(4, 4, limit, symm, considerReverse);
         System.out.println("Searching for 5x4 selections");
-        exhaustiveMultiAxisSearch(5, 4, limit, symm);
+        exhaustiveMultiAxisSearch(5, 4, limit, symm, considerReverse);
 
         System.out.println("Searching for 3,3,4 selections");
-        exhaustiveMultiAxisSearch(Arrays.asList(3, 3, 4), limit, symm);
+        exhaustiveMultiAxisSearch(Arrays.asList(3, 3, 4), limit, symm, considerReverse);
 
 	}
 
@@ -95,19 +96,20 @@ public class FullSelectionSearch {
      * Helper method to support legacy behavior with nSelections and nAxesPerSelection.
      * It constructs a list with nAxesPerSelection repeated nSelections times.
      */
-    public static void exhaustiveMultiAxisSearch(int nSelections, int nAxesPerSelection, int maxGroupSize, Set<State> symm) {
+    public static void exhaustiveMultiAxisSearch(int nSelections, int nAxesPerSelection, int maxGroupSize, Set<State> symm, boolean considerReverse) {
         List<Integer> axesPerSelection = new ArrayList<>();
         for (int i = 0; i < nSelections; i++) {
             axesPerSelection.add(nAxesPerSelection);
         }
-        exhaustiveMultiAxisSearch(axesPerSelection, maxGroupSize, symm);
+        exhaustiveMultiAxisSearch(axesPerSelection, maxGroupSize, symm, considerReverse);
     }
     
     /**
      * New method that accepts a list specifying the number of axes per selection.
      * Example: List {4, 3, 3} selects 10 axes in groups of 4, 3, and 3.
      */
-    public static void exhaustiveMultiAxisSearch(List<Integer> axesPerSelection, int maxGroupSize, Set<State> symm) {        Map<Integer, List<int[][][]>> results = new TreeMap<>();
+    public static void exhaustiveMultiAxisSearch(List<Integer> axesPerSelection, int maxGroupSize, Set<State> symm, boolean considerReverse) {        
+        Map<Integer, List<int[][][]>> results = new TreeMap<>();
         List<Integer> selections = new ArrayList<>();
         HashSet<Generator> cache = new HashSet<>();
 
@@ -116,11 +118,11 @@ public class FullSelectionSearch {
             n += axesPerSelection.get(i);
         }
 
-        // Select initial axis always 1
+        // Select initial axis always 1 (positive direction)
         int axis0 = 1;
         selections.add(axis0);
 
-        exhaustiveMultiAxisSearchRecursive(cache, n, axesPerSelection, maxGroupSize, selections, results, symm);
+        exhaustiveMultiAxisSearchRecursive(cache, considerReverse, n, axesPerSelection, maxGroupSize, selections, results, symm);
 
         GapInterface gap;
         try {
@@ -154,7 +156,7 @@ public class FullSelectionSearch {
     /**
      * Recursive helper method for exhaustiveMultiAxisSearch.
      */
-    private static void exhaustiveMultiAxisSearchRecursive(Set<Generator> cache, int n, List<Integer> axesPerSelection, int maxGroupSize, List<Integer> selections, Map<Integer, List<int[][][]>> results, Set<State> symm) {
+    private static void exhaustiveMultiAxisSearchRecursive(Set<Generator> cache, boolean considerReverse, int n, List<Integer> axesPerSelection, int maxGroupSize, List<Integer> selections, Map<Integer, List<int[][][]>> results, Set<State> symm) {
         // If on boundary
         boolean onBoundary = false;
         int completeGroups = 0;
@@ -176,7 +178,13 @@ public class FullSelectionSearch {
                 int nAxesInGroup = axesPerSelection.get(i);
                 generator[i] = new int[nAxesInGroup][];
                 for (int j = 0; j < nAxesInGroup; j++) {
-                    generator[i][j] = getDodecahedronFaceAboutVertex(selections.get(iCumulative));
+                    int selection = selections.get(iCumulative);
+                    int axis = Math.abs(selection);
+                    int[] face = getDodecahedronFaceAboutVertex(axis);
+                    if (selection < 0) {
+                        face = reverseArray(face);
+                    }
+                    generator[i][j] = face;
                     iCumulative++;
                 }
             }
@@ -193,7 +201,7 @@ public class FullSelectionSearch {
                     return;
                 }
             } catch (Exception e) {
-                //ystem.out.println("Error exploring states: " + e.getMessage());
+                //System.out.println("Error exploring states: " + e.getMessage());
                 return;
             }
 
@@ -234,22 +242,24 @@ public class FullSelectionSearch {
         try {
             if (System.in.available() > 0 && System.in.read() == ' ') System.out.println("Results: " + results.size() + ", Selections: " + selections);
         } catch (Exception e) {}
-        //System.out.println("Remaining axes: " + getRemainingAxes(selections, nAxesPerSelection));
-        Collection<Integer> remainingAxes = getRemainingAxes(selections, axesPerSelection);
+        //System.out.println("Remaining axes: " + getRemainingAxes(selections, axesPerSelection));
+        Collection<Integer> remainingAxes = getRemainingAxes(considerReverse, selections, axesPerSelection);
 
-        for (int axis : remainingAxes) {
-            selections.add(axis);
-            exhaustiveMultiAxisSearchRecursive(cache, n, axesPerSelection, maxGroupSize, selections, results, symm);
+        for (int signedAxis : remainingAxes) {
+            selections.add(signedAxis);
+            exhaustiveMultiAxisSearchRecursive(cache, considerReverse, n, axesPerSelection, maxGroupSize, selections, results, symm);
             selections.remove(selections.size() - 1);
         }
     }
 
-    private static Collection<Integer> getRemainingAxes(List<Integer> axes, List<Integer> axesPerSelection) {
+    private static Collection<Integer> getRemainingAxes(boolean considerReverse, List<Integer> axes, List<Integer> axesPerSelection) {
         HashSet<Integer> remainingAxes = new HashSet<>();
         for (int i = 1; i <= 20; i++) {
             remainingAxes.add(i);
         }
-        remainingAxes.removeAll(axes);
+        for (int axis : axes) {
+            remainingAxes.remove(Math.abs(axis));
+        }
 
         HashSet<Integer> usedFaces = new HashSet<>();
         int i0 = 0; // Find the boundary of current selection set
@@ -257,8 +267,11 @@ public class FullSelectionSearch {
             if (i0 + nAxesInGroup <= axes.size()) i0 += nAxesInGroup;
             else break;
         }
+        boolean firstInGroup = i0 == axes.size();
+        int maxAxisInCurrentGroup = 0;
         for (int i = i0; i < axes.size(); i++) {
-            int axis = axes.get(i);
+            int axis = Math.abs(axes.get(i));
+            maxAxisInCurrentGroup = Math.max(maxAxisInCurrentGroup, axis);
             for (int face : getDodecahedronFaceAboutVertex(axis)) {
                 usedFaces.add(face);
             }
@@ -269,8 +282,16 @@ public class FullSelectionSearch {
         while (it.hasNext()) {
             int i = it.next();
             int[] faces = getDodecahedronFaceAboutVertex(i);
-            if (usedFaces.contains(faces[0]) || usedFaces.contains(faces[1]) || usedFaces.contains(faces[2])) {
+            if (i <= maxAxisInCurrentGroup ||
+                usedFaces.contains(faces[0]) || usedFaces.contains(faces[1]) || usedFaces.contains(faces[2])) {
                 it.remove();
+            }
+        }
+
+        // Add negative axes, avoiding redundant cases
+        if (considerReverse && !firstInGroup) {
+            for (int axis : new HashSet<>(remainingAxes)) {
+                remainingAxes.add(-axis);
             }
         }
         return remainingAxes;
@@ -320,6 +341,17 @@ public class FullSelectionSearch {
         });
 
         return normalized;
+    }
+
+    /**
+     * Utility method to reverse an integer array.
+     */
+    private static int[] reverseArray(int[] array) {
+        int[] reversed = new int[array.length];
+        for(int i=0; i < array.length; i++) {
+            reversed[i] = array[array.length - 1 - i];
+        }
+        return reversed;
     }
 
 }
