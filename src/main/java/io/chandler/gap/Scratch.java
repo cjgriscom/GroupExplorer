@@ -10,6 +10,6 @@ public class Scratch {
 		System.out.println(GroupExplorer.renumberGeneratorNotation(gen));
 
 		GroupExplorer ge = new GroupExplorer(gen, MemorySettings.FASTEST);
-		IcosahedralGenerators.exploreGroup(ge, null);
+		Generators.exploreGroup(ge, null);
 	}
 }

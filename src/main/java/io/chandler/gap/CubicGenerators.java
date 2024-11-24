@@ -1,6 +1,6 @@
 package io.chandler.gap;
 
-import static io.chandler.gap.IcosahedralGenerators.printCycleDescriptions;
+import static io.chandler.gap.Generators.printCycleDescriptions;
 
 import java.io.PrintStream;
 import java.nio.file.Files;
@@ -332,7 +332,7 @@ public class CubicGenerators {
             genString,
             MemorySettings.COMPACT, stateCache);
 
-        IcosahedralGenerators.exploreGroup(candidate, null);
+        Generators.exploreGroup(candidate, null);
             
     }
 

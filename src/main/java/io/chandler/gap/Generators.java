@@ -1,6 +1,7 @@
 package io.chandler.gap;
 
-import java.util.HashSet;
+import java.util.HashMap;
+import java.util.function.BiConsumer;
 
 import io.chandler.gap.GroupExplorer.MemorySettings;
 
@@ -54,10 +55,12 @@ public class Generators {
     // This is order 660, PSL(2,11) ?
     public static final String l2_11 = "[(1,2,3,4,5,6,7,8,9,10,11),(2,4)(3,9)(5,10)(7,11)]";
     public static final String l2_23 = "[(1,22)(2,11)(3,15)(4,17)(5,9)(6,19)(7,13)(8,20)(10,16)(12,21)(14,18)(23,24),(1,11,21)(2,15,10)(3,17,14)(4,9,16)(5,19,8)(6,13,18)(7,20,12)(22,24,23)]";
-    public static final String l2_59 = "[(1,10)(2,5)(3,7)(4,8)(6,9)(11,12),(1,5,9)(2,7,4)(3,8,6)(10,12,11)]";
+    public static final String l2_59 = "[(1,30)(2,7)(3,53)(4,38)(5,15)(6,47)(8,11)(9,18)(10,40)(12,52)(13,50)(14,46)(16,20)(17,21)(19,28)(22,32)(23,49)(24,45)(25,43)(26,29)(27,55)(31,48)(33,57)(34,42)(35,36)(37,44)(39,41)(51,58)(54,56)(59,60),(1,33,20)(2,25,12)(3,7,46)(4,23,21)(5,49,34)(6,26,32)(8,36,18)(9,37,27)(10,17,30)(11,54,40)(13,19,39)(14,50,47)(15,28,35)(16,58,52)(22,41,24)(29,51,45)(31,56,53)(38,42,57)(43,44,55)(48,59,60)]";
     
     public static final String l2_11_12pt = "[(1,10)(2,5)(3,7)(4,8)(6,9)(11,12),(1,5,9)(2,7,4)(3,8,6)(10,12,11)]";
 
+    public static final String l3_4_m21 = "[(1,2)(4,6)(5,7)(8,12)(9,14)(10,15)(11,17)(13,19),(2,3,5,4)(6,8,13,9)(7,10,16,11)(12,18)(14,20,21,15)(17,19)]";
+    public static final String l3_7 = "[(1,14)(2,51)(3,47)(4,53)(5,44)(6,19)(7,10)(8,16)(11,45)(12,28)(13,34)(17,27)(18,37)(20,29)(22,41)(23,32)(24,38)(26,35)(30,42)(31,55)(33,56)(36,52)(43,57)(48,54),(1,4,33)(2,54,35)(3,25,23)(5,28,31)(6,52,45)(7,22,46)(8,15,43)(9,47,48)(10,51,12)(11,30,41)(13,32,16)(14,57,27)(17,19,50)(18,29,40)(21,44,49)(24,37,26)(34,55,39)(38,53,56)]";
 
     // PSL(3,2)
     public static final String psl_3_2 = "[(1,2,3)(4,5,6),(7,1,3)(5,8,6),(1,2,8)(7,4,5)]";  
@@ -79,8 +82,55 @@ public class Generators {
     public static final String m24 = "[(1,4)(2,7)(3,17)(5,13)(6,9)(8,15)(10,19)(11,18)(12,21)(14,16)(20,24)(22,23),(1,4,6)(2,21,14)(3,9,15)(5,18,10)(13,17,16)(19,24,23)]";
 
     public static void main(String[] args) {
-        GroupExplorer g = new GroupExplorer(m23, MemorySettings.COMPACT);
-        IcosahedralGenerators.exploreGroup(g, null);
-        System.out.println(GroupExplorer.generatorsToString(GroupExplorer.renumberGenerators(GroupExplorer.parseOperationsArr("[(1,2,12)(7,8,11),(5,1,12)(8,9,11),(1,2,9)(5,7,8)]"))));
+        GroupExplorer g = new GroupExplorer("[(1,10,2)(6,19,5)(7,4,8)(12,14,11)(15,17,13)(16,3,18)(20,23,21)(22,9,24),(2,16,3)(5,1,4)(8,22,9)(11,7,10)(13,12,14)(18,20,17)(21,6,19)(24,15,23),(3,5,1)(4,8,6)(9,11,7)(10,2,12)(14,24,15)(17,13,16)(19,18,20)(23,21,22),(1,2,3)(6,5,4)(7,8,9)(12,11,10)(13,14,15)(18,17,16)(19,20,21)(24,23,22)]", MemorySettings.COMPACT);
+        exploreGroup(g, null);
     }
+
+
+    public static void exploreGroup(GroupExplorer gap,
+            BiConsumer<int[], String> peekCyclesAndDescriptions) {
+
+        long nPermutations = 1;
+        for (int i = 1; i <= gap.nElements; i++) {
+            nPermutations *= i;
+        }
+
+        HashMap<String, Integer> cycleDescriptions = new HashMap<>();
+
+        int iterations = gap.exploreStates(true, (states, depth) -> {
+            for (int[] state : states) {
+                String cycleDescription = GroupExplorer.describeState(gap.nElements, state);
+                if (peekCyclesAndDescriptions != null) peekCyclesAndDescriptions.accept(state, cycleDescription);
+                cycleDescriptions.merge(cycleDescription, 1, Integer::sum);
+            }
+        });
+        
+        System.out.println("Elements: " + gap.nElements);
+        System.out.println("Total unique permutations: " + nPermutations);
+        System.out.println("Total group permutations: " + gap.order());
+
+        System.out.println("Subset: 1/" + ((double)nPermutations / gap.order()));
+        System.out.println("Iterations: " + iterations);
+
+        printCycleDescriptions(cycleDescriptions);
+
+    }
+
+    public static void printCycleDescriptions(HashMap<String, Integer> cycleDescriptions) {
+
+
+        // Print sorted cycle descriptions
+        System.out.println("Cycle structure frequencies:");
+        cycleDescriptions.entrySet().stream()
+            .sorted((e1, e2) -> {
+                int comp = Integer.compare(e2.getValue(), e1.getValue()); // Sort by frequency descending
+                if (comp == 0) {
+                    return e1.getKey().compareTo(e2.getKey()); // If frequencies are equal, sort alphabetically
+                }
+                return comp;
+            })
+            .forEach(entry -> System.out.println(entry.getValue() + ": " + entry.getKey()));
+
+    }
+
 }

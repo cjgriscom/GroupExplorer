@@ -49,7 +49,7 @@ public class J2Search {
 		
 		PrintStream out = new PrintStream(new FileOutputStream("40p2.txt"));
 		GroupExplorer ge = new GroupExplorer(gen, 100, MemorySettings.FASTEST, new HashSet<>());
-		IcosahedralGenerators.exploreGroup(ge, (state, disc) -> {
+		Generators.exploreGroup(ge, (state, disc) -> {
 			if (disc.equals(cat_check)) test.add(GroupExplorer.stateToCycles(state));
 		});
 		ArrayList<Generator> found = new ArrayList<>();
@@ -126,7 +126,7 @@ public class J2Search {
 		
 		PrintStream out = new PrintStream(new FileOutputStream("40p2.txt"));
 		GroupExplorer ge = new GroupExplorer(gen, 100, MemorySettings.FASTEST, new HashSet<>());
-		IcosahedralGenerators.exploreGroup(ge, (state, disc) -> {
+		Generators.exploreGroup(ge, (state, disc) -> {
 			out.println(disc);
 			out.println(GroupExplorer.cyclesToNotation(GroupExplorer.stateToCycles(state)));
 			if (disc.equals("40p 2-cycles")) {
@@ -179,7 +179,7 @@ public class J2Search {
 			ArrayList<int[][]> test = new ArrayList<>();
 
 			GroupExplorer ge = new GroupExplorer(generator, MemorySettings.FASTEST, new HashSet<>());
-			IcosahedralGenerators.exploreGroup(ge, (state, disc) -> {
+			Generators.exploreGroup(ge, (state, disc) -> {
 				if (disc.equals("20p 5-cycles")) {
 					test.add(GroupExplorer.stateToCycles(state));
 				}
@@ -210,7 +210,7 @@ public class J2Search {
 
 		ge.setMultithread(false);
 
-		IcosahedralGenerators.exploreGroup(ge, (state, disc) -> {
+		Generators.exploreGroup(ge, (state, disc) -> {
 			if (disc.equals("dual 5-cycles, 6p 15-cycles")) states0.add(state);
 			if (disc.equals("40p 2-cycles")) statesSplitMove.add(state);
 		});
@@ -383,7 +383,7 @@ public class J2Search {
 		ArrayList<int[]> states0 = new ArrayList<>();
 		ArrayList<int[]> states2 = new ArrayList<>();
 
-		IcosahedralGenerators.exploreGroup(ge, (state, disc) -> {
+		Generators.exploreGroup(ge, (state, disc) -> {
 			if (disc.equals("20p 5-cycles")) states0.add(state);
 			if (disc.equals("40p 2-cycles")) states2.add(state);
 		});
@@ -437,7 +437,7 @@ public class J2Search {
 		states0.clear();
 		states2.clear();
 
-		IcosahedralGenerators.exploreGroup(ge, (state, disc) -> {
+		Generators.exploreGroup(ge, (state, disc) -> {
 			if (disc.equals("20p 5-cycles")) states0.add(state);
 			if (disc.equals("40p 2-cycles")) states2.add(state);
 		});

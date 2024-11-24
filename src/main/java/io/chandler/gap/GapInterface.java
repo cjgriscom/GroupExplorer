@@ -123,7 +123,7 @@ public class GapInterface {
     }
 
     public void reset() throws IOException {
-        if (process != null) close();
+        if (process != null) try {close();} catch (IOException e) {}
         List<String> commands = new ArrayList<>();
         commands.add(gapPath);
         commands.add("-q"); // Quiet mode, less output
@@ -157,6 +157,33 @@ public class GapInterface {
             writer.write("Print(Size(g), \"\\n\");");
             writer.newLine();
             writer.write("Print(StructureDescription(g), \"\\n\");");
+            writer.newLine();
+            writer.flush();
+
+            // Read output from GAP
+            List<String> lines = new ArrayList<>();
+            String line;
+            for (int i = 0; i < readNLines; i++) {
+                line = reader.readLine();
+                if (line.trim().isEmpty()) {
+                    i--;
+                    continue;
+                }
+                lines.add(line);
+            }
+            return lines;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public List<String> runGapSizeCommand(String generator, int readNLines) {
+        try {
+            // Send commands to GAP
+            writer.write("g := Group(" + generator + ");");
+            writer.newLine();
+            writer.write("Print(Size(g), \"\\n\");");
             writer.newLine();
             writer.flush();
 

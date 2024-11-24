@@ -2,21 +2,17 @@ package io.chandler.gap;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.TreeMap;
-import java.util.function.BiConsumer;
-import java.util.stream.Collectors;
 
 import io.chandler.gap.GroupExplorer.Generator;
 import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.cache.LongStateCache;
-import io.chandler.gap.cache.M12StateCache;
+
+import static io.chandler.gap.Generators.exploreGroup;
 import static io.chandler.gap.GeneratorPairSearch.findGeneratorPairs;
 
 public class IcosahedralGenerators {
@@ -1469,52 +1465,6 @@ public class IcosahedralGenerators {
         System.out.println("Checked " + checkedIcosahedralGenerators + " icosahedral generators");
         
         reportMatchingGenerators(matchingGenerators);
-    }
-
-    public static void exploreGroup(GroupExplorer gap,
-            BiConsumer<int[], String> peekCyclesAndDescriptions) {
-
-        long nPermutations = 1;
-        for (int i = 1; i <= gap.nElements; i++) {
-            nPermutations *= i;
-        }
-
-        HashMap<String, Integer> cycleDescriptions = new HashMap<>();
-
-        int iterations = gap.exploreStates(true, (states, depth) -> {
-            for (int[] state : states) {
-                String cycleDescription = GroupExplorer.describeState(gap.nElements, state);
-                if (peekCyclesAndDescriptions != null) peekCyclesAndDescriptions.accept(state, cycleDescription);
-                cycleDescriptions.merge(cycleDescription, 1, Integer::sum);
-            }
-        });
-        
-        System.out.println("Elements: " + gap.nElements);
-        System.out.println("Total unique permutations: " + nPermutations);
-        System.out.println("Total group permutations: " + gap.order());
-
-        System.out.println("Subset: 1/" + ((double)nPermutations / gap.order()));
-        System.out.println("Iterations: " + iterations);
-
-        printCycleDescriptions(cycleDescriptions);
-
-    }
-
-    public static void printCycleDescriptions(HashMap<String, Integer> cycleDescriptions) {
-
-
-        // Print sorted cycle descriptions
-        System.out.println("Cycle structure frequencies:");
-        cycleDescriptions.entrySet().stream()
-            .sorted((e1, e2) -> {
-                int comp = Integer.compare(e2.getValue(), e1.getValue()); // Sort by frequency descending
-                if (comp == 0) {
-                    return e1.getKey().compareTo(e2.getKey()); // If frequencies are equal, sort alphabetically
-                }
-                return comp;
-            })
-            .forEach(entry -> System.out.println(entry.getValue() + ": " + entry.getKey()));
-
     }
 
     public static HashMap<Generator, Integer> findGeneratorTriples(int stateLimit, GroupExplorer group, ArrayList<int[][]> generatorCandidates, ArrayList<int[][]> generatorCandidates2, ArrayList<int[][]> generatorCandidates3) {

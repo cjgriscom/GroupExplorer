@@ -487,7 +487,7 @@ public class PHGenerators {
             genString,
             MemorySettings.COMPACT, stateCache);
 
-        IcosahedralGenerators.exploreGroup(candidate, null);
+        Generators.exploreGroup(candidate, null);
             
     }
 

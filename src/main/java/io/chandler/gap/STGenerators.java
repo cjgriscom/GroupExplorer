@@ -1,6 +1,6 @@
 package io.chandler.gap;
 
-import static io.chandler.gap.IcosahedralGenerators.printCycleDescriptions;
+import static io.chandler.gap.Generators.printCycleDescriptions;
 
 import java.util.ArrayList;
 import java.util.Arrays;
