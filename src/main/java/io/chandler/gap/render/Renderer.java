@@ -1,21 +1,24 @@
 package io.chandler.gap.render;
 
-import java.util.Random;
-
 import javafx.application.Application;
+import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
 import javafx.scene.*;
-import javafx.scene.control.Button;
-import javafx.scene.control.Label;
+import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
 import javafx.scene.shape.*;
 import javafx.scene.transform.Rotate;
 import javafx.stage.Stage;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+
 public class Renderer extends Application {
-    private static final double SCENE_WIDTH = 1024;
-    private static final double SCENE_HEIGHT = 768;
+    private static final double SCENE_WIDTH = 1280;
+    private static final double SCENE_HEIGHT = 900;
     private static final double SIDEBAR_WIDTH = 400;
 
     private double anchorX, anchorY, anchorAngleX = 0, anchorAngleY = 0;
@@ -33,27 +36,44 @@ public class Renderer extends Application {
 
     private final Random random = new Random();
 
-	private Solid solid;
+    private Solid solid;
+    private Group solidsGroup; // Group to hold solids for easy switching
+
+    // UI Components
+    private ComboBox<String> solidsComboBox;
+    private TextArea parseTextArea;
+    private Button parseButton;
+    private Button prevButton;
+    private Button nextButton;
+    private Label paginationLabel;
+    private Label descriptionLabel;
+
+    // Parse Results
+    private List<String> parseResults = new ArrayList<>();
+    private int currentParseIndex = 0;
 
     @Override
     public void start(Stage primaryStage) {
+        // Initialize solids group
+        solidsGroup = new Group();
+
         // Create and position camera
         PerspectiveCamera camera = new PerspectiveCamera(true);
         camera.setTranslateZ(-30);
         camera.setFieldOfView(10);
 
-        // Create solid
+        // Initialize solid
         solid = new Icosahedron();
+        solidsGroup.getChildren().add(solid);
 
         // Set up mouse control
-        Group group = new Group(solid);
-        group.getTransforms().addAll(rotateX, rotateY);
+        solidsGroup.getTransforms().addAll(rotateX, rotateY);
         Group group2 = new Group();
         group2.getTransforms().addAll(rotateXL, rotateYL);
 
         setupLights(group2);
 
-        Group allGroups = new Group(group, group2);
+        Group allGroups = new Group(solidsGroup, group2);
 
         // Create the 3D content pane
         SubScene subScene = new SubScene(allGroups, SCENE_WIDTH - SIDEBAR_WIDTH, SCENE_HEIGHT, true, SceneAntialiasing.BALANCED);
@@ -70,10 +90,10 @@ public class Renderer extends Application {
 
         Scene scene = new Scene(root, SCENE_WIDTH, SCENE_HEIGHT, true);
         primaryStage.setScene(scene);
-        primaryStage.setTitle("Renderer with Sidebar");
+        primaryStage.setTitle("Group Visualizer");
         primaryStage.show();
 
-        initMouseControl(group, primaryStage);
+        initMouseControl(solidsGroup, primaryStage);
     }
 
     private VBox createSidebar() {
@@ -83,18 +103,198 @@ public class Renderer extends Application {
         sidebar.setSpacing(20);
         sidebar.setStyle("-fx-background-color: #2E2E2E;");
 
+        // --- Controls Title ---
         Label title = new Label("Controls");
         title.setTextFill(Color.WHITE);
         title.setStyle("-fx-font-size: 24px; -fx-font-weight: bold;");
 
+        // --- Dropdown for Solids ---
+        HBox solidsBox = new HBox();
+        solidsBox.setSpacing(10);
+        Label solidsLabel = new Label("Select Solid:");
+        solidsLabel.setTextFill(Color.WHITE);
+        solidsComboBox = new ComboBox<>();
+        solidsComboBox.getItems().addAll(
+                "Icosahedron",
+                "Snub Cube"
+        );
+        solidsComboBox.setValue("Icosahedron"); // Default selection
+        solidsComboBox.setOnAction(e -> handleSolidSelection());
+
+        solidsBox.getChildren().addAll(solidsLabel, solidsComboBox);
+
+        // --- Randomize Colors Button ---
         Button randomizeButton = new Button("Randomize Colors");
         randomizeButton.setPrefWidth(200);
         randomizeButton.setStyle("-fx-font-size: 16px;");
         randomizeButton.setOnAction(e -> randomizeColors());
 
-        sidebar.getChildren().addAll(title, randomizeButton);
+        // --- TextArea for Parsing ---
+        Label parseLabel = new Label("Input Text:");
+        parseLabel.setTextFill(Color.WHITE);
+        parseTextArea = new TextArea();
+        parseTextArea.setPrefHeight(150);
+        parseTextArea.setWrapText(true);
+
+        // --- Parse Button ---
+        parseButton = new Button("Parse");
+        parseButton.setPrefWidth(100);
+        parseButton.setOnAction(e -> handleParse());
+
+        // --- Pagination Controls ---
+        HBox paginationBox = new HBox();
+        paginationBox.setSpacing(10);
+        paginationBox.setPadding(new Insets(10, 0, 0, 0));
+
+        prevButton = new Button("<");
+        prevButton.setPrefWidth(50);
+        prevButton.setOnAction(e -> handlePrevious());
+
+        paginationLabel = new Label("(0 / 0)");
+        paginationLabel.setTextFill(Color.WHITE);
+        paginationLabel.setPrefWidth(100);
+        paginationLabel.setStyle("-fx-font-size: 14px; -fx-alignment: center;");
+
+        nextButton = new Button(">");
+        nextButton.setPrefWidth(50);
+        nextButton.setOnAction(e -> handleNext());
+
+        paginationBox.getChildren().addAll(prevButton, paginationLabel, nextButton);
+
+        // Disable pagination controls initially
+        prevButton.setDisable(true);
+        nextButton.setDisable(true);
+
+		descriptionLabel = new Label();
+		descriptionLabel.setTextFill(Color.WHITE);
+		descriptionLabel.setPrefHeight(150);
+		descriptionLabel.setWrapText(true);
+
+        // Add all components to sidebar
+        sidebar.getChildren().addAll(
+                title,
+                solidsBox,
+                randomizeButton,
+                parseLabel,
+                parseTextArea,
+                parseButton,
+                paginationBox,
+				descriptionLabel
+        );
 
         return sidebar;
+    }
+
+    private void handleSolidSelection() {
+        String selectedSolid = solidsComboBox.getValue();
+        Solid newSolid;
+
+        switch (selectedSolid) {
+            case "Snub Cube":
+                newSolid = new SnubCube();
+                break;
+            case "Icosahedron":
+            default:
+                newSolid = new Icosahedron();
+                break;
+        }
+
+        // Replace the current solid with the new one
+        solidsGroup.getChildren().remove(solid);
+        solid = newSolid;
+        solidsGroup.getChildren().add(solid);
+    }
+
+    private void handleParse() {
+        String inputText = parseTextArea.getText();
+        parseResults = processText(inputText);
+        currentParseIndex = 0;
+		if (parseResults.size() > 0) {
+			onParseResultSelected(currentParseIndex);
+		}
+        updatePaginationLabel();
+        updatePaginationButtons();
+    }
+
+    private void handlePrevious() {
+        if (currentParseIndex > 0) {
+            currentParseIndex--;
+            updatePaginationLabel();
+            updatePaginationButtons();
+            // Call handler with the new selection
+            onParseResultSelected(currentParseIndex);
+        }
+    }
+
+    private void handleNext() {
+        if (currentParseIndex < parseResults.size() - 1) {
+            currentParseIndex++;
+            updatePaginationLabel();
+            updatePaginationButtons();
+            // Call handler with the new selection
+            onParseResultSelected(currentParseIndex);
+        }
+    }
+
+    private void updatePaginationLabel() {
+        if (parseResults.isEmpty()) {
+            paginationLabel.setText("(0 / 0)");
+        } else {
+            paginationLabel.setText("(" + (currentParseIndex + 1) + " / " + parseResults.size() + ")");
+        }
+    }
+
+    private void updatePaginationButtons() {
+        prevButton.setDisable(currentParseIndex <= 0);
+        nextButton.setDisable(currentParseIndex >= parseResults.size() - 1);
+    }
+
+    /**
+     * Processes the input text and returns a list of results.
+     *
+     * @param text The input text to process.
+     * @return A list of parsed results.
+     */
+    private List<String> processText(String text) {
+        List<String> results = new ArrayList<>();
+        String[] lines = text.split("\\r?\\n");
+        for (String line : lines) {
+            if (line.contains("[")) {
+				results.add(line.trim());
+			}
+        }
+        return results;
+    }
+
+    /**
+     * Handler called when a parse result is selected.
+     *
+     * @param index The index of the selected parse result.
+     */
+    private void onParseResultSelected(int index) {
+        if (index >= 0 && index < parseResults.size()) {
+            String selectedResult = parseResults.get(index);
+
+			SimpleStringProperty description1 = new SimpleStringProperty();
+			List<Color> colorList = ResultListParser.getColorList(solid, selectedResult, description1);
+            
+            System.out.println("Selected Parse Result: " + selectedResult);
+			descriptionLabel.setText(selectedResult + "\n" + description1.get());
+
+			for (int i = 0; i < solid.getMeshViews().size(); i++) {
+				solid.getMeshViews().get(i).setMaterial(createMaterial(colorList.get(i)));
+			}
+        }
+    }
+
+    private void randomizeColors() {
+        for (MeshView meshView : solid.getMeshViews()) {
+            double rand = random.nextDouble();
+
+            if (rand <= 0.333) meshView.setMaterial(blueMaterial);
+            else if (rand <= 0.666) meshView.setMaterial(redMaterial);
+            else meshView.setMaterial(greenMaterial);
+        }
     }
 
     private PhongMaterial createMaterial(Color color) {
@@ -149,19 +349,6 @@ public class Renderer extends Application {
             rotateX.setAngle(anchorAngleX - (anchorY - event.getSceneY()));
             rotateY.setAngle(anchorAngleY + anchorX - event.getSceneX());
         });
-    }
-
-    /**
-     * Randomizes the colors of all faces.
-     */
-    private void randomizeColors() {
-        for (MeshView meshView : solid.getMeshViews()) {
-            double rand = random.nextDouble();
-
-			if (rand <= 0.333) meshView.setMaterial(blueMaterial);
-			else if (rand <= 0.666) meshView.setMaterial(redMaterial);
-			else meshView.setMaterial(greenMaterial);
-        }
     }
 
     public static void main(String[] args) {
