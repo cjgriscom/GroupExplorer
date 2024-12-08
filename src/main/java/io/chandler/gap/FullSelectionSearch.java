@@ -204,31 +204,54 @@ public class FullSelectionSearch {
             });
         
 
+        System.out.println("Searching for 4x6 selections");
+        search.exhaustiveMultiAxisSearch(4, 6, considerReverse);
 
-        System.out.println("Searching for 2x6 selections");
-        search.exhaustiveMultiAxisSearch(2, 6, considerReverse);
+        //System.out.println("Searching for 2x8 selections");
+        //search.exhaustiveMultiAxisSearch(2, 8, considerReverse);
+        //System.out.println("Searching for 3x8 selections");
+        //search.exhaustiveMultiAxisSearch(3, 8, considerReverse);
+        //System.out.println("Searching for 4x8 selections");
+        //search.exhaustiveMultiAxisSearch(4, 8, considerReverse);
 
 	}
 
     Generator symmG;
     final int nAxes;
     final int initialAxis;
-    HashSet<State> symm = new HashSet<>();
+    int[][] axisSymm;
     Function<int[][][], Integer> groupChecker;
 
     Function<Integer, int[]> getFaceAboutVertex;
-    Function<int[], Integer> getFacesFromVertexReversable;
+    Function<int[], Integer> getVertexFromFacesReversable;
 
-    public FullSelectionSearch(Generator symmG, int nAxes, int initialAxis, Function<Integer, int[]> getFaceAboutVertex, Function<int[], Integer> getFacesFromVertex, Function<int[][][], Integer> groupChecker) {
+    public FullSelectionSearch(Generator symmG, int nAxes, int initialAxis, Function<Integer, int[]> getFaceAboutVertex, Function<int[], Integer> getVertexFromFaces, Function<int[][][], Integer> groupChecker) {
         this.symmG = symmG;
         this.nAxes = nAxes;
         this.initialAxis = initialAxis;
         this.getFaceAboutVertex = getFaceAboutVertex;
-        this.getFacesFromVertexReversable = getFacesFromVertex;
+        this.getVertexFromFacesReversable = getVertexFromFaces;
         this.groupChecker = groupChecker;
 
+        HashSet<State> symm = new HashSet<>();
         GroupExplorer symmEx = new GroupExplorer(GroupExplorer.generatorsToString(symmG.generator()), MemorySettings.FASTEST, symm);
         Generators.exploreGroup(symmEx, null);
+        ArrayList<State> symmList = new ArrayList<>();
+        for (State state : symm) {
+            symmList.add(state);
+        }
+        this.axisSymm = new int[nAxes][];
+        for (int i = 0; i < nAxes; i++) {
+            int[] face = getFaceAboutVertex.apply(i+1);
+            axisSymm[i] = new int[symm.size()];
+            for (int j = 0; j < symm.size(); j++) {
+                int[] faceCopy = face.clone();
+                for (int k = 0; k < faceCopy.length; k++) {
+                    faceCopy[k] = symmList.get(j).state()[face[k] - 1];
+                }
+                axisSymm[i][j] = getVertexFromFacesReversable.apply(faceCopy);
+            }
+        }
     }
 
     /**
@@ -251,6 +274,7 @@ public class FullSelectionSearch {
         Map<Integer, List<int[][][]>> results = new TreeMap<>();
         List<Integer> selections = new ArrayList<>();
         FSSCache cache = new FSSCache();
+        FSSCache badCache = new FSSCache();
 
         int n = 0;
         for (int i = 0; i < axesPerSelection.size(); i++) {
@@ -261,7 +285,7 @@ public class FullSelectionSearch {
         int axis0 = initialAxis;
         selections.add(axis0);
 
-        exhaustiveMultiAxisSearchRecursive(cache, considerReverse, n, axesPerSelection, selections, results);
+        exhaustiveMultiAxisSearchRecursive(cache, badCache, considerReverse, n, axesPerSelection, selections, results);
 
         GapInterface gap;
         try {
@@ -304,7 +328,7 @@ public class FullSelectionSearch {
     /**
      * Recursive helper method for exhaustiveMultiAxisSearch.
      */
-    private void exhaustiveMultiAxisSearchRecursive(FSSCache cache, boolean considerReverse, int n, List<Integer> axesPerSelection, List<Integer> selections, Map<Integer, List<int[][][]>> results) {
+    private void exhaustiveMultiAxisSearchRecursive(FSSCache cache, FSSCache badCache, boolean considerReverse, int n, List<Integer> axesPerSelection, List<Integer> selections, Map<Integer, List<int[][][]>> results) {
         // If on boundary
         boolean onBoundary = false;
         int completeGroups = 0;
@@ -340,18 +364,18 @@ public class FullSelectionSearch {
                 }
             }
 
-            if (cache.checkContains(axesSelectionsForCache)) {
+            if (cache.checkContains(axesSelectionsForCache) || badCache.checkContains(axesSelectionsForCache)) {
                 return;
             }
 
 
             int order = groupChecker.apply(generator);
             if (order < -1) {
+                badCache.cache(axesSelectionsForCache);
                 return;
+            } else {
+                cache.cache(axesSelectionsForCache);
             }
-            // Cache 174 PSL(2,8):3 - 24.9s
-            
-            cache.cache(axesSelectionsForCache);
 
             
             // Add result if this is the full generator
@@ -375,7 +399,7 @@ public class FullSelectionSearch {
 
         for (int signedAxis : remainingAxes) {
             selections.add(signedAxis);
-            exhaustiveMultiAxisSearchRecursive(cache, considerReverse, n, axesPerSelection, selections, results);
+            exhaustiveMultiAxisSearchRecursive(cache, badCache, considerReverse, n, axesPerSelection, selections, results);
             selections.remove(selections.size() - 1);
         }
     }
@@ -501,31 +525,6 @@ public class FullSelectionSearch {
             return normalized;
         }
 
-        private int[][][] cvtAxesSelection(int[][] axesSelectionsForCache) {
-            int[][][] generator = new int[axesSelectionsForCache.length][][];
-            for (int i = 0; i < generator.length; i++) {
-                generator[i] = new int[axesSelectionsForCache[i].length][];
-                for (int j = 0; j < generator[i].length; j++) { 
-                    generator[i][j] = FullSelectionSearch.this.getFaceAboutVertex.apply(Math.abs(axesSelectionsForCache[i][j]));
-                    if (axesSelectionsForCache[i][j] < 0) {
-                        generator[i][j] = reverseArray(generator[i][j]);
-                    }
-                }
-            }
-            return generator;
-        }
-
-        private int[][] cvtGenerator(int[][][] generator) {
-            int[][] axes = new int[generator.length][];
-            for (int i = 0; i < generator.length; i++) {
-                axes[i] = new int[generator[i].length];
-                for (int j = 0; j < generator[i].length; j++) {
-                    axes[i][j] = FullSelectionSearch.this.getFacesFromVertexReversable.apply(generator[i][j]);
-                }
-            }
-            return axes;
-        }
-
         public void cache(int[][] axesSelectionsForCache) {
             cache.add(new FSSCacheObject(normalizeAxes(axesSelectionsForCache)));
         }
@@ -537,21 +536,19 @@ public class FullSelectionSearch {
                 return true;
             }
 
-            int[][][] normalizedGenerator = cvtAxesSelection(normalizedAxes);
-
-            for (State state : symm) {
-                int[] replacements = state.state();
-                int[][][] replacementGenerator = new int[normalizedGenerator.length][][];
-                for (int i = 0; i < normalizedGenerator.length; i++) {
-                    replacementGenerator[i] = new int[normalizedGenerator[i].length][];
-                    for (int j = 0; j < normalizedGenerator[i].length; j++) {
-                        replacementGenerator[i][j] = new int[normalizedGenerator[i][j].length];
-                        for (int k = 0; k < normalizedGenerator[i][j].length; k++) {
-                            replacementGenerator[i][j][k] = replacements[normalizedGenerator[i][j][k] - 1];
-                        }
+            int symmSize = axisSymm[0].length;
+            for (int i = 0; i < symmSize; i++) {
+                int[][] replacementAxes = new int[normalizedAxes.length][];
+                for (int j = 0; j < normalizedAxes.length; j++) {
+                    replacementAxes[j] = new int[normalizedAxes[j].length];
+                    for (int k = 0; k < normalizedAxes[j].length; k++) {
+                        boolean positive = normalizedAxes[j][k] > 0;
+                        replacementAxes[j][k] = axisSymm[Math.abs(normalizedAxes[j][k]) - 1][i];
+                        if (!positive) replacementAxes[j][k] *= -1;
                     }
                 }
-                if (cache.contains(new FSSCacheObject(normalizeAxes(cvtGenerator(replacementGenerator))))) {
+
+                if (cache.contains(new FSSCacheObject(normalizeAxes(replacementAxes)))) {
                     return true;
                 }
             }
