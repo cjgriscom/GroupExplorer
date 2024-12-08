@@ -17,6 +17,10 @@ import static io.chandler.gap.GeneratorPairSearch.findGeneratorPairs;
 
 public class IcosahedralGenerators {
 
+    static final int[][] icosahedronMirrorSymm = new int[][] {
+        {8,9}, {7,10}, {2,5}, {3,4}
+    };
+
     static final int[][][] icosahedronSliceEdges = new int[][][] {
         /*1*/ {{3,5}, {10,8}, {2,7}, {6,1}},
         //TODO

@@ -21,14 +21,20 @@ import io.chandler.gap.cache.M12StateCache;
 import io.chandler.gap.cache.LongStateCache;
 import io.chandler.gap.cache.ParityStateCache;
 import io.chandler.gap.cache.State;
+import io.chandler.gap.render.Icosahedron;
+import io.chandler.gap.render.SnubCube;
 
 public class FullSelectionSearch {
 	public static void main(String[] args) throws Exception{
-		//runDodecahedralSearch();
-		runPentagonalIcositrahedralSearch();
+		runDodecahedralSearch();
+		//runPentagonalIcositrahedralSearch();
 	}
 
 	public static void runDodecahedralSearch() {
+        int maxGroupSize = 95040*3+2;
+        boolean considerReverse = true;
+        boolean reduceMirror = true;
+
         Generator symmG = Generator.combine(new Generator(
             new int[][] {
                 IcosahedralGenerators.dodecahedronFaceAboutVertex[0],
@@ -43,16 +49,22 @@ public class FullSelectionSearch {
                 IcosahedralGenerators.dodecahedronFaceAboutVertex[7]
             }));
 
+        if (reduceMirror) {
+            symmG = Generator.combine(symmG, new Generator(
+                IcosahedralGenerators.icosahedronMirrorSymm));
+        }
+
         
         //System.exit(0);
-        int maxGroupSize = 95040+2;
-        boolean considerReverse = true;
+
+        Icosahedron icosa = new Icosahedron();
 
         FullSelectionSearch search = new FullSelectionSearch(
             symmG,
             20,
             1,
             (i) -> Dodecahedron.vertexFaces[i-1],
+            icosa::getPosOrNegFaceFromGenerator,
             (generator) -> {
                 GroupExplorer group = new GroupExplorer(
                     GroupExplorer.generatorsToString(generator),
@@ -69,7 +81,8 @@ public class FullSelectionSearch {
                 }
                 return group.order();
             });
-
+        
+        //System.exit(0);
 
         System.out.println("Searching for 3x2 selections");
         search.exhaustiveMultiAxisSearch(3, 2, considerReverse);
@@ -125,12 +138,14 @@ public class FullSelectionSearch {
         boolean includeOctahedral = true;
         boolean forceOctahedral = false;
 
+        SnubCube snubCube = new SnubCube();
         
         FullSelectionSearch search = new FullSelectionSearch(
             symmG,
             includeOctahedral ? 32 : 24,
             forceOctahedral ? 25 : 1,
             (i) -> PentagonalIcositrahedron.piverticesToPifaces[i-1],
+            snubCube::getPosOrNegFaceFromGenerator,
             (generator) -> {
                 GroupExplorer group = new GroupExplorer(
                     GroupExplorer.generatorsToString(generator),
@@ -202,11 +217,14 @@ public class FullSelectionSearch {
     Function<int[][][], Integer> groupChecker;
 
     Function<Integer, int[]> getFaceAboutVertex;
-    public FullSelectionSearch(Generator symmG, int nAxes, int initialAxis, Function<Integer, int[]> getFaceAboutVertex, Function<int[][][], Integer> groupChecker) {
+    Function<int[], Integer> getFacesFromVertexReversable;
+
+    public FullSelectionSearch(Generator symmG, int nAxes, int initialAxis, Function<Integer, int[]> getFaceAboutVertex, Function<int[], Integer> getFacesFromVertex, Function<int[][][], Integer> groupChecker) {
         this.symmG = symmG;
         this.nAxes = nAxes;
         this.initialAxis = initialAxis;
         this.getFaceAboutVertex = getFaceAboutVertex;
+        this.getFacesFromVertexReversable = getFacesFromVertex;
         this.groupChecker = groupChecker;
 
         GroupExplorer symmEx = new GroupExplorer(GroupExplorer.generatorsToString(symmG.generator()), MemorySettings.FASTEST, symm);
@@ -232,7 +250,7 @@ public class FullSelectionSearch {
     public void exhaustiveMultiAxisSearch(List<Integer> axesPerSelection, boolean considerReverse) {        
         Map<Integer, List<int[][][]>> results = new TreeMap<>();
         List<Integer> selections = new ArrayList<>();
-        HashSet<Generator> cache = new HashSet<>();
+        FSSCache cache = new FSSCache();
 
         int n = 0;
         for (int i = 0; i < axesPerSelection.size(); i++) {
@@ -286,7 +304,7 @@ public class FullSelectionSearch {
     /**
      * Recursive helper method for exhaustiveMultiAxisSearch.
      */
-    private void exhaustiveMultiAxisSearchRecursive(Set<Generator> cache, boolean considerReverse, int n, List<Integer> axesPerSelection, List<Integer> selections, Map<Integer, List<int[][][]>> results) {
+    private void exhaustiveMultiAxisSearchRecursive(FSSCache cache, boolean considerReverse, int n, List<Integer> axesPerSelection, List<Integer> selections, Map<Integer, List<int[][][]>> results) {
         // If on boundary
         boolean onBoundary = false;
         int completeGroups = 0;
@@ -303,10 +321,12 @@ public class FullSelectionSearch {
         if (onBoundary) {
             // Cull
             int[][][] generator = new int[completeGroups][][];
+            int[][] axesSelectionsForCache = new int[completeGroups][];
             int iCumulative = 0;
             for (int i = 0; i < generator.length; i++) {
                 int nAxesInGroup = axesPerSelection.get(i);
                 generator[i] = new int[nAxesInGroup][];
+                axesSelectionsForCache[i] = new int[nAxesInGroup];
                 for (int j = 0; j < nAxesInGroup; j++) {
                     int selection = selections.get(iCumulative);
                     int axis = Math.abs(selection);
@@ -315,35 +335,23 @@ public class FullSelectionSearch {
                         face = reverseArray(face);
                     }
                     generator[i][j] = face;
+                    axesSelectionsForCache[i][j] = selection;
                     iCumulative++;
                 }
             }
 
-            int[][][] normalizedGenerator = normalizeGenerator(generator);
-            if (cache.contains(new Generator(normalizedGenerator))) {
+            if (cache.checkContains(axesSelectionsForCache)) {
                 return;
             }
+
 
             int order = groupChecker.apply(generator);
             if (order < -1) {
                 return;
             }
-            // Cache
-            for (State state : symm) {
-                int[] replacements = state.state();
-                int[][][] replacementGenerator = new int[normalizedGenerator.length][][];
-                for (int i = 0; i < normalizedGenerator.length; i++) {
-                    replacementGenerator[i] = new int[normalizedGenerator[i].length][];
-                    for (int j = 0; j < normalizedGenerator[i].length; j++) {
-                        replacementGenerator[i][j] = new int[normalizedGenerator[i][j].length];
-                        for (int k = 0; k < normalizedGenerator[i][j].length; k++) {
-                            replacementGenerator[i][j][k] = replacements[normalizedGenerator[i][j][k] - 1];
-                        }
-                    }
-                }
-                cache.add(new Generator(normalizeGenerator(replacementGenerator)));
-            }
-            cache.add(new Generator(normalizedGenerator));
+            // Cache 174 PSL(2,8):3 - 24.9s
+            
+            cache.cache(axesSelectionsForCache);
 
             
             // Add result if this is the full generator
@@ -418,51 +426,6 @@ public class FullSelectionSearch {
     }
 
 
-
-
-
-    private static int[][][] normalizeGenerator(int[][][] generator) {
-        // Clone the generator to avoid modifying the original array
-        int[][][] normalized = generator.clone();
-
-        // Sort each middle int[][] array
-        for (int i = 0; i < normalized.length; i++) {
-            Arrays.sort(normalized[i], new Comparator<int[]>() {
-                @Override
-                public int compare(int[] a, int[] b) {
-                    for (int j = 0; j < Math.min(a.length, b.length); j++) {
-                        if (a[j] != b[j]) {
-                            return Integer.compare(a[j], b[j]);
-                        }
-                    }
-                    return Integer.compare(a.length, b.length);
-                }
-            });
-        }
-
-        // Sort the outer int[][][] array based on the sorted middle arrays
-        Arrays.sort(normalized, new Comparator<int[][]>() {
-            @Override
-            public int compare(int[][] a, int[][] b) {
-                for (int i = 0; i < Math.min(a.length, b.length); i++) {
-                    int[] arr1 = a[i];
-                    int[] arr2 = b[i];
-                    for (int j = 0; j < Math.min(arr1.length, arr2.length); j++) {
-                        if (arr1[j] != arr2[j]) {
-                            return Integer.compare(arr1[j], arr2[j]);
-                        }
-                    }
-                    if (arr1.length != arr2.length) {
-                        return Integer.compare(arr1.length, arr2.length);
-                    }
-                }
-                return Integer.compare(a.length, b.length);
-            }
-        });
-
-        return normalized;
-    }
-
     /**
      * Utility method to reverse an integer array.
      */
@@ -474,4 +437,127 @@ public class FullSelectionSearch {
         return reversed;
     }
 
+    static class FSSCacheObject {
+        byte[] data;
+        Integer cachedHashCode;
+        public FSSCacheObject(int[][] axes) {
+            int length = axes.length;
+            for (int[] axis : axes) {
+                length += axis.length;
+            }
+            this.data = new byte[length];
+            int offset = 0;
+            for (int[] axis : axes) {
+                data[offset++] = (byte) axis.length;
+                for (int face : axis) {
+                    data[offset++] = (byte) face;
+                }
+            }
+            this.cachedHashCode = null;
+        }
+        
+        public int hashCode() {
+            if (cachedHashCode == null) cachedHashCode = Arrays.hashCode(data);
+            return cachedHashCode;
+        }
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || !(obj instanceof FSSCacheObject)) return false;
+            return Arrays.equals(data, ((FSSCacheObject) obj).data);
+        }
+    }
+    class FSSCache {
+        Set<FSSCacheObject> cache = new HashSet<>();
+    
+    
+        int[][] normalizeAxes(int[][] axes) {
+            int[][] normalized = new int[axes.length][];
+            // Sort each inner array, ignoring sign, then
+            //   correct signs such that first element is positive
+            for (int i = 0; i < axes.length; i++) {
+                int[] axis = axes[i];
+                normalized[i] = new int[axis.length];
+                Integer[] sortedAxis = new Integer[axis.length];
+                for (int j = 0; j < axis.length; j++) sortedAxis[j] = axis[j];
+                Arrays.sort(sortedAxis, new Comparator<Integer>() {
+                    @Override
+                    public int compare(Integer a, Integer b) {
+                        return Integer.compare(Math.abs(a), Math.abs(b));
+                    }
+                });
+                boolean positive = sortedAxis[0] > 0;
+                for (int j = 0; j < sortedAxis.length; j++) {
+                    if (positive) normalized[i][j] = sortedAxis[j];
+                    else normalized[i][j] = -sortedAxis[j];
+                }
+            }
+            // Sort each outer array by first element
+            Arrays.sort(normalized, new Comparator<int[]>() {
+                @Override
+                public int compare(int[] a, int[] b) {
+                    return Integer.compare(a[0], b[0]);
+                }
+            });
+            return normalized;
+        }
+
+        private int[][][] cvtAxesSelection(int[][] axesSelectionsForCache) {
+            int[][][] generator = new int[axesSelectionsForCache.length][][];
+            for (int i = 0; i < generator.length; i++) {
+                generator[i] = new int[axesSelectionsForCache[i].length][];
+                for (int j = 0; j < generator[i].length; j++) { 
+                    generator[i][j] = FullSelectionSearch.this.getFaceAboutVertex.apply(Math.abs(axesSelectionsForCache[i][j]));
+                    if (axesSelectionsForCache[i][j] < 0) {
+                        generator[i][j] = reverseArray(generator[i][j]);
+                    }
+                }
+            }
+            return generator;
+        }
+
+        private int[][] cvtGenerator(int[][][] generator) {
+            int[][] axes = new int[generator.length][];
+            for (int i = 0; i < generator.length; i++) {
+                axes[i] = new int[generator[i].length];
+                for (int j = 0; j < generator[i].length; j++) {
+                    axes[i][j] = FullSelectionSearch.this.getFacesFromVertexReversable.apply(generator[i][j]);
+                }
+            }
+            return axes;
+        }
+
+        public void cache(int[][] axesSelectionsForCache) {
+            cache.add(new FSSCacheObject(normalizeAxes(axesSelectionsForCache)));
+        }
+    
+        public boolean checkContains(int[][] axesSelectionsForCache) {
+            
+            int[][] normalizedAxes = normalizeAxes(axesSelectionsForCache);
+            if (cache.contains(new FSSCacheObject(normalizedAxes))) {
+                return true;
+            }
+
+            int[][][] normalizedGenerator = cvtAxesSelection(normalizedAxes);
+
+            for (State state : symm) {
+                int[] replacements = state.state();
+                int[][][] replacementGenerator = new int[normalizedGenerator.length][][];
+                for (int i = 0; i < normalizedGenerator.length; i++) {
+                    replacementGenerator[i] = new int[normalizedGenerator[i].length][];
+                    for (int j = 0; j < normalizedGenerator[i].length; j++) {
+                        replacementGenerator[i][j] = new int[normalizedGenerator[i][j].length];
+                        for (int k = 0; k < normalizedGenerator[i][j].length; k++) {
+                            replacementGenerator[i][j][k] = replacements[normalizedGenerator[i][j][k] - 1];
+                        }
+                    }
+                }
+                if (cache.contains(new FSSCacheObject(normalizeAxes(cvtGenerator(replacementGenerator))))) {
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+    }
+    
 }
