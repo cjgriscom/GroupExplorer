@@ -83,8 +83,6 @@ public class FullSelectionSearch {
                 }
                 return group.order();
             });
-        
-        //System.exit(0);
 
         System.out.println("Searching for 3x2 selections");
         search.exhaustiveMultiAxisSearch(3, 2, considerReverse);
@@ -127,6 +125,9 @@ public class FullSelectionSearch {
         search.exhaustiveMultiAxisSearch(Arrays.asList(3, 3, 4), considerReverse);
 
 	}
+	public static void runPentagonalHexecontahedralSearch() throws IOException {
+        Generator symmG = new Generator(GroupExplorer.parseOperationsArr(PHGenerators.triPHSymmetryF1));
+    }
 
 	public static void runPentagonalIcositrahedralSearch() throws IOException {
         Generator symmG = new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries_2));
@@ -351,6 +352,7 @@ public class FullSelectionSearch {
     private void exhaustiveMultiAxisSearchRecursive(FSSCache cache, boolean considerReverse, int n, List<Integer> axesPerSelection, List<Integer> selections, Map<Integer, List<int[][][]>> results) {
         // If on boundary
         boolean onBoundary = false;
+        int[][] addBoundarySelectionToCache = null;
         int completeGroups = 0;
         int temp = 0;
         for (int nAxesInGroup : axesPerSelection) {
@@ -366,11 +368,14 @@ public class FullSelectionSearch {
             // Cull
             int[][][] generator = new int[completeGroups][][];
             int[][] axesSelectionsForCache = new int[completeGroups][];
+            int[][] boundarySelection = new int[1][];
             int iCumulative = 0;
             for (int i = 0; i < generator.length; i++) {
                 int nAxesInGroup = axesPerSelection.get(i);
                 generator[i] = new int[nAxesInGroup][];
                 axesSelectionsForCache[i] = new int[nAxesInGroup];
+                // Boundary selection is the last axis group in the set
+                boundarySelection[0] = new int[nAxesInGroup];
                 for (int j = 0; j < nAxesInGroup; j++) {
                     int selection = selections.get(iCumulative);
                     int axis = Math.abs(selection);
@@ -381,6 +386,7 @@ public class FullSelectionSearch {
                     generator[i][j] = face;
                     axesSelectionsForCache[i][j] = selection;
                     iCumulative++;
+                    boundarySelection[0][j] = selection;
                 }
             }
 
@@ -390,14 +396,20 @@ public class FullSelectionSearch {
                 return;
             }
 
-
+            // Cull further by checking if cache contains new boundary selection
+            // This is why we wait until later to add current selection to cache
+            if (completeGroups != 1 && cache.checkContains(boundarySelection)) {
+                // Stop this branch; it's already been explored by a previous branch
+                return;
+            }
+            
             int order = groupChecker.apply(generator);
             if (order < -1) {
                 return;
             } else {
-                cache.cache(axesSelectionsForCache);
+                // Add boundary selection to cache after this branch is explored
+                addBoundarySelectionToCache = axesSelectionsForCache;
             }
-
             
             // Add result if this is the full generator
             if (selections.size() == n) {
@@ -407,6 +419,8 @@ public class FullSelectionSearch {
                     results.put(order, resultsForOrder);
                 }
                 resultsForOrder.add(generator.clone());
+                // Cache here before returning
+                cache.cache(axesSelectionsForCache);
                 return;
             }
 
@@ -432,6 +446,10 @@ public class FullSelectionSearch {
             selections.add(signedAxis);
             exhaustiveMultiAxisSearchRecursive(cache, considerReverse, n, axesPerSelection, selections, results);
             selections.remove(selections.size() - 1);
+        }
+
+        if (addBoundarySelectionToCache != null) {
+            cache.cache(addBoundarySelectionToCache);
         }
     }
 
