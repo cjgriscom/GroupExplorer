@@ -65,6 +65,9 @@ public class Generators {
     // PSL(3,2)
     public static final String psl_3_2 = "[(1,2,3)(4,5,6),(7,1,3)(5,8,6),(1,2,8)(7,4,5)]";  
 
+    // Non-split extension 2^3.L3(2)
+    public static final String psl_3_2_nonsplit_ext = "[(2,4)(3,5)(6,10)(7,11)(9,12)(13,14),(1,2,3)(4,6,7)(5,8,9)(10,13,12)]";
+
     // PSL(3,3)
     // This was generated on PI as (V6L,V9L,V31R,V32R),(V5R,V8R,V20R)
     public static final String psl_3_3 = "[(1,2,3)(4,5,6)(7,8,9)(10,11,12),(13,7,3)(2,10,6)(8,11,9)]";
@@ -82,7 +85,7 @@ public class Generators {
     public static final String m24 = "[(1,4)(2,7)(3,17)(5,13)(6,9)(8,15)(10,19)(11,18)(12,21)(14,16)(20,24)(22,23),(1,4,6)(2,21,14)(3,9,15)(5,18,10)(13,17,16)(19,24,23)]";
 
     public static void main(String[] args) {
-        GroupExplorer g = new GroupExplorer("[(1,10,2)(6,19,5)(7,4,8)(12,14,11)(15,17,13)(16,3,18)(20,23,21)(22,9,24),(2,16,3)(5,1,4)(8,22,9)(11,7,10)(13,12,14)(18,20,17)(21,6,19)(24,15,23),(3,5,1)(4,8,6)(9,11,7)(10,2,12)(14,24,15)(17,13,16)(19,18,20)(23,21,22),(1,2,3)(6,5,4)(7,8,9)(12,11,10)(13,14,15)(18,17,16)(19,20,21)(24,23,22)]", MemorySettings.COMPACT);
+        GroupExplorer g = new GroupExplorer("[(2,12,1)(10,6,3)(7,8,5),(8,9,1)(5,12,4)(11,6,10),(10,2,9)(4,12,3)(8,7,11)]", MemorySettings.COMPACT);
         exploreGroup(g, null);
     }
 

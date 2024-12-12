@@ -167,7 +167,7 @@ public class Renderer extends Application {
 
 		descriptionLabel = new Label();
 		descriptionLabel.setTextFill(Color.WHITE);
-		descriptionLabel.setPrefHeight(150);
+		descriptionLabel.setPrefHeight(800);
 		descriptionLabel.setWrapText(true);
 
         // Add all components to sidebar
