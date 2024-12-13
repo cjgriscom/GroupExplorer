@@ -28,7 +28,7 @@ public class VertexColorSearch2 {
 			accept.run();
 		};
 		return new VertexColorSearch2(
-			3, new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries3)), patternFacesAboutSymm,
+			3, 8, new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries3)), patternFacesAboutSymm,
 			24, PentagonalIcositrahedron::getFacesFromVertex, PentagonalIcositrahedron::getMatchingVertexFromFaces);
 	}
 	public static VertexColorSearch2 pentagonalIcositrahedron_3D_180_32Vertices() {
@@ -46,7 +46,7 @@ public class VertexColorSearch2 {
 			accept.run();
 		};
 		return new VertexColorSearch2(
-			4, new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries3)), patternFacesAboutSymm,
+			4, 8, new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries3)), patternFacesAboutSymm,
 			32, PentagonalIcositrahedron::getFacesFromVertex, PentagonalIcositrahedron::getMatchingVertexFromFaces);
 	}
 
@@ -62,7 +62,7 @@ public class VertexColorSearch2 {
 			accept.run();
 		};
 		return new VertexColorSearch2(
-			4, new Generator(PHGenerators.get3D_180Symm()), patternFacesAboutSymm,
+			4, 15, new Generator(PHGenerators.get3D_180Symm()), patternFacesAboutSymm,
 			60, PentagonalHexecontahedron::getFacesFromVertex, PentagonalHexecontahedron::getMatchingVertexFromFaces);
 	}
 
@@ -78,7 +78,35 @@ public class VertexColorSearch2 {
 			accept.run();
 		};
 		return new VertexColorSearch2(
-			4, new Generator(PHGenerators.get3D_180Symm()), patternFacesAboutSymm,
+			4, 20, new Generator(PHGenerators.get3D_180Symm()), patternFacesAboutSymm,
+			80, PentagonalHexecontahedron::getFacesFromVertex, PentagonalHexecontahedron::getMatchingVertexFromFaces);
+	}
+
+
+	public static VertexColorSearch2 pentagonalHexecontahedron_Threefold_60vertices() {
+		BiConsumer<GroupExplorer, Runnable> patternFacesAboutSymm = (ge, accept) -> {
+			ge.resetElements(true);
+			accept.run();
+			ge.applyOperation(0);
+			accept.run();
+			ge.applyOperation(0);
+			accept.run();
+		};
+		return new VertexColorSearch2(
+			3, 20, new Generator(GroupExplorer.parseOperationsArr(PHGenerators.triPHSymmetryF1)), patternFacesAboutSymm,
+			60, PentagonalHexecontahedron::getFacesFromVertex, PentagonalHexecontahedron::getMatchingVertexFromFaces);
+	}
+	public static VertexColorSearch2 pentagonalHexecontahedron_Threefold_80vertices() {
+		BiConsumer<GroupExplorer, Runnable> patternFacesAboutSymm = (ge, accept) -> {
+			ge.resetElements(true);
+			accept.run();
+			ge.applyOperation(0);
+			accept.run();
+			ge.applyOperation(0);
+			accept.run();
+		};
+		return new VertexColorSearch2(
+			3, 20, new Generator(GroupExplorer.parseOperationsArr(PHGenerators.triPHSymmetryF1)), patternFacesAboutSymm,
 			80, PentagonalHexecontahedron::getFacesFromVertex, PentagonalHexecontahedron::getMatchingVertexFromFaces);
 	}
 
@@ -102,24 +130,24 @@ public class VertexColorSearch2 {
 
 	final int[][][] symmArr;
     final String symm;
-    final GroupExplorer ge;
+    final ThreadLocal<GroupExplorer> ge;
 
     final int[][]collidingVertices;
 
 	private final int[][] patternVerticesCache;
 	
-	public VertexColorSearch2(int symmOrder, Generator symmGenerator, BiConsumer<GroupExplorer, Runnable> patternFacesAboutSymm, int totalVertexCount, Function<Integer, int[]> getFacesFromVertex, Function<int[], Integer> getMatchingVertexFromFaces) {
+	public VertexColorSearch2(int symmOrder, int selections, Generator symmGenerator, BiConsumer<GroupExplorer, Runnable> patternFacesAboutSymm, int totalVertexCount, Function<Integer, int[]> getFacesFromVertex, Function<int[], Integer> getMatchingVertexFromFaces) {
 		this.order = symmOrder;
 		this.symmGenerator = symmGenerator;
 		this.patternFacesAboutSymm = patternFacesAboutSymm;
 		this.vertexCount = totalVertexCount;
 		this.getFacesFromVertex = getFacesFromVertex;
 		this.getMatchingVertexFromFaces = getMatchingVertexFromFaces;
-		selections = vertexCount / order;
+		this.selections = selections;
 
 		this.symmArr = this.symmGenerator.generator();
 		this.symm = GroupExplorer.generatorsToString(symmArr);
-		this.ge = new GroupExplorer(symm, MemorySettings.FASTEST, new HashSet<>());
+		this.ge = ThreadLocal.withInitial(() -> new GroupExplorer(symm, MemorySettings.FASTEST, new HashSet<>()));
 
 		collidingVertices = generateCollidingVertices();
 		patternVerticesCache = new int[vertexCount + 1][];
@@ -129,6 +157,7 @@ public class VertexColorSearch2 {
     public int[][] patternFacesAboutSymm(int[] faceIndices) {
         int[][] facesPatterned = new int[order][faceIndices.length];
 		int[] s = new int[1];
+		GroupExplorer ge = this.ge.get();
 		patternFacesAboutSymm.accept(ge, () -> {
 			for (int i = 0; i < faceIndices.length; i++) facesPatterned[s[0]][i] = ge.elements[faceIndices[i] - 1];
 			s[0]++;
@@ -177,8 +206,15 @@ public class VertexColorSearch2 {
 		if (allSelections.size() > 0) return allSelections;
         List<Integer> availableVertices = new ArrayList<>();
         for (int i = 1; i <= vertexCount; i++) {
-            availableVertices.add(i);
+			// Pattern the vertex about symmetry and if its ID changes, add it
+			int[] pattern = patternVerticesAboutSymm(i);
+			HashSet<Integer> patternSet = new HashSet<>();
+			for (int j = 0; j < pattern.length; j++) {
+				patternSet.add(pattern[j]);
+			}
+			if (patternSet.size() == pattern.length) availableVertices.add(i);
         }
+		System.out.println("Available vertices: " + availableVertices.size());
         generateSelectionsRecursive(new ArrayList<>(), availableVertices, selections);
         return allSelections;
     }
@@ -211,7 +247,7 @@ public class VertexColorSearch2 {
 	long startTime = System.currentTimeMillis();
 	long lastPrintTime = System.currentTimeMillis();
     private void generateSelectionsRecursive(List<Integer> currentSelection, List<Integer> availableVertices, int remainingSelections) {
-        if (remainingSelections == 0) {
+		if (remainingSelections == 0) {
             allSelections.add(new ArrayList<>(currentSelection));
 			if (System.currentTimeMillis() - lastPrintTime > 1000) {
 				System.out.println(allSelections.size() + " " + (System.currentTimeMillis() - startTime) / 1000. + "s");
@@ -237,10 +273,19 @@ public class VertexColorSearch2 {
                 newAvailableVertices.remove(Integer.valueOf(collidingVertex));
             }
 
+			if (currentSelection.size() == 20) {
+			System.out.println("Current selection: " + currentSelection.size() + " new available vertices: " + newAvailableVertices.size());
+			}
+
             generateSelectionsRecursive(currentSelection, newAvailableVertices, remainingSelections - 1);
             currentSelection.remove(currentSelection.size() - 1);
         }
+		if (currentSelection.size() <= minDepth) {
+			System.out.println("Finshed depth " + currentSelection.size());
+			minDepth = currentSelection.size();
+		}
     }
+	int minDepth = 20;
 
     private int[] getCollidingVertices(int vertex) {
         return this.collidingVertices[vertex];

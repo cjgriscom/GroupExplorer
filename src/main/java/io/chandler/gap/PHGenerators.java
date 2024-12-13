@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import io.chandler.gap.GroupExplorer.Generator;
@@ -80,11 +81,10 @@ public class PHGenerators {
     private final static String REJECTED_CYCLE_DESC = "1 2 1 58 ";
 
     public static void main(String[] args) throws Exception {
-        File out = new File("PH_VCS_3D_180_RESULTS.txt");
-        if (out.exists()) {
-            out.delete();
+        File out = new File("/home/cjgriscom/Programming/GroupTxt/ph_results.txt");
+        try (PrintStream stream = new PrintStream(out)) {
+            doExhaustive3DSearch(stream);
         }
-        doExhaustive3DSearch(new PrintStream(out));
     }
 
     private static void doExhaustive3DSearch(PrintStream resultsPrintStream) {
@@ -92,17 +92,17 @@ public class PHGenerators {
         // Print it out if it's not Alt60
         // Heuristic for Alt60 is if it contains a 58-cycle + 2-cycle
 
-        VertexColorSearch2 vcs60 = VertexColorSearch2.pentagonalHexecontahedron_3D_180_60vertices();
-        System.out.println("Unfiltered 60: " + vcs60.generateAllSelections().size());
-        vcs60.filterOutIdenticalGenerators();
+        VertexColorSearch2 vcs60 = VertexColorSearch2.pentagonalHexecontahedron_Threefold_60vertices();
         List<List<Integer>> allSelections60 = vcs60.generateAllSelections();
+        System.out.println("Unfiltered 60: " + allSelections60.size());
+        vcs60.filterOutIdenticalGenerators();
         System.out.println("Filtered 60: " + allSelections60.size());
 
 
-        VertexColorSearch2 vcs80 = VertexColorSearch2.pentagonalHexecontahedron_3D_180_80vertices();
-        System.out.println("Unfiltered 80: " + vcs80.generateAllSelections().size());
-        vcs80.filterOutIdenticalGenerators();
+        VertexColorSearch2 vcs80 = VertexColorSearch2.pentagonalHexecontahedron_Threefold_80vertices();
         List<List<Integer>> allSelections80 = vcs80.generateAllSelections();
+        System.out.println("Unfiltered 80: " + allSelections80.size());
+        vcs80.filterOutIdenticalGenerators();
         System.out.println("Filtered 80: " + allSelections80.size());
 
         int twoPower15 = 1 << 15;
@@ -121,8 +121,33 @@ public class PHGenerators {
         List<List<Integer>> selectionPool = allSelections60;
         selectionPool.addAll(allSelections80);
 
-        Random r = new Random(1345980);
-        Collections.shuffle(selectionPool, r);
+        //Random r = new Random(1345980);
+        //Collections.shuffle(selectionPool, r);
+
+        // Print non-inverted results
+        System.out.println("Non-inverted axis selections:");
+        for (List<Integer> selection : selectionPool) {
+
+            int[][] cycles = new int[selection.size()][];
+            for (int i = 0; i < selection.size(); i++) {
+                int[] faces = PentagonalHexecontahedron.getFacesFromVertex(selection.get(i));
+                cycles[i] = faces;
+            }
+ 
+            Generator gen = new Generator(new int[][][] {cycles});
+
+            for (int i = 1; i < vcs60.order; i++) {
+                int[][][] patternCycles = new int[1][cycles.length][];
+                for (int a = 0; a < cycles.length; a++) {
+                    int[][] patternFaces = vcs60.patternFacesAboutSymm(cycles[a]);
+                    patternCycles[0][a] = patternFaces[i].clone();
+                } 
+                gen = Generator.combine(gen, new Generator(patternCycles));
+            }
+            PentagonalHexecontahedron.printVertexGeneratorNotations(gen.generator());
+        }
+        System.out.println();
+        System.out.println("Inverted results:");
 
         AtomicInteger results = new AtomicInteger();
 
@@ -145,14 +170,25 @@ public class PHGenerators {
                     (iteration < 1000 && iteration % 100 == 0) ||
                     (iteration < 10000 && iteration % 1000 == 0) ||
                         iteration % 10000 == 0) te.checkProgressEstimate(iteration, results.get());
-                Generator gen = Generator.combine(new Generator(vcs60.symmArr), new Generator(cyclesInverted));
+
+                // Pattern about symmetry
+                Generator gen = new Generator(cyclesInverted);
+
+                for (int i = 1; i < vcs60.order; i++) {
+                    int[][][] patternCycles = new int[1][cyclesInverted[0].length][];
+                    for (int a = 0; a < cyclesInverted[0].length; a++) {
+                        int[][] patternFaces = vcs60.patternFacesAboutSymm(cyclesInverted[0][a]);
+                        patternCycles[0][a] = patternFaces[i].clone();
+                    } 
+                    gen = Generator.combine(gen, new Generator(patternCycles));
+                }
+
                 boolean good = checkGenerator(false, MAX_TRANSITIVITY, gen);
                 if (good) {
                     results.incrementAndGet();
                     resultsPrintStream.println(GroupExplorer.generatorsToString(gen.generator()));
                     resultsPrintStream.flush();
-                    Generator justCycles = new Generator(cyclesInverted);
-                    PentagonalHexecontahedron.printVertexGeneratorNotations(justCycles.generator());
+                    PentagonalHexecontahedron.printVertexGeneratorNotations(gen.generator());
                 }
             });
 

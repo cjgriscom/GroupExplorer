@@ -19,15 +19,18 @@ import java.util.function.Function;
 import io.chandler.gap.GroupExplorer.Generator;
 import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.cache.LongStateCache;
+import io.chandler.gap.cache.LongLongStateCache;
 import io.chandler.gap.cache.ParityStateCache;
 import io.chandler.gap.cache.State;
 import io.chandler.gap.render.Icosahedron;
 import io.chandler.gap.render.SnubCube;
+import io.chandler.gap.render.SnubDodecahedron;
 
 public class FullSelectionSearch {
 	public static void main(String[] args) throws Exception{
 		//runDodecahedralSearch();
-		runPentagonalIcositrahedralSearch();
+		//runPentagonalIcositrahedralSearch();
+        runPentagonalHexecontahedralSearch();
 	}
 
 	public static void runDodecahedralSearch() {
@@ -127,6 +130,86 @@ public class FullSelectionSearch {
 	}
 	public static void runPentagonalHexecontahedralSearch() throws IOException {
         Generator symmG = new Generator(GroupExplorer.parseOperationsArr(PHGenerators.triPHSymmetryF1));
+        symmG = Generator.combine(symmG, new Generator(GroupExplorer.parseOperationsArr(PHGenerators.pentPHSymmetryF1)));
+
+        int elementsToStore = 21; // Limits the transitivity in results
+        boolean considerReverse = false;
+        int maxGroupSize = 102660+2; // TODO PSL(2,59)
+
+        boolean includeIcosahedral = true;
+
+        SnubDodecahedron snubDodecahedron = new SnubDodecahedron();
+        
+        FullSelectionSearch search = new FullSelectionSearch(
+            symmG,
+            includeIcosahedral ? 80 : 60,
+            1,
+            (i) -> PentagonalHexecontahedron.phverticesToPhfaces[i-1],
+            snubDodecahedron::getPosOrNegFaceFromGenerator,
+            (generator) -> {
+
+                if (true) return 1; // TODO getting axis selections 1st
+
+                GroupExplorer group = new GroupExplorer(
+                    GroupExplorer.generatorsToString(GroupExplorer.renumberGenerators_fast(generator)),
+                    MemorySettings.FASTEST, new ParityStateCache(new LongLongStateCache(elementsToStore, 61)));
+
+                group.initIterativeExploration();
+                int iters = -2;
+                
+                while (iters <= 0) {
+                    try {
+                        Set<String> descs = Collections.synchronizedSet(new HashSet<>());
+                        iters = group.iterateExploration(false, maxGroupSize, (states, depth) -> {
+                            if (states.size() > 10000) {
+                                try {
+                                    states.parallelStream().forEach(s -> {
+                                        String desc = GroupExplorer.describeStateForCache(group.nElements, s);
+                                        synchronized(descs) {
+                                            descs.add(desc);
+                                            if (descs.size() > 11) {
+                                                throw new RuntimeException("Too many descriptions");
+                                            }
+                                        }
+                                    });
+                                } catch (Exception e) {
+                                    throw new RuntimeException("Too many descriptions");
+                                }
+                            } else {
+                                for (int[] s : states) {
+                                    
+                                    String desc = GroupExplorer.describeStateForCache(group.nElements, s);
+                                    descs.add(desc);
+                                    if (descs.size() > 11) { // TODO
+                                    
+                                        //System.out.println(desc);
+                                        //System.out.println("Reject due to cycle desc " + desc + " - " + descs.size());
+                                        throw new RuntimeException();
+                                    }
+                                }
+                            }
+                        });
+                        
+                        if (iters == -1) {
+                            //System.out.println("Lapsed");
+                            //System.out.println(GroupExplorer.generatorsToString(generator));
+                            return -1;
+                        }
+                    } catch (Exception e) {
+                        //System.out.println("Exception " + e.getMessage());
+                        //System.out.println("Error exploring states: " + e.getMessage());
+                        return -2;
+                    }
+                }
+                //System.out.println("Order: " + group.order());
+                
+                return group.order();
+            });
+        
+
+        System.out.println("Searching for 3x20 selections");
+        search.exhaustiveMultiAxisSearch(3, 20, considerReverse);
+
     }
 
 	public static void runPentagonalIcositrahedralSearch() throws IOException {

@@ -81,39 +81,37 @@ public class PentagonalHexecontahedron {
 
 		
 	}
-
 	public static void printVertexGeneratorNotations(int[][][] g0) {
+		// Each inner array corresponds to something in getFacesFromVertex(1 - 80)
 
-		// Each inner array corresponds to something in getFacesFromVertex(1 - 32)
-
-
-		System.out.print("[");
+		StringBuilder sb = new StringBuilder();
+		sb.append("[");
+		
 		for (int a = 0; a < g0.length; a++) {
-			if (a != 0) System.out.print(",");
-			System.out.print("(");
+			if (a != 0) sb.append(",");
+			sb.append("(");
 			boolean first = true;
 			for (int b = 0; b < g0[a].length; b++) {
 				int[] cycle = g0[a][b].clone();
 				
 				int vert = getMatchingVertexFromFaces(cycle);
 				
-				if (!first) System.out.print(",");
+				if (!first) sb.append(",");
 				first = false;
 				if (vert == 0) {
 					//throw new RuntimeException("No match found for " + Arrays.toString(cycle));
-					System.out.print(Arrays.toString(cycle));
+					sb.append(Arrays.toString(cycle));
 				} else if (vert > 0) {
-					System.out.print("V" + vert + "R");
-					
+					sb.append("V").append(vert).append("R");
 				} else {
-					System.out.print("V" + (-vert) + "L");
+					sb.append("V").append(-vert).append("L"); 
 				}
-
 			}
-			System.out.print(")");
+			sb.append(")");
 		}
 
-		System.out.println("]");
+		sb.append("]");
+		System.out.println(sb.toString());
 	}
 
 	public static int getMatchingVertexFromFaces(int[] src) {

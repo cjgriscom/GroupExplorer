@@ -85,7 +85,7 @@ public class Generators {
     public static final String m24 = "[(1,4)(2,7)(3,17)(5,13)(6,9)(8,15)(10,19)(11,18)(12,21)(14,16)(20,24)(22,23),(1,4,6)(2,21,14)(3,9,15)(5,18,10)(13,17,16)(19,24,23)]";
 
     public static void main(String[] args) {
-        GroupExplorer g = new GroupExplorer("[(2,12,1)(10,6,3)(7,8,5),(8,9,1)(5,12,4)(11,6,10),(10,2,9)(4,12,3)(8,7,11)]", MemorySettings.COMPACT);
+        GroupExplorer g = new GroupExplorer(PHGenerators.triPHSymmetryF1, MemorySettings.COMPACT);
         exploreGroup(g, null);
     }
 
