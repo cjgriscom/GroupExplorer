@@ -1,20 +1,47 @@
 package io.chandler.gap.render;
 
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
+import javafx.concurrent.Task;
 import javafx.geometry.Insets;
+import javafx.geometry.Point3D;
 import javafx.scene.*;
 import javafx.scene.control.*;
+import javafx.scene.control.Alert.AlertType;
+import javafx.scene.image.WritableImage;
+import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
 import javafx.scene.shape.*;
+import javafx.scene.transform.Affine;
+import javafx.scene.transform.NonInvertibleTransformException;
 import javafx.scene.transform.Rotate;
 import javafx.stage.Stage;
 
+import java.awt.image.BufferedImage;
+import java.awt.image.RenderedImage;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import javafx.embed.swing.SwingFXUtils;
+
+import javax.imageio.IIOImage;
+import javax.imageio.ImageIO;
+import javax.imageio.stream.ImageOutputStream;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.FileImageOutputStream;
+import javax.imageio.metadata.IIOMetadataNode;
+import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.ImageTypeSpecifier;
+import javax.imageio.ImageWriteParam;
+
+import javafx.stage.FileChooser;
+import javafx.stage.FileChooser.ExtensionFilter;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 public class Renderer extends Application {
     private static final double SCENE_WIDTH = 1280;
@@ -51,9 +78,13 @@ public class Renderer extends Application {
     // Parse Results
     private List<String> parseResults = new ArrayList<>();
     private int currentParseIndex = 0;
-
+    private Stage stage; // Class-level variable
+    private SubScene subScene; // Class-level variable
+    
     @Override
     public void start(Stage primaryStage) {
+        this.stage = primaryStage; // Assign to class-level variable
+
         // Initialize solids group
         solidsGroup = new Group();
 
@@ -76,7 +107,7 @@ public class Renderer extends Application {
         Group allGroups = new Group(solidsGroup, group2);
 
         // Create the 3D content pane
-        SubScene subScene = new SubScene(allGroups, SCENE_WIDTH - SIDEBAR_WIDTH, SCENE_HEIGHT, true, SceneAntialiasing.BALANCED);
+        subScene = new SubScene(allGroups, SCENE_WIDTH - SIDEBAR_WIDTH, SCENE_HEIGHT, true, SceneAntialiasing.BALANCED);
         subScene.setFill(Color.BLACK);
         subScene.setCamera(camera);
 
@@ -95,6 +126,7 @@ public class Renderer extends Application {
 
         initMouseControl(solidsGroup, primaryStage);
     }
+
 
     private VBox createSidebar() {
         VBox sidebar = new VBox();
@@ -349,9 +381,175 @@ public class Renderer extends Application {
             rotateX.setAngle(anchorAngleX - (anchorY - event.getSceneY()));
             rotateY.setAngle(anchorAngleY + anchorX - event.getSceneX());
         });
+
+
+        // Adding key control for rotation around the visual vertical axis
+        scene.setOnKeyPressed(event -> {
+            if (event.getCode() == KeyCode.RIGHT) {
+                rotateAroundVisualYAxis(group, 10);
+            } else if (event.getCode() == KeyCode.LEFT) {
+                rotateAroundVisualYAxis(group, -10);
+            } else if (event.getCode() == KeyCode.G) {
+                // Start capturing snapshots and generating GIF
+                captureAndCreateGif(group);
+            }
+        });
+    }
+
+    /**
+     * Rotates the group around the visual vertical axis (screen's Y-axis).
+     *
+     * @param group The group to rotate.
+     * @param angleDegrees The angle in degrees to rotate by.
+     */
+    private void rotateAroundVisualYAxis(Group group, double angleDegrees) {
+        // Get the current transformation matrix of the group
+        Affine currentTransform = new Affine(group.getLocalToSceneTransform());
+
+        // The visual vertical axis in scene coordinates (up direction on the screen)
+        Point3D visualYAxis = new Point3D(0, -1, 0); // Negative Y because JavaFX Y-axis goes downwards
+
+        // Transform the visualYAxis to the group's local coordinate space
+        Point3D axisInLocal = null;
+        try {
+            axisInLocal = currentTransform.inverseTransform(visualYAxis);
+        } catch (NonInvertibleTransformException e) {
+            e.printStackTrace();
+            return;
+        }
+
+        // Create a rotation transform around the calculated axis
+        Rotate rotateTransform = new Rotate(angleDegrees, axisInLocal);
+
+        // Apply the rotation to the group
+        group.getTransforms().add(rotateTransform);
+    }
+    
+    private void captureAndCreateGif(Group group) {
+        Task<Void> task = new Task<Void>() {
+            @Override
+            protected Void call() throws Exception {
+                // [Same code as before, but wrap rotations and snapshots in Platform.runLater]
+                List<RenderedImage> frames = new ArrayList<>();
+    
+                for (int i = 0; i < 36; i++) {
+                    final int index = i;
+                    Platform.runLater(() -> {
+                        // Rotate the group by 10 degrees around the visual Y-axis
+                        rotateAroundVisualYAxis(group, 10);
+    
+                        // Capture the snapshot
+                        WritableImage snapshot = new WritableImage((int) (SCENE_WIDTH - SIDEBAR_WIDTH), (int) SCENE_HEIGHT);
+                        subScene.snapshot(null, snapshot);
+    
+                        // Convert to BufferedImage and add to frames
+                        BufferedImage bufferedImage = SwingFXUtils.fromFXImage(snapshot, null);
+                        frames.add(bufferedImage);
+                    });
+    
+                    // Wait for the UI thread to process the event
+                    Thread.sleep(100);
+                }
+    
+                // Open save dialog and create GIF (also wrap in Platform.runLater)
+                Platform.runLater(() -> {
+                    
+                    // Open save dialog
+                    FileChooser fileChooser = new FileChooser();
+                    fileChooser.setTitle("Save Animated GIF");
+                    fileChooser.getExtensionFilters().add(new ExtensionFilter("GIF Image", "*.gif"));
+                    File file = fileChooser.showSaveDialog(stage);
+
+                    if (file != null) {
+                        // Create the animated GIF
+                        try {
+                            createAnimatedGif(frames, file);
+                        } catch (Exception e) {
+                            Platform.runLater(() -> {
+                                Alert alert = new Alert(AlertType.ERROR);
+                                alert.setTitle("Error");
+                                alert.setHeaderText("Failed to create animated GIF");
+                                alert.setContentText("An error occurred while creating the animated GIF. Please try again.");
+                                alert.showAndWait();
+                            });
+                        }
+                    }
+                });
+    
+                return null;
+            }
+        };
+    
+        Thread thread = new Thread(task);
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void createAnimatedGif(List<RenderedImage> frames, File output) throws Exception {
+        ImageWriter gifWriter = ImageIO.getImageWritersByFormatName("gif").next();
+        ImageOutputStream ios = new FileImageOutputStream(output);
+        gifWriter.setOutput(ios);
+
+        // Configure GIF sequence with desired parameters
+        gifWriter.prepareWriteSequence(null);
+
+        int delayTime = 100; // Time between frames in hundredths of a second (e.g., 100 = 1 second)
+
+        for (int i = 0; i < frames.size(); i++) {
+            BufferedImage img = (BufferedImage) frames.get(i);
+            ImageWriteParam param = gifWriter.getDefaultWriteParam();
+            IIOMetadata metadata = gifWriter.getDefaultImageMetadata(new ImageTypeSpecifier(img), param);
+
+            // Set the delay time and loop setting
+            String metaFormatName = metadata.getNativeMetadataFormatName();
+            IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(metaFormatName);
+
+            // Configure the GraphicsControlExtension node
+            IIOMetadataNode graphicsControlExtensionNode = getNode(root, "GraphicControlExtension");
+            graphicsControlExtensionNode.setAttribute("delayTime", Integer.toString(delayTime / 10)); // Convert to 1/100s units
+            graphicsControlExtensionNode.setAttribute("disposalMethod", "none");
+            graphicsControlExtensionNode.setAttribute("userInputFlag", "FALSE");
+            graphicsControlExtensionNode.setAttribute("transparentColorFlag", "FALSE");
+            graphicsControlExtensionNode.setAttribute("transparentColorIndex", "0");
+
+            // Configure the ApplicationExtensions node to make the GIF loop
+            if (i == 0) {
+                IIOMetadataNode appExtensionsNode = getNode(root, "ApplicationExtensions");
+                IIOMetadataNode appExtensionNode = new IIOMetadataNode("ApplicationExtension");
+
+                appExtensionNode.setAttribute("applicationID", "NETSCAPE");
+                appExtensionNode.setAttribute("authenticationCode", "2.0");
+
+                byte[] appExtensionBytes = new byte[]{
+                        0x1, // Sub-block index (always 1)
+                        0x0, 0x0 // Loop count (0 means infinite loop)
+                };
+                appExtensionNode.setUserObject(appExtensionBytes);
+                appExtensionsNode.appendChild(appExtensionNode);
+            }
+
+            metadata.setFromTree(metaFormatName, root);
+
+            IIOImage frame = new IIOImage(img, null, metadata);
+            gifWriter.writeToSequence(frame, param);
+        }
+
+        gifWriter.endWriteSequence();
+        ios.close();
     }
 
     public static void main(String[] args) {
         launch(args);
+    }
+    private static IIOMetadataNode getNode(IIOMetadataNode rootNode, String nodeName) {
+        NodeList nodes = rootNode.getElementsByTagName(nodeName);
+
+        if (nodes.getLength() > 0) {
+            return (IIOMetadataNode) nodes.item(0);
+        } else {
+            IIOMetadataNode node = new IIOMetadataNode(nodeName);
+            rootNode.appendChild(node);
+            return node;
+        }
     }
 }

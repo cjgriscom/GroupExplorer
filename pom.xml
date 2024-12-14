@@ -35,7 +35,16 @@
             <artifactId>lmdbjava</artifactId>
             <version>0.9.0</version>
         </dependency>
-
+        <dependency>
+            <groupId>com.twelvemonkeys.imageio</groupId>
+            <artifactId>imageio-bmp</artifactId>
+            <version>3.8.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.twelvemonkeys.imageio</groupId>
+            <artifactId>imageio-core</artifactId>
+            <version>3.8.0</version>
+        </dependency>
     </dependencies>
 
     <build>
