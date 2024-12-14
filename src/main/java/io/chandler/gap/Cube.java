@@ -113,7 +113,40 @@ public class Cube {
         return vertexEdges[vertex - 1][index];
     }
 
+    public static int[] getVerticesOfFaceClockwise(int face) {
+        // We'll collect the vertices of the face in clockwise order
+        int[] vertices = new int[4];
+        
+        // Find one vertex that belongs to the face
+        int startVertex = -1;
+        for (int vertex = 1; vertex <= 8; vertex++) {
+            if (containsFace(vertexFaces[vertex - 1], face)) {
+                startVertex = vertex;
+                break;
+            }
+        }
+        
+        if (startVertex == -1) {
+            throw new IllegalArgumentException("Face " + face + " does not exist.");
+        }
+        
+        // Traverse the face to get all vertices
+        vertices[0] = startVertex;
+        for (int i = 1; i < 4; i++) {
+            vertices[i] = getCounterclockwiseVertex(face, vertices[i - 1]);
+        }
+        
+        // Verify that we have returned to the starting vertex after a full cycle
+        int nextVertex = getCounterclockwiseVertex(face, vertices[3]);
+        if (nextVertex != startVertex) {
+            throw new IllegalStateException("Vertices do not form a closed loop on face " + face);
+        }
 
+        // Reverse the array to make it clockwise
+        vertices = CycleInverter.invertArray(vertices);
+        
+        return vertices;
+    }
 
     /////////////////
 

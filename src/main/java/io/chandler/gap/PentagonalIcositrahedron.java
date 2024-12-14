@@ -7,7 +7,7 @@ public class PentagonalIcositrahedron {
 	static final int[][] pifaceToCubeFaceVertex = new int[24][];
 
 	// Faces listed in clockwise order
-	static final int[][] piverticesToPifaces = new int[24+8][];
+	static final int[][] piverticesToPifaces = new int[24 + 8 + 6][];
 
 
 	private static final HashMap<Integer, Integer> faceIVertexIToPifaceI = new HashMap<>();
@@ -47,6 +47,24 @@ public class PentagonalIcositrahedron {
 			};
 		}
 
+      	// Process cubic vertices (faces of the cube)
+		for (int faceI = 1; faceI <= 6; faceI++) { // Faces are 1-indexed
+			int face = faceI;
+			piverticesToPifaces[24 + 8 + faceI - 1] = new int[4]; // Each cubic vertex connects to 4 pifaces
+			
+			// Get the 4 vertices of this face
+			int[] faceVertices = Cube.getVerticesOfFaceClockwise(face);
+			for (int i = 0; i < 4; i++) {
+				int vertex = faceVertices[i];
+				int key = vertex * 100 + face;
+				Integer pifaceI = faceIVertexIToPifaceI.get(key);
+				if (pifaceI != null) {
+					piverticesToPifaces[24 + 8 + faceI - 1][i] = pifaceI + 1;
+				} else {
+					throw new RuntimeException("No piface found for vertex " + vertex + " and face " + face);
+				}
+			}
+		}
 
 	}
 
@@ -75,6 +93,16 @@ public class PentagonalIcositrahedron {
 		}
 
 		
+		// Verify cubic vertices mappings
+		System.out.println("\nCubic Vertices:");
+		for (int i = 0; i < 6; i++) {
+			int vertexIndex = 24 + 8 + i;
+			System.out.print("Cubic Vertex " + (i + 1) + ": Pifaces ");
+			for (int face : piverticesToPifaces[vertexIndex]) {
+				System.out.print(face + " ");
+			}
+			System.out.println();
+		}
 	}
 
 	public static void printVertexGeneratorNotations(int[][][] g0) {
