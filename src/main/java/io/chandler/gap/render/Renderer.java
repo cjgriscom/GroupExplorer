@@ -30,18 +30,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.metadata.IIOMetadataNode;
-import javax.imageio.metadata.IIOMetadata;
-import javax.imageio.ImageTypeSpecifier;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
-import javax.imageio.stream.FileImageOutputStream;
-import javax.imageio.stream.ImageOutputStream;
-
-import org.w3c.dom.NodeList;
-
 public class Renderer extends Application {
     private static final double SCENE_WIDTH = 1280;
     private static final double SCENE_HEIGHT = 900;
@@ -86,6 +74,8 @@ public class Renderer extends Application {
     private int currentSetIndex = 0;
     private int nColors = 0;
     private List<Pair<Integer, Color>> currentColorList = new ArrayList<>();
+
+    private GifWriter gifWriter = new GifWriter(); // Instantiate GifWriter
 
     @Override
     public void start(Stage primaryStage) {
@@ -542,15 +532,19 @@ public class Renderer extends Application {
         group.getTransforms().add(rotateTransform);
     }
     
+    /**
+     * Replaces the existing captureAndCreateGif method to use GifWriter.
+     *
+     * @param group The 3D group to rotate and capture.
+     */
     private void captureAndCreateGif(Group group) {
         Task<Void> task = new Task<Void>() {
             @Override
             protected Void call() throws Exception {
-                // [Same code as before, but wrap rotations and snapshots in Platform.runLater]
                 List<BufferedImage> frames = new ArrayList<>();
 
                 for (int i = 0; i < 36; i++) {
-                    final int index = i;
+                    //final int index = i;
                     Platform.runLater(() -> {
                         // Rotate the group by 10 degrees around the visual Y-axis
                         rotateAroundVisualYAxis(group, 10);
@@ -575,28 +569,40 @@ public class Renderer extends Application {
                     Thread.sleep(50);
                 }
 
-                // Open save dialog and create GIF (also wrap in Platform.runLater)
+                // Open save dialog and create GIF
                 Platform.runLater(() -> {
-                    
-                    // Open save dialog
                     FileChooser fileChooser = new FileChooser();
                     fileChooser.setTitle("Save Animated GIF");
                     fileChooser.getExtensionFilters().add(new ExtensionFilter("GIF Image", "*.gif"));
                     File file = fileChooser.showSaveDialog(stage);
 
                     if (file != null) {
-                        // Create the animated GIF
-                        try {
-                            createAnimatedGif(frames, file);
-                        } catch (Exception e) {
-                            Platform.runLater(() -> {
-                                Alert alert = new Alert(AlertType.ERROR);
-                                alert.setTitle("Error");
-                                alert.setHeaderText("Failed to create animated GIF");
-                                alert.setContentText("An error occurred while creating the animated GIF. Please try again.");
-                                alert.showAndWait();
-                            });
-                        }
+                        // Delegate GIF creation to GifWriter
+                        Task<Void> gifTask = new Task<Void>() {
+                            @Override
+                            protected Void call() {
+                                try {
+                                    gifWriter.createAnimatedGif(frames, file);
+                                    Platform.runLater(() -> {
+                                        Alert alert = new Alert(AlertType.INFORMATION);
+                                        alert.setTitle("Success");
+                                        alert.setHeaderText("GIF Created Successfully");
+                                        alert.setContentText("The animated GIF has been saved successfully.");
+                                        alert.showAndWait();
+                                    });
+                                } catch (Exception e) {
+                                    Platform.runLater(() -> {
+                                        Alert alert = new Alert(AlertType.ERROR);
+                                        alert.setTitle("Error");
+                                        alert.setHeaderText("Failed to create animated GIF");
+                                        alert.setContentText("An error occurred while creating the animated GIF. Please try again.");
+                                        alert.showAndWait();
+                                    });
+                                }
+                                return null;
+                            }
+                        };
+                        new Thread(gifTask).start();
                     }
                 });
 
@@ -609,72 +615,7 @@ public class Renderer extends Application {
         thread.start();
     }
 
-    private void createAnimatedGif(List<BufferedImage> frames, File output) throws Exception {
-        ImageWriter gifWriter = ImageIO.getImageWritersByFormatName("gif").next();
-        ImageOutputStream ios = new FileImageOutputStream(output);
-        gifWriter.setOutput(ios);
-
-        // Configure GIF sequence with desired parameters
-        gifWriter.prepareWriteSequence(null);
-
-        int delayTime = 10; // Time between frames in hundredths of a second (e.g., 10 = 0.1 second)
-
-        for (int i = 0; i < frames.size(); i++) {
-            BufferedImage img = frames.get(i);
-            ImageWriteParam param = gifWriter.getDefaultWriteParam();
-            IIOMetadata metadata = gifWriter.getDefaultImageMetadata(new ImageTypeSpecifier(img), param);
-
-            // Set the delay time and loop setting
-            String metaFormatName = metadata.getNativeMetadataFormatName();
-            IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(metaFormatName);
-
-            // Configure the GraphicsControlExtension node
-            IIOMetadataNode graphicsControlExtensionNode = getNode(root, "GraphicControlExtension");
-            graphicsControlExtensionNode.setAttribute("delayTime", Integer.toString(delayTime));
-            graphicsControlExtensionNode.setAttribute("disposalMethod", "none");
-            graphicsControlExtensionNode.setAttribute("userInputFlag", "FALSE");
-            graphicsControlExtensionNode.setAttribute("transparentColorFlag", "FALSE");
-            graphicsControlExtensionNode.setAttribute("transparentColorIndex", "0");
-
-            // Configure the ApplicationExtensions node to make the GIF loop
-            if (i == 0) {
-                IIOMetadataNode appExtensionsNode = getNode(root, "ApplicationExtensions");
-                IIOMetadataNode appExtensionNode = new IIOMetadataNode("ApplicationExtension");
-
-                appExtensionNode.setAttribute("applicationID", "NETSCAPE");
-                appExtensionNode.setAttribute("authenticationCode", "2.0");
-
-                byte[] appExtensionBytes = new byte[]{
-                        0x1, // Sub-block index (always 1)
-                        0x0, 0x0 // Loop count (0 means infinite loop)
-                };
-                appExtensionNode.setUserObject(appExtensionBytes);
-                appExtensionsNode.appendChild(appExtensionNode);
-            }
-
-            metadata.setFromTree(metaFormatName, root);
-
-            IIOImage frame = new IIOImage(img, null, metadata);
-            gifWriter.writeToSequence(frame, param);
-        }
-
-        gifWriter.endWriteSequence();
-        ios.close();
-    }
-
     public static void main(String[] args) {
         launch(args);
-    }
-
-    private static IIOMetadataNode getNode(IIOMetadataNode rootNode, String nodeName) {
-        NodeList nodes = rootNode.getElementsByTagName(nodeName);
-
-        if (nodes.getLength() > 0) {
-            return (IIOMetadataNode) nodes.item(0);
-        } else {
-            IIOMetadataNode node = new IIOMetadataNode(nodeName);
-            rootNode.appendChild(node);
-            return node;
-        }
     }
 }

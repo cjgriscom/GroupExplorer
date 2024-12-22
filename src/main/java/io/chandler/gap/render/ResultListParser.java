@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.TreeMap;
 
 import io.chandler.gap.GroupExplorer;
-import javafx.beans.binding.StringExpression;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.scene.paint.Color;
 import javafx.util.Pair;
