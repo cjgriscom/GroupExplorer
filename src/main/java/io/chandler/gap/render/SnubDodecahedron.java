@@ -14,6 +14,12 @@ import javafx.scene.shape.VertexFormat;
 
 // TODO points
 public class SnubDodecahedron extends Solid {
+
+    @Override
+    public MeshView loadVertexMesh() throws Exception {
+        return null;
+    }
+
 	@Override
 	public int getPosOrNegFaceFromGenerator(int[] groupNotation) {
 		for (int i = 0; i < 80; i++) {

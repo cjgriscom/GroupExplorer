@@ -4,6 +4,7 @@ import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.concurrent.Task;
+import javafx.embed.swing.SwingFXUtils;
 import javafx.geometry.Insets;
 import javafx.geometry.Point3D;
 import javafx.scene.*;
@@ -14,51 +15,37 @@ import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
-import javafx.scene.shape.*;
+import javafx.scene.shape.MeshView;
 import javafx.scene.transform.Affine;
 import javafx.scene.transform.NonInvertibleTransformException;
 import javafx.scene.transform.Rotate;
+import javafx.stage.FileChooser;
+import javafx.stage.FileChooser.ExtensionFilter;
 import javafx.stage.Stage;
 import javafx.util.Pair;
 
 import java.awt.image.BufferedImage;
-import java.awt.image.RenderedImage;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Random;
-import javafx.embed.swing.SwingFXUtils;
 
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
-import javax.imageio.stream.ImageOutputStream;
-
-import org.w3c.dom.NodeList;
-
-import com.ardor3d.extension.model.stl.StlDataStore;
-import com.ardor3d.extension.model.stl.StlGeometryStore;
-import com.ardor3d.extension.model.stl.StlImporter;
-import com.ardor3d.math.Vector3;
-import com.ardor3d.util.resource.URLResourceSource;
-
-import javax.imageio.ImageWriter;
-import javax.imageio.stream.FileImageOutputStream;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.ImageTypeSpecifier;
 import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.FileImageOutputStream;
+import javax.imageio.stream.ImageOutputStream;
 
-import javafx.stage.FileChooser;
-import javafx.stage.FileChooser.ExtensionFilter;
+import org.w3c.dom.NodeList;
 
 public class Renderer extends Application {
     private static final double SCENE_WIDTH = 1280;
     private static final double SCENE_HEIGHT = 900;
     private static final double SIDEBAR_WIDTH = 400;
-    private static final int STL_VERTEX = 1;
-    private static final String STL_PATH = "stl/Anim_DodotCenter.STL";
-    private static final float STL_SCALE = 0.05f; // Adjust this to scale your model
 
     private double anchorX, anchorY, anchorAngleX = 0, anchorAngleY = 0;
     private final Rotate rotateX = new Rotate(0, Rotate.X_AXIS);
@@ -75,7 +62,6 @@ public class Renderer extends Application {
 
     private Solid solid;
     private Group solidsGroup; // Group to hold solids for easy switching
-    private MeshView stlModel; // Add this field
 
     // UI Components
     private ComboBox<String> solidsComboBox;
@@ -115,7 +101,7 @@ public class Renderer extends Application {
 
         // Initialize solid
         solid = new Icosahedron();
-        solidsGroup.getChildren().add(solid);
+        solidsGroup.getChildren().addAll(solid.getMeshViews());
 
         // Set up mouse control
         solidsGroup.getTransforms().addAll(rotateX, rotateY);
@@ -146,15 +132,16 @@ public class Renderer extends Application {
 
         initMouseControl(solidsGroup, primaryStage);
 
-        // Add this after solidsGroup initialization
+        // TODO
         try {
-            stlModel = loadStlFile(STL_PATH);
+            MeshView stlModel = solid.loadVertexMesh();
             stlModel.setMaterial(createMaterial(Color.GRAY));
             solidsGroup.getChildren().add(stlModel);
         } catch (Exception e) {
             System.err.println("Failed to load STL file: " + e.getMessage());
             e.printStackTrace();
         }
+        
     }
 
     private VBox createSidebar() {
@@ -288,6 +275,7 @@ public class Renderer extends Application {
 
         switch (selectedSolid) {
             case "Snub Cube":
+                // Implement SnubCube similarly to Icosahedron
                 newSolid = new SnubCube();
                 break;
             case "Icosahedron":
@@ -297,9 +285,11 @@ public class Renderer extends Application {
         }
 
         // Replace the current solid with the new one
-        solidsGroup.getChildren().remove(solid);
+        solidsGroup.getChildren().clear();
+        solidsGroup.getChildren().addAll(newSolid.getMeshViews());
+
+        // Update the reference
         solid = newSolid;
-        solidsGroup.getChildren().add(solid);
 
         // Clear existing color lists
         currentColorList.clear();
@@ -415,8 +405,12 @@ public class Renderer extends Application {
     
         for (int i = 0; i < solid.getMeshViews().size(); i++) {
             boolean isIsolated = isolateCheckBox.isSelected();
+            if (i >= currentColorList.size()) {
+                solid.getMeshViews().get(i).setMaterial(createMaterial(Color.GRAY));
+                continue;
+            }
             Pair<Integer, Color> color = currentColorList.get(i);
-            if (i < currentColorList.size() && (!isIsolated || color.getKey() == currentSetIndex || color.getKey() < 0)) {
+            if (!isIsolated || (color.getKey() == currentSetIndex + 1)) {
                 solid.getMeshViews().get(i).setMaterial(createMaterial(color.getValue()));
             } else {
                 solid.getMeshViews().get(i).setMaterial(createMaterial(Color.GRAY));
@@ -553,7 +547,7 @@ public class Renderer extends Application {
             @Override
             protected Void call() throws Exception {
                 // [Same code as before, but wrap rotations and snapshots in Platform.runLater]
-                List<RenderedImage> frames = new ArrayList<>();
+                List<BufferedImage> frames = new ArrayList<>();
 
                 for (int i = 0; i < 36; i++) {
                     final int index = i;
@@ -567,11 +561,18 @@ public class Renderer extends Application {
 
                         // Convert to BufferedImage and add to frames
                         BufferedImage bufferedImage = SwingFXUtils.fromFXImage(snapshot, null);
-                        frames.add(bufferedImage);
+                        synchronized (frames) {
+                            frames.add(bufferedImage);
+                        }
                     });
 
                     // Wait for the UI thread to process the event
                     Thread.sleep(100);
+                }
+
+                // Wait until all frames are captured
+                while (frames.size() < 36) {
+                    Thread.sleep(50);
                 }
 
                 // Open save dialog and create GIF (also wrap in Platform.runLater)
@@ -608,7 +609,7 @@ public class Renderer extends Application {
         thread.start();
     }
 
-    private void createAnimatedGif(List<RenderedImage> frames, File output) throws Exception {
+    private void createAnimatedGif(List<BufferedImage> frames, File output) throws Exception {
         ImageWriter gifWriter = ImageIO.getImageWritersByFormatName("gif").next();
         ImageOutputStream ios = new FileImageOutputStream(output);
         gifWriter.setOutput(ios);
@@ -616,10 +617,10 @@ public class Renderer extends Application {
         // Configure GIF sequence with desired parameters
         gifWriter.prepareWriteSequence(null);
 
-        int delayTime = 100; // Time between frames in hundredths of a second (e.g., 100 = 1 second)
+        int delayTime = 10; // Time between frames in hundredths of a second (e.g., 10 = 0.1 second)
 
         for (int i = 0; i < frames.size(); i++) {
-            BufferedImage img = (BufferedImage) frames.get(i);
+            BufferedImage img = frames.get(i);
             ImageWriteParam param = gifWriter.getDefaultWriteParam();
             IIOMetadata metadata = gifWriter.getDefaultImageMetadata(new ImageTypeSpecifier(img), param);
 
@@ -629,7 +630,7 @@ public class Renderer extends Application {
 
             // Configure the GraphicsControlExtension node
             IIOMetadataNode graphicsControlExtensionNode = getNode(root, "GraphicControlExtension");
-            graphicsControlExtensionNode.setAttribute("delayTime", Integer.toString(delayTime / 10)); // Convert to 1/100s units
+            graphicsControlExtensionNode.setAttribute("delayTime", Integer.toString(delayTime));
             graphicsControlExtensionNode.setAttribute("disposalMethod", "none");
             graphicsControlExtensionNode.setAttribute("userInputFlag", "FALSE");
             graphicsControlExtensionNode.setAttribute("transparentColorFlag", "FALSE");
@@ -664,6 +665,7 @@ public class Renderer extends Application {
     public static void main(String[] args) {
         launch(args);
     }
+
     private static IIOMetadataNode getNode(IIOMetadataNode rootNode, String nodeName) {
         NodeList nodes = rootNode.getElementsByTagName(nodeName);
 
@@ -674,73 +676,5 @@ public class Renderer extends Application {
             rootNode.appendChild(node);
             return node;
         }
-    }
-
-    private MeshView loadStlFile(String filePath) throws Exception {
-        // Load the STL file using StlImporter
-        URLResourceSource r = new URLResourceSource(getClass().getResource("/"+filePath));
-        StlGeometryStore stl = new StlImporter().load(r);
-        StlDataStore data = stl.getDataStore();
-        
-        // Debug output: Print first few vertices
-        System.out.println("\nSTL File Debug Output for: " + filePath);
-        System.out.println("Total vertices: " + data.getVertices().size());
-        
-        // Print first triangle's vertices
-        if (data.getVertices().size() >= 3) {
-            System.out.println("\nFirst triangle coordinates:");
-            for (int i = 0; i < 3; i++) {
-                Vector3 v = data.getVertices().get(i);
-                System.out.printf("v%d: (%.6f, %.6f, %.6f)%n", i, v.getX(), v.getY(), v.getZ());
-            }
-        }
-        
-        // Print min/max coordinates to understand the model's bounds
-        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
-        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE, maxZ = -Double.MAX_VALUE;
-        
-        for (Vector3 v : data.getVertices()) {
-            minX = Math.min(minX, v.getX());
-            minY = Math.min(minY, v.getY());
-            minZ = Math.min(minZ, v.getZ());
-            maxX = Math.max(maxX, v.getX());
-            maxY = Math.max(maxY, v.getY());
-            maxZ = Math.max(maxZ, v.getZ());
-        }
-        
-        System.out.println("\nModel bounds:");
-        System.out.printf("X: %.6f to %.6f (range: %.6f)%n", minX, maxX, maxX - minX);
-        System.out.printf("Y: %.6f to %.6f (range: %.6f)%n", minY, maxY, maxY - minY);
-        System.out.printf("Z: %.6f to %.6f (range: %.6f)%n", minZ, maxZ, maxZ - minZ);
-        
-        // Create a JavaFX TriangleMesh
-        TriangleMesh mesh = new TriangleMesh();
-        
-        // Add points to the mesh
-        for (Vector3 vertex : data.getVertices()) {
-            mesh.getPoints().addAll((float) vertex.getX() * STL_SCALE, (float) vertex.getY() * STL_SCALE, (float) vertex.getZ() * STL_SCALE);
-        }
-        
-        // Since JavaFX TriangleMesh requires texture coordinates, add a dummy coordinate
-        mesh.getTexCoords().addAll(0, 0);
-        
-        // Add faces to the mesh
-        // Each face in STL has three vertices; JavaFX uses triangular faces with three point indices
-        for (int i = 0; i < data.getVertices().size(); i += 3) {
-            // JavaFX TriangleMesh faces are defined as p0/t0, p1/t0, p2/t0
-            // We use 0 for all texture indices as we're not using textures
-            mesh.getFaces().addAll(
-                i, 0,
-                i + 1, 0,
-                i + 2, 0
-            );
-        }
-        
-        // Create and return the MeshView
-        MeshView meshView = new MeshView(mesh);
-        meshView.setCullFace(CullFace.NONE); // Optional: Disable back-face culling
-        meshView.setMaterial(new PhongMaterial(Color.GRAY)); // Optional: Set a material
-        
-        return meshView;
     }
 }

@@ -12,6 +12,15 @@ import javafx.scene.shape.TriangleMesh;
 import javafx.scene.shape.VertexFormat;
 
 public class Icosahedron extends Solid {
+    private static final String STL_PATH = "stl/Anim_DodotCenter.STL";
+    private static final float STL_SCALE = 0.05f;
+    private static final int STL_VERTEX_INDEX = 12;
+    
+    @Override
+    public MeshView loadVertexMesh() throws Exception {
+        return loadStlFile(STL_PATH, STL_SCALE);
+    }
+
 	@Override
 	public int getPosOrNegFaceFromGenerator(int[] groupNotation) {
 		for (int i = 0; i < Dodecahedron.vertexFaces.length; i++) {
@@ -61,7 +70,6 @@ public class Icosahedron extends Solid {
             MeshView faceMeshView = new MeshView(faceMesh);
 
             icosaGroup.add(faceMeshView);
-            // Assuming faceMeshViews is managed elsewhere if needed
         }
 
         return icosaGroup;

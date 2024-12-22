@@ -12,6 +12,13 @@ import javafx.scene.shape.TriangleMesh;
 import javafx.scene.shape.VertexFormat;
 
 public class SnubCube extends Solid {
+
+    // TODO
+	@Override
+	public MeshView loadVertexMesh() throws Exception {
+		return null;
+	}
+
 	@Override
 	public int getPosOrNegFaceFromGenerator(int[] groupNotation) {
 		for (int i = 0; i < 32; i++) {
