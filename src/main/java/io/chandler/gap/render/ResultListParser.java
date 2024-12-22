@@ -8,6 +8,7 @@ import io.chandler.gap.GroupExplorer;
 import javafx.beans.binding.StringExpression;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.scene.paint.Color;
+import javafx.util.Pair;
 
 public class ResultListParser {
 	private static final Color blank = Color.rgb(30, 30, 30);
@@ -31,8 +32,8 @@ public class ResultListParser {
         Color.rgb(0, 102, 204),   // Dark Blue
         Color.rgb(102, 51, 153)   // Dark Purple
     };
-	public static List<Color> getColorList(Solid solid, String selectedResult, SimpleStringProperty descriptionOut) {
-		TreeMap<Integer, Color> colorMap = new TreeMap<>();
+	public static List<Pair<Integer, Color>> getColorList(Solid solid, String selectedResult, SimpleStringProperty descriptionOut) {
+		TreeMap<Integer, Pair<Integer, Color>> colorMap = new TreeMap<>();
 		
 		// Parse the selected result
 		String substring = selectedResult.substring(selectedResult.indexOf("[") + 1, selectedResult.indexOf("]"));
@@ -46,15 +47,15 @@ public class ResultListParser {
 				int face = solid.getPosOrNegFaceFromGenerator(cycle);
 				boolean isNegative = face < 0;
 				Color[] colorSrc = isNegative ? negColors : posColors;
-				colorMap.put(Math.abs(face) - 1, colorSrc[color]);
+				colorMap.put(Math.abs(face) - 1, new Pair<>(color, colorSrc[color]));
 				description.append((Math.abs(face)) + (isNegative ? "L" : "R"));
 				description.append(", ");
 			}
 		}
 
-		ArrayList<Color> colorList = new ArrayList<>();
+		ArrayList<Pair<Integer, Color>> colorList = new ArrayList<>();
 		for (int i = 0; i < solid.getMeshViews().size(); i++) {
-			colorList.add(colorMap.getOrDefault(i, blank));
+			colorList.add(colorMap.getOrDefault(i, new Pair<>(-1, blank)));
 		}
 
 		descriptionOut.set(description.toString());

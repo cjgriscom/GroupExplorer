@@ -19,11 +19,13 @@ import javafx.scene.transform.Affine;
 import javafx.scene.transform.NonInvertibleTransformException;
 import javafx.scene.transform.Rotate;
 import javafx.stage.Stage;
+import javafx.util.Pair;
 
 import java.awt.image.BufferedImage;
 import java.awt.image.RenderedImage;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import javafx.embed.swing.SwingFXUtils;
@@ -54,6 +56,7 @@ public class Renderer extends Application {
     private static final double SCENE_WIDTH = 1280;
     private static final double SCENE_HEIGHT = 900;
     private static final double SIDEBAR_WIDTH = 400;
+    private static final int STL_VERTEX = 1;
     private static final String STL_PATH = "stl/Anim_DodotCenter.STL";
     private static final float STL_SCALE = 0.05f; // Adjust this to scale your model
 
@@ -69,8 +72,6 @@ public class Renderer extends Application {
     final PhongMaterial greenMaterial = createMaterial(Color.rgb(100, 255, 100));
 
     private static final double LIGHT_DISTANCE = 1000.0; // Adjust this to scale all lights
-
-    private final Random random = new Random();
 
     private Solid solid;
     private Group solidsGroup; // Group to hold solids for easy switching
@@ -91,6 +92,15 @@ public class Renderer extends Application {
     private Stage stage; // Class-level variable
     private SubScene subScene; // Class-level variable
     
+    // New fields for Individual Sets
+    private CheckBox isolateCheckBox;
+    private Button setPrevButton;
+    private Button setNextButton;
+    private Label setPaginationLabel;
+    private int currentSetIndex = 0;
+    private int nColors = 0;
+    private List<Pair<Integer, Color>> currentColorList = new ArrayList<>();
+
     @Override
     public void start(Stage primaryStage) {
         this.stage = primaryStage; // Assign to class-level variable
@@ -174,12 +184,6 @@ public class Renderer extends Application {
 
         solidsBox.getChildren().addAll(solidsLabel, solidsComboBox);
 
-        // --- Randomize Colors Button ---
-        Button randomizeButton = new Button("Randomize Colors");
-        randomizeButton.setPrefWidth(200);
-        randomizeButton.setStyle("-fx-font-size: 16px;");
-        randomizeButton.setOnAction(e -> randomizeColors());
-
         // --- TextArea for Parsing ---
         Label parseLabel = new Label("Input Text:");
         parseLabel.setTextFill(Color.WHITE);
@@ -192,7 +196,7 @@ public class Renderer extends Application {
         parseButton.setPrefWidth(100);
         parseButton.setOnAction(e -> handleParse());
 
-        // --- Pagination Controls ---
+        // --- Pagination Controls for Parse Results ---
         HBox paginationBox = new HBox();
         paginationBox.setSpacing(10);
         paginationBox.setPadding(new Insets(10, 0, 0, 0));
@@ -211,26 +215,68 @@ public class Renderer extends Application {
         nextButton.setOnAction(e -> handleNext());
 
         paginationBox.getChildren().addAll(prevButton, paginationLabel, nextButton);
+        
+        descriptionLabel = new Label();
+        descriptionLabel.setTextFill(Color.WHITE);
+        descriptionLabel.setPrefHeight(800);
+        descriptionLabel.setWrapText(true);
 
         // Disable pagination controls initially
         prevButton.setDisable(true);
         nextButton.setDisable(true);
 
-		descriptionLabel = new Label();
-		descriptionLabel.setTextFill(Color.WHITE);
-		descriptionLabel.setPrefHeight(800);
-		descriptionLabel.setWrapText(true);
+        // --- Individual Sets Controls ---
+        Separator separator = new Separator();
+        separator.setStyle("-fx-background-color: #555555;");
+        
+        Label individualSetsLabel = new Label("Individual Sets:");
+        individualSetsLabel.setTextFill(Color.WHITE);
+        individualSetsLabel.setStyle("-fx-font-size: 18px; -fx-font-weight: bold;");
+
+        // Isolate Set Checkbox
+        isolateCheckBox = new CheckBox("Isolate set");
+        isolateCheckBox.setTextFill(Color.WHITE);
+        isolateCheckBox.setOnAction(e -> updateColorDisplay());
+
+        // Pagination for Individual Sets
+
+        HBox setPaginationBox = new HBox();
+        setPaginationBox.setSpacing(10);
+        setPaginationBox.setPadding(new Insets(10, 0, 0, 0));
+
+        setPrevButton = new Button("<");
+        setPrevButton.setPrefWidth(30);
+        setPrevButton.setOnAction(e -> handleSetPagination(-1));
+
+        setPaginationLabel = new Label("(0 / 0)");
+        setPaginationLabel.setTextFill(Color.WHITE);
+        setPaginationLabel.setPrefWidth(80);
+        setPaginationLabel.setStyle("-fx-font-size: 14px; -fx-alignment: center;");
+
+        setNextButton = new Button(">");
+        setNextButton.setPrefWidth(30);
+        setNextButton.setOnAction(e -> handleSetPagination(1));
+
+        setPaginationBox.getChildren().addAll(setPrevButton, setPaginationLabel, setNextButton);
+
+        // Initialize Individual Sets pagination
+        setPrevButton.setDisable(true);
+        setNextButton.setDisable(true);
+        setPaginationLabel.setText("(0 / 0)");
 
         // Add all components to sidebar
         sidebar.getChildren().addAll(
                 title,
                 solidsBox,
-                randomizeButton,
                 parseLabel,
                 parseTextArea,
                 parseButton,
                 paginationBox,
-				descriptionLabel
+                separator,
+                individualSetsLabel,
+                isolateCheckBox,
+                setPaginationBox,
+                descriptionLabel
         );
 
         return sidebar;
@@ -254,37 +300,153 @@ public class Renderer extends Application {
         solidsGroup.getChildren().remove(solid);
         solid = newSolid;
         solidsGroup.getChildren().add(solid);
+
+        // Clear existing color lists
+        currentColorList.clear();
+        updateColorDisplay();
     }
 
     private void handleParse() {
         String inputText = parseTextArea.getText();
         parseResults = processText(inputText);
         currentParseIndex = 0;
-		if (parseResults.size() > 0) {
-			onParseResultSelected(currentParseIndex);
-		}
+        if (parseResults.size() > 0) {
+            onParseResultSelected(currentParseIndex);
+        } else {
+            descriptionLabel.setText("");
+            // Clear colors if no parse results
+            currentColorList.clear();
+            updateColorDisplay();
+        }
         updatePaginationLabel();
         updatePaginationButtons();
+
     }
 
     private void handlePrevious() {
         if (currentParseIndex > 0) {
             currentParseIndex--;
+            onParseResultSelected(currentParseIndex);
             updatePaginationLabel();
             updatePaginationButtons();
-            // Call handler with the new selection
-            onParseResultSelected(currentParseIndex);
+
+            // Update Individual Sets pagination
+            if (currentColorList.size() > 0) {
+                currentSetIndex = 0;
+                setPaginationLabel.setText("(" + (currentSetIndex + 1) + " / " + nColors + ")");
+                setPrevButton.setDisable(currentSetIndex <= 0);
+                setNextButton.setDisable(currentSetIndex >= nColors - 1);
+            }
         }
     }
 
     private void handleNext() {
         if (currentParseIndex < parseResults.size() - 1) {
             currentParseIndex++;
+            onParseResultSelected(currentParseIndex);
             updatePaginationLabel();
             updatePaginationButtons();
-            // Call handler with the new selection
-            onParseResultSelected(currentParseIndex);
+
+            // Update Individual Sets pagination
+            if (currentColorList.size() > 0) {
+                currentSetIndex = 0;
+                setPaginationLabel.setText("(" + (currentSetIndex + 1) + " / " + nColors + ")");
+                setPrevButton.setDisable(currentSetIndex <= 0);
+                setNextButton.setDisable(currentSetIndex >= nColors - 1);
+            }
         }
+    }
+
+    /**
+     * Consolidated method to handle pagination for Individual Sets.
+     *
+     * @param direction The direction to paginate. Use -1 for previous and 1 for next.
+     */
+    private void handleSetPagination(int direction) {
+        if (direction < 0 && currentSetIndex > 0) {
+            currentSetIndex--;
+        } else if (direction > 0 && currentSetIndex < nColors - 1) {
+            currentSetIndex++;
+        }
+
+        setPaginationLabel.setText("(" + (currentSetIndex + 1) + " / " + nColors + ")");
+        setPrevButton.setDisable(currentSetIndex <= 0);
+        setNextButton.setDisable(currentSetIndex >= nColors - 1);
+        updateColorDisplay();
+    }
+
+    /**
+     * Handler called when a parse result is selected.
+     *
+     * @param index The index of the selected parse result.
+     */
+    private void onParseResultSelected(int index) {
+        if (index >= 0 && index < parseResults.size()) {
+            String selectedResult = parseResults.get(index);
+
+            SimpleStringProperty description1 = new SimpleStringProperty();
+            currentColorList = ResultListParser.getColorList(solid, selectedResult, description1);
+
+            HashSet<Integer> colors = new HashSet<>();
+            for (Pair<Integer, Color> pair : currentColorList) {
+                if (pair.getKey() >= 0) colors.add(pair.getKey());
+            }
+            this.nColors = colors.size();
+            System.out.println("Selected Parse Result: " + selectedResult);
+            descriptionLabel.setText(selectedResult + "\n" + description1.get());
+
+            // Initialize pagination for individual sets
+            currentSetIndex = 0; // Reset to first index
+            setPaginationLabel.setText("(" + (currentSetIndex + 1) + " / " + nColors + ")");
+            setPrevButton.setDisable(currentSetIndex <= 0);
+            setNextButton.setDisable(currentSetIndex >= nColors - 1);
+
+            updateColorDisplay(); // Update color display based on the current selection
+        }
+    }
+
+    /**
+     * Updates the color display based on the current settings.
+     */
+    private void updateColorDisplay() {
+        if (currentColorList == null || currentColorList.isEmpty()) {
+            return;
+        }
+    
+        for (int i = 0; i < solid.getMeshViews().size(); i++) {
+            boolean isIsolated = isolateCheckBox.isSelected();
+            Pair<Integer, Color> color = currentColorList.get(i);
+            if (i < currentColorList.size() && (!isIsolated || color.getKey() == currentSetIndex || color.getKey() < 0)) {
+                solid.getMeshViews().get(i).setMaterial(createMaterial(color.getValue()));
+            } else {
+                solid.getMeshViews().get(i).setMaterial(createMaterial(Color.GRAY));
+            }
+        }
+    }
+
+    private PhongMaterial createMaterial(Color color) {
+        PhongMaterial material = new PhongMaterial();
+        material.setDiffuseColor(color);
+        material.setSpecularColor(Color.rgb(30, 30, 30));
+        material.setSpecularPower(10.0);
+        return material;
+    }
+
+    /**
+     * Processes the input text and returns a list of results.
+     *
+     * @param text The input text to process.
+     * @return A list of parsed results.
+     */
+    private List<String> processText(String text) {
+        List<String> results = new ArrayList<>();
+        String[] lines = text.split("\\r?\\n");
+        for (String line : lines) {
+            if (line.contains("[")) {
+                results.add(line.trim());
+            }
+        }
+        return results;
     }
 
     private void updatePaginationLabel() {
@@ -299,64 +461,6 @@ public class Renderer extends Application {
         prevButton.setDisable(currentParseIndex <= 0);
         nextButton.setDisable(currentParseIndex >= parseResults.size() - 1);
     }
-
-    /**
-     * Processes the input text and returns a list of results.
-     *
-     * @param text The input text to process.
-     * @return A list of parsed results.
-     */
-    private List<String> processText(String text) {
-        List<String> results = new ArrayList<>();
-        String[] lines = text.split("\\r?\\n");
-        for (String line : lines) {
-            if (line.contains("[")) {
-				results.add(line.trim());
-			}
-        }
-        return results;
-    }
-
-    /**
-     * Handler called when a parse result is selected.
-     *
-     * @param index The index of the selected parse result.
-     */
-    private void onParseResultSelected(int index) {
-        if (index >= 0 && index < parseResults.size()) {
-            String selectedResult = parseResults.get(index);
-
-			SimpleStringProperty description1 = new SimpleStringProperty();
-			List<Color> colorList = ResultListParser.getColorList(solid, selectedResult, description1);
-            
-            System.out.println("Selected Parse Result: " + selectedResult);
-			descriptionLabel.setText(selectedResult + "\n" + description1.get());
-
-			for (int i = 0; i < solid.getMeshViews().size(); i++) {
-				solid.getMeshViews().get(i).setMaterial(createMaterial(colorList.get(i)));
-			}
-        }
-    }
-
-    private void randomizeColors() {
-        for (MeshView meshView : solid.getMeshViews()) {
-            double rand = random.nextDouble();
-
-            if (rand <= 0.333) meshView.setMaterial(blueMaterial);
-            else if (rand <= 0.666) meshView.setMaterial(redMaterial);
-            else meshView.setMaterial(greenMaterial);
-        }
-    }
-
-    private PhongMaterial createMaterial(Color color) {
-        PhongMaterial material = new PhongMaterial();
-        material.setDiffuseColor(color);
-        material.setSpecularColor(Color.rgb(30, 30, 30));
-        material.setSpecularPower(10.0);
-        return material;
-    }
-
-
 
     private void setupLights(Group group) {
         // Brighter ambient light for better base visibility
@@ -450,26 +554,26 @@ public class Renderer extends Application {
             protected Void call() throws Exception {
                 // [Same code as before, but wrap rotations and snapshots in Platform.runLater]
                 List<RenderedImage> frames = new ArrayList<>();
-    
+
                 for (int i = 0; i < 36; i++) {
                     final int index = i;
                     Platform.runLater(() -> {
                         // Rotate the group by 10 degrees around the visual Y-axis
                         rotateAroundVisualYAxis(group, 10);
-    
+
                         // Capture the snapshot
                         WritableImage snapshot = new WritableImage((int) (SCENE_WIDTH - SIDEBAR_WIDTH), (int) SCENE_HEIGHT);
                         subScene.snapshot(null, snapshot);
-    
+
                         // Convert to BufferedImage and add to frames
                         BufferedImage bufferedImage = SwingFXUtils.fromFXImage(snapshot, null);
                         frames.add(bufferedImage);
                     });
-    
+
                     // Wait for the UI thread to process the event
                     Thread.sleep(100);
                 }
-    
+
                 // Open save dialog and create GIF (also wrap in Platform.runLater)
                 Platform.runLater(() -> {
                     
@@ -494,11 +598,11 @@ public class Renderer extends Application {
                         }
                     }
                 });
-    
+
                 return null;
             }
         };
-    
+
         Thread thread = new Thread(task);
         thread.setDaemon(true);
         thread.start();
