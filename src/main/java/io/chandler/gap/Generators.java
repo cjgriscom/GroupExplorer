@@ -19,6 +19,8 @@ public class Generators {
 
     public static final String m10_a6 = "[(2,3)(4,6)(5,7)(8,9),(1,2)(3,4,7,9,10,8,6,5)]";
 
+    public static final String a8_15pts = "[(1,2,4)(3,6,9)(5,8,12)(7,10,14)(11,13,15),(1,3,7,11,8,13,15)(2,5,6,10,9,14,4)]";
+
     // M12:2 - 24 point representation
     public static final String m12_2 = "[(1,4)(2,17)(3,15)(5,18)(6,19)(7,12)(8,10)(9,21)(11,13)(14,16)(20,23)(22,24),(2,18,23)(3,19,14)(4,11,21)(5,10,16)(7,22,13)(17,24,20)]";
 
@@ -68,6 +70,8 @@ public class Generators {
     // Non-split extension 2^3.L3(2)
     public static final String psl_3_2_nonsplit_ext = "[(2,4)(3,5)(6,10)(7,11)(9,12)(13,14),(1,2,3)(4,6,7)(5,8,9)(10,13,12)]";
 
+    public static final String psl_4_2_a8_nonsplit_ext = "[(1,3,17)(2,4,18)(5,9,26)(6,10,25)(7,11,28)(8,12,27)(13,23,16)(14,24,15)(19,22,30)(20,21,29),(3,5,7,9,11,13,15)(4,6,8,10,12,14,16)(17,19,21,23,25,27,29)(18,20,22,24,26,28,30)]";
+
     // PSL(3,3)
     // This was generated on PI as (V6L,V9L,V31R,V32R),(V5R,V8R,V20R)
     public static final String psl_3_3 = "[(1,2,3)(4,5,6)(7,8,9)(10,11,12),(13,7,3)(2,10,6)(8,11,9)]";
@@ -85,7 +89,7 @@ public class Generators {
     public static final String m24 = "[(1,4)(2,7)(3,17)(5,13)(6,9)(8,15)(10,19)(11,18)(12,21)(14,16)(20,24)(22,23),(1,4,6)(2,21,14)(3,9,15)(5,18,10)(13,17,16)(19,24,23)]";
 
     public static void main(String[] args) {
-        GroupExplorer g = new GroupExplorer(PHGenerators.triPHSymmetryF1, MemorySettings.COMPACT);
+        GroupExplorer g = new GroupExplorer(l2_23, MemorySettings.COMPACT);
         exploreGroup(g, null);
     }
 

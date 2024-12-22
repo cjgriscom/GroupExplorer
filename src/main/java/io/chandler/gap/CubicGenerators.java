@@ -87,8 +87,203 @@ public class CubicGenerators {
 
         //diTests();
         //printM24_dot_puzzle_Depth_Classes();
-        doExhaustive3DSearchPI();
+        //doExhaustive3DSearchPI();
+
+        //searchSquareVerticesOnPiM24();
+        searchSquareVerticesOnPiPSL2_23();
 	}
+
+    private static void searchSquareVerticesOnPiPSL2_23() throws Exception {
+        GapInterface gap = new GapInterface();
+        HashMap<String, Integer> groupNameToCount = new HashMap<>();
+    
+        // Generate all combinations of 4 indices from 8 positions (for inversions)
+        List<int[]> inversionCombinations8 = Permu.generateCombinations(8, 4);
+        inversionCombinations8.add(new int[]{});
+        List<int[]> inversionCombinations6 = Permu.generateCombinations(6, 3);
+        inversionCombinations6.add(new int[]{});
+    
+        // For tracking progress
+        long totalCombinations = inversionCombinations8.size() * inversionCombinations6.size();
+        long processed = 0;
+        long startTime = System.currentTimeMillis();
+    
+        // Process Set 1 (8 axes)
+        for (int[] inversions8 : inversionCombinations8) {
+            // Create boolean array marking which positions should be inverted
+            boolean[] shouldInvert8 = new boolean[8];
+            for (int pos : inversions8) {
+                shouldInvert8[pos] = true;
+            }
+    
+            // Create the first operation with appropriate inversions
+            ArrayList<int[]> operation1 = new ArrayList<>();
+            for (int i = 0; i < 8; i++) {
+                int[] axis = PentagonalIcositrahedron.getFacesFromVertex(25 + i);
+                if (shouldInvert8[i]) {
+                    operation1.add(CycleInverter.invertArray(axis));
+                } else {
+                    operation1.add(axis);
+                }
+            }
+    
+            // Process Set 2 (6 axes)
+            for (int[] inversions6 : inversionCombinations6) {
+                boolean[] shouldInvert6 = new boolean[6];
+                for (int pos : inversions6) {
+                    shouldInvert6[pos] = true;
+                }
+    
+                // Create the second operation with appropriate inversions
+                ArrayList<int[]> operation2 = new ArrayList<>();
+                for (int i = 0; i < 6; i++) {
+                    int[] axis = PentagonalIcositrahedron.getFacesFromVertex(33 + i);
+                    if (shouldInvert6[i]) {
+                        operation2.add(CycleInverter.invertArray(axis));
+                    } else {
+                        operation2.add(axis);
+                    }
+                }
+    
+                // Construct the complete generator
+                Generator newGenerator = new Generator(new int[][][] {
+                    operation1.toArray(new int[0][]),
+                    operation2.toArray(new int[0][])
+                });
+    
+                // Check group size using GAP
+                String groupSize = gap.runGapSizeCommand(newGenerator.toString(), 2).get(1);
+                
+                // Only process results below a certain size threshold
+                if (groupSize.length() <= "244823040".length()) {
+                    String groupName = gap.runGapCommands(newGenerator.toString(), 3).get(2);
+                    groupNameToCount.merge(groupName, 1, Integer::sum);
+                    System.out.println(String.format("Found group: %s [%d/%d inversions] %s", 
+                        groupName, 
+                        inversions8.length, 
+                        inversions6.length,
+                        newGenerator.toString()));
+                }
+    
+                // Progress tracking
+                processed++;
+                if (processed % 100 == 0) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    long estimatedTotal = (long)((double)elapsed * totalCombinations / processed);
+                    long remaining = estimatedTotal - elapsed;
+                    System.out.println(String.format("Progress: %.2f%% (%d/%d) - ETA: %d min", 
+                        (100.0 * processed / totalCombinations),
+                        processed,
+                        totalCombinations,
+                        remaining / 60000));
+                }
+            }
+        }
+    
+        // Print summary of results
+        System.out.println("\nResults Summary:");
+        for (Entry<String, Integer> e : groupNameToCount.entrySet()) {
+            System.out.println(e.getKey() + ": " + e.getValue());
+        }
+    }
+
+    private static void searchSquareVerticesOnPiM24() throws Exception {
+        GapInterface gap = new GapInterface();
+        // This is M24 with 3 snub cube sets and 1 octahedral set
+        Generator src = new Generator(GroupExplorer.parseOperationsArr(
+            "[(1,10,2)(6,19,5)(8,4,7)(11,14,12)(15,17,13)(18,3,16)(21,23,20)(22,9,24),(2,16,3)(4,1,5)(9,22,8)(11,7,10)(14,12,13)(17,20,18)(21,6,19)(24,15,23),(3,5,1)(6,8,4)(9,11,7)(12,2,10)(15,24,14)(17,13,16)(20,18,19)(23,21,22)]"
+        ));
+
+        // Search to see if it's possible to add a conjugacy class using the square vertices
+
+        // First generate all combinations of 6 vertices and their directions
+        // A direction could be clockwise, counterclockwise, or 180 degrees
+        // So positive and negative designators won't work, exactly
+
+        int offset = 32;
+        int[][] vertices = new int[6][];
+        for (int i = 1; i <= 6; i++) {
+            vertices[i-1] = PentagonalIcositrahedron.getFacesFromVertex(offset + i);
+        }
+
+
+        HashMap<String, Integer> groupNameToCount = new HashMap<>();
+        // Now generate 4^6 possible directions and check the results
+
+        for (int i = 0; i < (int)Math.pow(4, 6); i++) {
+
+            String signature = "";
+            // Deep clone vertices
+            int[][][] verticesClone = new int[6][][];
+            for (int j = 0; j < 6; j++) {
+                verticesClone[j] = new int[1][];
+                verticesClone[j][0] = vertices[j].clone();
+            }
+            int iCopy = i;
+            // Reverse directions based on modulo arithmetic
+
+            int[] directionCounts = new int[4];
+
+            for (int j = 0; j < 6; j++) {
+                int direction = iCopy % 4;
+                iCopy /= 4;
+                signature += direction;
+                directionCounts[direction]++;
+                if (direction == 0) continue;
+                else if (direction == 1) verticesClone[j] = CycleInverter.invertArray(verticesClone[j]);
+                else if (direction == 2) {
+                    // Create 180 by constructing a pair of 2-cycles
+                    verticesClone[j] = new int[][] {
+                        { vertices[j][0], vertices[j][2] },
+                        { vertices[j][1], vertices[j][3] }
+                    };
+                } else if (direction == 3) {
+                    // No-op
+                    verticesClone[j] = new int[][] {};
+                }
+            }
+
+            
+            boolean asym0 = false;
+            boolean asym1 = false;
+            for (int ii = 0; ii < 4; ii++) {
+                if (directionCounts[ii] % 2 != 0) {
+                    asym0 = true;
+                    break;
+                }
+            }
+            for (int ii = 0; ii < 4; ii++) {
+                if (directionCounts[ii] % 3 != 0) {
+                    asym1 = true;
+                    break;
+                }
+            }
+            if (asym0 && asym1) continue;
+
+            // Convert vertexClone into a generator
+            ArrayList<int[]> cubicVertices = new ArrayList<>();
+            for (int[][] a : verticesClone) {
+                for (int[] b : a) {
+                    cubicVertices.add(b);
+                }
+            }
+
+            Generator newGenerator = Generator.combine(src, new Generator(cubicVertices.toArray(new int[0][])));
+            
+            String groupSize = gap.runGapSizeCommand(newGenerator.toString(), 2).get(1);
+            
+            if (groupSize.length() <= "244823040".length()) {
+                String groupName = gap.runGapCommands(newGenerator.toString(), 3).get(2);
+                groupNameToCount.merge(groupName, 1, Integer::sum);
+                System.out.println(groupName + " " + signature + " " + newGenerator.toString());
+            }
+        }
+
+        for (Entry<String, Integer> e : groupNameToCount.entrySet()) {
+            System.out.println(e.getKey() + " " + e.getValue());
+        }
+
+    }
 
     private static void printM24_dot_puzzle_Depth_Classes() {
 

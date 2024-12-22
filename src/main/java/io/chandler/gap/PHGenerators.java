@@ -7,12 +7,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import io.chandler.gap.GroupExplorer.Generator;
@@ -108,8 +107,9 @@ public class PHGenerators {
         int twoPower15 = 1 << 15;
         int twoPower20 = 1 << 20;
         
-        System.out.println("60: " + (allSelections60.size() * twoPower15)+ " 80: " + (allSelections80.size() * twoPower20));
+        System.out.println("60: " + (allSelections60.size() * twoPower15 / 2)+ " 80: " + (allSelections80.size() * twoPower20 / 2));
         long totalCombinations = allSelections60.size() * twoPower15 + allSelections80.size() * twoPower20;
+        totalCombinations /= 2;
         System.out.println("Total: " + totalCombinations);
         resultsPrintStream.println("Total: " + totalCombinations);
         resultsPrintStream.flush();
@@ -162,7 +162,26 @@ public class PHGenerators {
             boolean[][] fixedCycleIndices = new boolean[1][cycles.length];
             fixedCycleIndices[0][0] = true;
 
-            List<int[][][]> invCyclesList = CycleInverter.generateInvertedCycles(fixedCycleIndices, new int[][][] {cycles});
+            List<int[][][]> invCyclesListOrig = CycleInverter.generateInvertedCycles(fixedCycleIndices, new int[][][] {cycles});
+            List<int[][][]> invCyclesList = new ArrayList<>();
+
+            // Count the number of clockwise cycles and reject any that arent 10 or 0 or 20
+            Iterator<int[][][]> invCyclesIterator = invCyclesListOrig.iterator();
+            while (invCyclesIterator.hasNext()) {
+                int[][][] cyclesInverted = invCyclesIterator.next();
+                int clockwiseCount = 0;
+                for (int[] cycle : cyclesInverted[0]) {
+                    int axis = PentagonalHexecontahedron.getMatchingVertexFromFaces(cycle);
+                    if (axis == 0) throw new RuntimeException("Axis 0 found");
+                    if (axis > 0) clockwiseCount++;
+                }
+                if (clockwiseCount != 10 && clockwiseCount != 0 && clockwiseCount != 20) {
+                    // Ignore
+                } else {
+                    invCyclesList.add(cyclesInverted);
+                }
+            }
+            
             //System.out.println(cycles.length + " " + invCyclesList.size());
             invCyclesList.parallelStream().forEach(cyclesInverted -> {
                 int iteration = iterations.incrementAndGet();

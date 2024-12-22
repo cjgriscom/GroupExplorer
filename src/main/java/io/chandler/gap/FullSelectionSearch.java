@@ -28,9 +28,9 @@ import io.chandler.gap.render.SnubDodecahedron;
 
 public class FullSelectionSearch {
 	public static void main(String[] args) throws Exception{
-		//runDodecahedralSearch();
+		runDodecahedralSearch();
 		//runPentagonalIcositrahedralSearch();
-        runPentagonalHexecontahedralSearch();
+        //runPentagonalHexecontahedralSearch();
 	}
 
 	public static void runDodecahedralSearch() {
@@ -58,8 +58,6 @@ public class FullSelectionSearch {
                 IcosahedralGenerators.icosahedronMirrorSymm));
         }
 
-        
-        //System.exit(0);
 
         Icosahedron icosa = new Icosahedron();
 
@@ -86,6 +84,10 @@ public class FullSelectionSearch {
                 }
                 return group.order();
             });
+
+        System.out.println("Searching for 5x4 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(3,3,4,4), considerReverse);
+        System.exit(0);
 
         System.out.println("Searching for 3x2 selections");
         search.exhaustiveMultiAxisSearch(3, 2, considerReverse);
