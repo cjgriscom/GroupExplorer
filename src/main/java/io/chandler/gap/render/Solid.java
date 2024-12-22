@@ -1,6 +1,8 @@
 package io.chandler.gap.render;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeMap;
 
 import com.ardor3d.extension.model.stl.StlDataStore;
 import com.ardor3d.extension.model.stl.StlGeometryStore;
@@ -14,15 +16,36 @@ import javafx.scene.paint.PhongMaterial;
 import javafx.scene.shape.CullFace;
 import javafx.scene.shape.MeshView;
 import javafx.scene.shape.TriangleMesh;
+import javafx.scene.shape.VertexFormat;
+import javafx.util.Pair;
 
 public abstract class Solid extends Group {
     private final List<MeshView> l;
+	private final int nFaces;
 
-    public Solid() {
+    public Solid(int nFaces) {
+        this.nFaces = nFaces;
         this.getChildren().addAll(l = createMesh());
     }
 
-	public abstract MeshView loadVertexMesh() throws Exception;
+	public List<MeshView> getVertexMeshObjects() {
+		TreeMap<Integer, MeshView> m = new TreeMap<>();
+		try {
+			Pair<Integer, MeshView> src = loadVertexMeshAndIndex();
+			if (src == null) return null;
+			m.put(src.getKey(), src.getValue());
+
+			// TODO
+
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		}
+
+		return new ArrayList<>(m.values());
+	}
+
+	public abstract Pair<Integer, MeshView> loadVertexMeshAndIndex() throws Exception;
 
 	/**
 	 * Translates the group notation into a face number, 1-indexed,
@@ -30,11 +53,49 @@ public abstract class Solid extends Group {
 	 */
 	public abstract int getPosOrNegFaceFromGenerator(int[] groupNotation);
 	
-    protected abstract List<MeshView> createMesh();
-
 	public List<MeshView> getMeshViews() {
 		return l;
 	}
+
+	protected abstract int[] getFaceVertices(int i);
+	protected abstract float[] getPoints();
+
+    protected List<MeshView> createMesh() {
+        List<MeshView> icosaGroup = new ArrayList<>();
+
+        // Get the base geometry data
+        float[] allPoints = getPoints();
+        float[] texCoords = RenderUtil.calculateTextureCoordinates(allPoints);
+
+        // Create individual faces
+        for (int i = 0; i < nFaces; i++) {
+            int[] faceVertices = getFaceVertices(i);
+
+            // Create a new mesh for this face
+            TriangleMesh faceMesh = new TriangleMesh();
+            faceMesh.setVertexFormat(VertexFormat.POINT_TEXCOORD);
+
+            // Add only the points for this face
+            float[] facePoints = new float[9]; // 3 vertices * 3 coordinates
+            for (int j = 0; j < 3; j++) {
+                int vertexIndex = faceVertices[j] - 1;
+                System.arraycopy(allPoints, vertexIndex * 3, facePoints, j * 3, 3);
+            }
+
+            // Create face indices (always 0,1,2 since we only have 3 vertices)
+            int[] faces = {0,0, 1,1, 2,2};
+
+            faceMesh.getPoints().setAll(facePoints);
+            faceMesh.getTexCoords().setAll(texCoords);
+            faceMesh.getFaces().setAll(faces);
+
+            MeshView faceMeshView = new MeshView(faceMesh);
+
+            icosaGroup.add(faceMeshView);
+        }
+
+        return icosaGroup;
+    }
 
 	/**
 	 * Utility method to load an STL file and return a MeshView.

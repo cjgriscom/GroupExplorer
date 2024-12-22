@@ -1,21 +1,22 @@
 package io.chandler.gap.render;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 import io.chandler.gap.ArrayRotator;
 import io.chandler.gap.CycleInverter;
 import io.chandler.gap.PentagonalIcositrahedron;
 import javafx.scene.shape.MeshView;
-import javafx.scene.shape.TriangleMesh;
-import javafx.scene.shape.VertexFormat;
+import javafx.util.Pair;
 
 public class SnubCube extends Solid {
 
+    public SnubCube() {
+        super(32);
+    }
+
     // TODO
 	@Override
-	public MeshView loadVertexMesh() throws Exception {
+	public Pair<Integer, MeshView> loadVertexMeshAndIndex() throws Exception {
 		return null;
 	}
 
@@ -36,45 +37,17 @@ public class SnubCube extends Solid {
 	}
 
     @Override
-    protected List<MeshView> createMesh() {
-        List<MeshView> icosaGroup = new ArrayList<>();
-
-        // Get the base geometry data
-        float[] allPoints = SnubCubePoints.getSnubCubePoints();
-        float[] texCoords = RenderUtil.calculateTextureCoordinates(allPoints);
-
-        // Create individual faces
-        for (int i = 0; i < 32; i++) {
-            // Create a new mesh for this face
-            TriangleMesh faceMesh = new TriangleMesh();
-            faceMesh.setVertexFormat(VertexFormat.POINT_TEXCOORD);
-
-            // Add only the points for this face
-            float[] facePoints = new float[9]; // 3 vertices * 3 coordinates
-            for (int j = 0; j < 3; j++) {
-                int vertexIndex = PentagonalIcositrahedron.getFacesFromVertex(i+1)[2-j] - 1;
-                System.arraycopy(allPoints, vertexIndex * 3, facePoints, j * 3, 3);
-            }
-
-            // Create face indices (always 0,1,2 since we only have 3 vertices)
-            int[] faces = {0,0, 1,1, 2,2};
-
-            faceMesh.getPoints().setAll(facePoints);
-            faceMesh.getTexCoords().setAll(texCoords);
-            faceMesh.getFaces().setAll(faces);
-
-            MeshView faceMeshView = new MeshView(faceMesh);
-
-            icosaGroup.add(faceMeshView);
-            // Assuming faceMeshViews is managed elsewhere if needed
-        }
-
-        return icosaGroup;
+    protected int[] getFaceVertices(int i) {
+        int[] face = new int[3];
+        face[0] = PentagonalIcositrahedron.getFacesFromVertex(i+1)[2];
+        face[1] = PentagonalIcositrahedron.getFacesFromVertex(i+1)[1];
+        face[2] = PentagonalIcositrahedron.getFacesFromVertex(i+1)[0];
+        return face;
     }
 
-    private static class SnubCubePoints {
-        public static float[] getSnubCubePoints() {
-            float[] points = {
+    @Override
+    protected float[] getPoints() {
+        float[] points = {
                 -22.95f, 42.21f, 12.48f,
                 -12.48f, 22.95f, 42.21f,
                 -42.21f, 12.48f, 22.95f,
@@ -100,11 +73,11 @@ public class SnubCube extends Solid {
                 12.48f, -42.21f, -22.95f,
                 42.21f, -22.95f, -12.48f};
 
-            // Scale
-            for (int i = 0; i < points.length; i++) {
-                points[i] /= 30;
-            }
-            return points;
+        // Scale
+        for (int i = 0; i < points.length; i++) {
+            points[i] /= 30;
         }
+        return points;
+    
     }
 }

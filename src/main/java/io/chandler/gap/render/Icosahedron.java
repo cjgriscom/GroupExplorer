@@ -1,24 +1,26 @@
 package io.chandler.gap.render;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 import io.chandler.gap.ArrayRotator;
 import io.chandler.gap.CycleInverter;
 import io.chandler.gap.Dodecahedron;
 import javafx.scene.shape.MeshView;
-import javafx.scene.shape.TriangleMesh;
-import javafx.scene.shape.VertexFormat;
+import javafx.util.Pair;
 
 public class Icosahedron extends Solid {
     private static final String STL_PATH = "stl/Anim_DodotCenter.STL";
-    private static final float STL_SCALE = 0.05f;
+    private static final float STL_SCALE_ABOUT_ORIGIN = 0.05f;
     private static final int STL_VERTEX_INDEX = 12;
+
+    public Icosahedron() {
+        super(20);
+    }
     
     @Override
-    public MeshView loadVertexMesh() throws Exception {
-        return loadStlFile(STL_PATH, STL_SCALE);
+    public Pair<Integer, MeshView> loadVertexMeshAndIndex() throws Exception {
+        MeshView mesh = loadStlFile(STL_PATH, STL_SCALE_ABOUT_ORIGIN);
+        return new Pair<>(STL_VERTEX_INDEX, mesh);
     }
 
 	@Override
@@ -38,46 +40,13 @@ public class Icosahedron extends Solid {
 	}
 
     @Override
-    protected List<MeshView> createMesh() {
-        List<MeshView> icosaGroup = new ArrayList<>();
-
-        // Get the base geometry data
-        float[] allPoints = IcosahedronPoints.getIcosahedronPoints();
-        float[] texCoords = RenderUtil.calculateTextureCoordinates(allPoints);
-
-        // Create individual faces
-        for (int i = 0; i < 20; i++) {
-            int[] faceVertices = CycleInverter.invertArray(Dodecahedron.vertexFaces[i]);
-
-            // Create a new mesh for this face
-            TriangleMesh faceMesh = new TriangleMesh();
-            faceMesh.setVertexFormat(VertexFormat.POINT_TEXCOORD);
-
-            // Add only the points for this face
-            float[] facePoints = new float[9]; // 3 vertices * 3 coordinates
-            for (int j = 0; j < 3; j++) {
-                int vertexIndex = faceVertices[j] - 1;
-                System.arraycopy(allPoints, vertexIndex * 3, facePoints, j * 3, 3);
-            }
-
-            // Create face indices (always 0,1,2 since we only have 3 vertices)
-            int[] faces = {0,0, 1,1, 2,2};
-
-            faceMesh.getPoints().setAll(facePoints);
-            faceMesh.getTexCoords().setAll(texCoords);
-            faceMesh.getFaces().setAll(faces);
-
-            MeshView faceMeshView = new MeshView(faceMesh);
-
-            icosaGroup.add(faceMeshView);
-        }
-
-        return icosaGroup;
+    protected int[] getFaceVertices(int i) {
+        return CycleInverter.invertArray(Dodecahedron.vertexFaces[i]);
     }
 
-    private static class IcosahedronPoints {
-        public static float[] getIcosahedronPoints() {
-            float[] points = {
+    @Override
+    protected float[] getPoints() {
+        float[] points = {
                 0.01f, 13.32f, -26.66f,
                 25.36f, 13.31f, -8.22f,
                 15.65f, 13.32f, 21.58f,
@@ -92,11 +61,11 @@ public class Icosahedron extends Solid {
                 -0.05f, 29.8f, 0.03f
             };
 
-            // Scale
-            for (int i = 0; i < points.length; i++) {
-                points[i] /= 29.8 / 2;
-            }
-            return points;
+        // Scale
+        for (int i = 0; i < points.length; i++) {
+            points[i] /= 29.8 / 2;
         }
+        return points;
     }
+
 }

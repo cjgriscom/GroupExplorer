@@ -140,9 +140,11 @@ public class Renderer extends Application {
 
         // TODO
         try {
-            MeshView stlModel = solid.loadVertexMesh();
-            stlModel.setMaterial(createMaterial(Color.GRAY));
-            solidsGroup.getChildren().add(stlModel);
+            List<MeshView> stlModels = solid.getVertexMeshObjects();
+            for (MeshView stlModel : stlModels) {
+                stlModel.setMaterial(createMaterial(Color.GRAY));
+                solidsGroup.getChildren().add(stlModel);
+            }
         } catch (Exception e) {
             System.err.println("Failed to load STL file: " + e.getMessage());
             e.printStackTrace();
