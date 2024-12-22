@@ -31,6 +31,15 @@ import javafx.embed.swing.SwingFXUtils;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.stream.ImageOutputStream;
+
+import org.w3c.dom.NodeList;
+
+import com.ardor3d.extension.model.stl.StlDataStore;
+import com.ardor3d.extension.model.stl.StlGeometryStore;
+import com.ardor3d.extension.model.stl.StlImporter;
+import com.ardor3d.math.Vector3;
+import com.ardor3d.util.resource.URLResourceSource;
+
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.FileImageOutputStream;
 import javax.imageio.metadata.IIOMetadataNode;
@@ -40,13 +49,13 @@ import javax.imageio.ImageWriteParam;
 
 import javafx.stage.FileChooser;
 import javafx.stage.FileChooser.ExtensionFilter;
-import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
 
 public class Renderer extends Application {
     private static final double SCENE_WIDTH = 1280;
     private static final double SCENE_HEIGHT = 900;
     private static final double SIDEBAR_WIDTH = 400;
+    private static final String STL_PATH = "stl/Anim_DodotCenter.STL";
+    private static final float STL_SCALE = 0.05f; // Adjust this to scale your model
 
     private double anchorX, anchorY, anchorAngleX = 0, anchorAngleY = 0;
     private final Rotate rotateX = new Rotate(0, Rotate.X_AXIS);
@@ -65,6 +74,7 @@ public class Renderer extends Application {
 
     private Solid solid;
     private Group solidsGroup; // Group to hold solids for easy switching
+    private MeshView stlModel; // Add this field
 
     // UI Components
     private ComboBox<String> solidsComboBox;
@@ -125,8 +135,17 @@ public class Renderer extends Application {
         primaryStage.show();
 
         initMouseControl(solidsGroup, primaryStage);
-    }
 
+        // Add this after solidsGroup initialization
+        try {
+            stlModel = loadStlFile(STL_PATH);
+            stlModel.setMaterial(createMaterial(Color.GRAY));
+            solidsGroup.getChildren().add(stlModel);
+        } catch (Exception e) {
+            System.err.println("Failed to load STL file: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 
     private VBox createSidebar() {
         VBox sidebar = new VBox();
@@ -551,5 +570,73 @@ public class Renderer extends Application {
             rootNode.appendChild(node);
             return node;
         }
+    }
+
+    private MeshView loadStlFile(String filePath) throws Exception {
+        // Load the STL file using StlImporter
+        URLResourceSource r = new URLResourceSource(getClass().getResource("/"+filePath));
+        StlGeometryStore stl = new StlImporter().load(r);
+        StlDataStore data = stl.getDataStore();
+        
+        // Debug output: Print first few vertices
+        System.out.println("\nSTL File Debug Output for: " + filePath);
+        System.out.println("Total vertices: " + data.getVertices().size());
+        
+        // Print first triangle's vertices
+        if (data.getVertices().size() >= 3) {
+            System.out.println("\nFirst triangle coordinates:");
+            for (int i = 0; i < 3; i++) {
+                Vector3 v = data.getVertices().get(i);
+                System.out.printf("v%d: (%.6f, %.6f, %.6f)%n", i, v.getX(), v.getY(), v.getZ());
+            }
+        }
+        
+        // Print min/max coordinates to understand the model's bounds
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE, maxZ = -Double.MAX_VALUE;
+        
+        for (Vector3 v : data.getVertices()) {
+            minX = Math.min(minX, v.getX());
+            minY = Math.min(minY, v.getY());
+            minZ = Math.min(minZ, v.getZ());
+            maxX = Math.max(maxX, v.getX());
+            maxY = Math.max(maxY, v.getY());
+            maxZ = Math.max(maxZ, v.getZ());
+        }
+        
+        System.out.println("\nModel bounds:");
+        System.out.printf("X: %.6f to %.6f (range: %.6f)%n", minX, maxX, maxX - minX);
+        System.out.printf("Y: %.6f to %.6f (range: %.6f)%n", minY, maxY, maxY - minY);
+        System.out.printf("Z: %.6f to %.6f (range: %.6f)%n", minZ, maxZ, maxZ - minZ);
+        
+        // Create a JavaFX TriangleMesh
+        TriangleMesh mesh = new TriangleMesh();
+        
+        // Add points to the mesh
+        for (Vector3 vertex : data.getVertices()) {
+            mesh.getPoints().addAll((float) vertex.getX() * STL_SCALE, (float) vertex.getY() * STL_SCALE, (float) vertex.getZ() * STL_SCALE);
+        }
+        
+        // Since JavaFX TriangleMesh requires texture coordinates, add a dummy coordinate
+        mesh.getTexCoords().addAll(0, 0);
+        
+        // Add faces to the mesh
+        // Each face in STL has three vertices; JavaFX uses triangular faces with three point indices
+        for (int i = 0; i < data.getVertices().size(); i += 3) {
+            // JavaFX TriangleMesh faces are defined as p0/t0, p1/t0, p2/t0
+            // We use 0 for all texture indices as we're not using textures
+            mesh.getFaces().addAll(
+                i, 0,
+                i + 1, 0,
+                i + 2, 0
+            );
+        }
+        
+        // Create and return the MeshView
+        MeshView meshView = new MeshView(mesh);
+        meshView.setCullFace(CullFace.NONE); // Optional: Disable back-face culling
+        meshView.setMaterial(new PhongMaterial(Color.GRAY)); // Optional: Set a material
+        
+        return meshView;
     }
 }

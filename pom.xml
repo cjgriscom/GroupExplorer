@@ -45,6 +45,12 @@
             <artifactId>imageio-core</artifactId>
             <version>3.8.0</version>
         </dependency>
+        <dependency>
+            <groupId>com.ardor3d</groupId>
+            <artifactId>ardor3d-extras</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+
     </dependencies>
 
     <build>
