@@ -1,5 +1,6 @@
 package io.chandler.gap.render;
 
+import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
@@ -30,6 +31,10 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
+/**
+ * Renderer is responsible for setting up the JavaFX application,
+ * handling user interactions, and rendering the 3D models.
+ */
 public class Renderer extends Application {
     private static final double SCENE_WIDTH = 1280;
     private static final double SCENE_HEIGHT = 900;
@@ -60,12 +65,15 @@ public class Renderer extends Application {
     private Label paginationLabel;
     private Label descriptionLabel;
 
+    // New UI Component: Auto Rotate Checkbox
+    private CheckBox autoRotateCheckBox;
+
     // Parse Results
     private List<String> parseResults = new ArrayList<>();
     private int currentParseIndex = 0;
     private Stage stage; // Class-level variable
     private SubScene subScene; // Class-level variable
-    
+
     // New fields for Individual Sets
     private CheckBox isolateCheckBox;
     private Button setPrevButton;
@@ -76,6 +84,11 @@ public class Renderer extends Application {
     private List<Pair<Integer, Color>> currentColorList = new ArrayList<>();
 
     private GifWriter gifWriter = new GifWriter(); // Instantiate GifWriter
+
+    // AnimationTimer for Auto Rotation
+    private AnimationTimer autoRotateTimer;
+    private static final int AUTO_ROTATE_DEGS_PER_SECOND = 60;
+    private long lastUpdate = 0;
 
     @Override
     public void start(Stage primaryStage) {
@@ -122,6 +135,9 @@ public class Renderer extends Application {
 
         initMouseControl(solidsGroup, primaryStage);
 
+        // Initialize Auto Rotate AnimationTimer
+        initAutoRotateTimer();
+
         // TODO
         try {
             MeshView stlModel = solid.loadVertexMesh();
@@ -131,7 +147,24 @@ public class Renderer extends Application {
             System.err.println("Failed to load STL file: " + e.getMessage());
             e.printStackTrace();
         }
-        
+
+    }
+
+    /**
+     * Initializes the AnimationTimer for auto-rotation.
+     */
+    private void initAutoRotateTimer() {
+        autoRotateTimer = new AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                if (lastUpdate > 0) {
+                    double deltaSeconds = (now - lastUpdate) / 1_000_000_000.0;
+                    double angle = AUTO_ROTATE_DEGS_PER_SECOND * deltaSeconds; // 5 degrees per second
+                    rotateAroundVisualYAxis(solidsGroup, angle);
+                }
+                lastUpdate = now;
+            }
+        };
     }
 
     private VBox createSidebar() {
@@ -192,7 +225,7 @@ public class Renderer extends Application {
         nextButton.setOnAction(e -> handleNext());
 
         paginationBox.getChildren().addAll(prevButton, paginationLabel, nextButton);
-        
+
         descriptionLabel = new Label();
         descriptionLabel.setTextFill(Color.WHITE);
         descriptionLabel.setPrefHeight(800);
@@ -205,7 +238,7 @@ public class Renderer extends Application {
         // --- Individual Sets Controls ---
         Separator separator = new Separator();
         separator.setStyle("-fx-background-color: #555555;");
-        
+
         Label individualSetsLabel = new Label("Individual Sets:");
         individualSetsLabel.setTextFill(Color.WHITE);
         individualSetsLabel.setStyle("-fx-font-size: 18px; -fx-font-weight: bold;");
@@ -241,6 +274,11 @@ public class Renderer extends Application {
         setNextButton.setDisable(true);
         setPaginationLabel.setText("(0 / 0)");
 
+        // --- New Auto Rotate Checkbox ---
+        autoRotateCheckBox = new CheckBox("Auto Rotate");
+        autoRotateCheckBox.setTextFill(Color.WHITE);
+        autoRotateCheckBox.setOnAction(e -> handleAutoRotateToggle());
+
         // Add all components to sidebar
         sidebar.getChildren().addAll(
                 title,
@@ -253,10 +291,26 @@ public class Renderer extends Application {
                 individualSetsLabel,
                 isolateCheckBox,
                 setPaginationBox,
+                autoRotateCheckBox, // Added Auto Rotate Checkbox
                 descriptionLabel
         );
 
         return sidebar;
+    }
+
+    /**
+     * Handles the toggling of the Auto Rotate checkbox.
+     * Starts or stops the AnimationTimer based on the checkbox state.
+     */
+    private void handleAutoRotateToggle() {
+        if (autoRotateCheckBox.isSelected()) {
+            // Start the AnimationTimer
+            lastUpdate = 0;
+            autoRotateTimer.start();
+        } else {
+            // Stop the AnimationTimer
+            autoRotateTimer.stop();
+        }
     }
 
     private void handleSolidSelection() {
@@ -392,7 +446,7 @@ public class Renderer extends Application {
         if (currentColorList == null || currentColorList.isEmpty()) {
             return;
         }
-    
+
         for (int i = 0; i < solid.getMeshViews().size(); i++) {
             boolean isIsolated = isolateCheckBox.isSelected();
             if (i >= currentColorList.size()) {
@@ -400,7 +454,7 @@ public class Renderer extends Application {
                 continue;
             }
             Pair<Integer, Color> color = currentColorList.get(i);
-            if (!isIsolated || (color.getKey() == currentSetIndex + 1)) {
+            if (!isIsolated || (color.getKey() == currentSetIndex + 1 || color.getKey() == -1)) {
                 solid.getMeshViews().get(i).setMaterial(createMaterial(color.getValue()));
             } else {
                 solid.getMeshViews().get(i).setMaterial(createMaterial(Color.GRAY));
@@ -531,7 +585,7 @@ public class Renderer extends Application {
         // Apply the rotation to the group
         group.getTransforms().add(rotateTransform);
     }
-    
+
     /**
      * Replaces the existing captureAndCreateGif method to use GifWriter.
      *
@@ -613,6 +667,16 @@ public class Renderer extends Application {
         Thread thread = new Thread(task);
         thread.setDaemon(true);
         thread.start();
+    }
+
+    /**
+     * Stops the Auto Rotate AnimationTimer when the application is closed.
+     */
+    @Override
+    public void stop() {
+        if (autoRotateTimer != null) {
+            autoRotateTimer.stop();
+        }
     }
 
     public static void main(String[] args) {
