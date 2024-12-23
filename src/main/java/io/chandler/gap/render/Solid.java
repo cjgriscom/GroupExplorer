@@ -2,6 +2,7 @@ package io.chandler.gap.render;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map.Entry;
 import java.util.TreeMap;
 
 import com.ardor3d.extension.model.stl.StlDataStore;
@@ -10,6 +11,9 @@ import com.ardor3d.extension.model.stl.StlImporter;
 import com.ardor3d.math.Vector3;
 import com.ardor3d.util.resource.URLResourceSource;
 
+import io.chandler.gap.ArrayRotator;
+import io.chandler.gap.util.MeshUtil;
+import javafx.geometry.Point3D;
 import javafx.scene.Group;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
@@ -35,8 +39,48 @@ public abstract class Solid extends Group {
 			if (src == null) return null;
 			m.put(src.getKey(), src.getValue());
 
-			// TODO
+			for (int iter = 0; iter < nFaces && m.size() < nFaces; iter++) {
+				for (Entry<Integer, MeshView> entry : new ArrayList<>(m.entrySet())) {
+					int sourceVertexIndex = entry.getKey();
+					MeshView entryMesh = entry.getValue();
+					float[] points = getPoints();
+					
+					// Iterate over all faces to find those containing the source vertex
+					for (int faceIndex = 0; faceIndex < nFaces; faceIndex++) {
+						int[] faceVertices = getFaceVertices(faceIndex).clone();
+						
+						// Check if the face contains the source vertex
+						boolean containsSource = false;
+						boolean filled = true;
+						for (int vertex : faceVertices) {
+							if (vertex == sourceVertexIndex) {
+								containsSource = true;
+							}
+							if (!m.containsKey(vertex)) {
+								filled = false;
+							}
+						}
+						
+						if (containsSource && !filled) {
+							// Rotate faceVertices until faceVertices[0] is the source vertex
+							while (faceVertices[0] != sourceVertexIndex) {
+								ArrayRotator.rotateRight(faceVertices);
+							}
 
+							// Calculate the rotation axis based on the face
+							Point3D rotationAxis = calculateRotationAxis(faceVertices, points);
+							
+							// Create two rotated copies (120° and 240°)
+							for (int i = 1; i <= 2; i++) {
+								double angle = 120.0 * i;
+								MeshView rotatedMesh = MeshUtil.copyAndRotateMeshView(entryMesh, rotationAxis, angle);
+								m.put(faceVertices[i], rotatedMesh);
+							}
+							
+						}
+					}
+				}
+			}
 		} catch (Exception e) {
 			e.printStackTrace();
 			return null;
@@ -171,6 +215,27 @@ public abstract class Solid extends Group {
 		meshView.setMaterial(new PhongMaterial(Color.GRAY)); // Optional: Set a material
 		
 		return meshView;
+	}
+
+	/**
+	 * Calculates the rotation axis for a given face and source vertex.
+	 *
+	 * @param faceVertices         Array of vertex indices forming the face.
+	 * @param sourceVertexIndex    The 1-indexed source vertex.
+	 * @param points               The array of all vertex coordinates.
+	 * @return The normalized rotation axis as a Point3D.
+	 */
+	private Point3D calculateRotationAxis(int[] faceVertices, float[] points) {
+		
+		Point3D v1 = new Point3D(points[(faceVertices[0]-1) * 3], points[(faceVertices[0]-1) * 3 + 1], points[(faceVertices[0]-1) * 3 + 2]);
+		Point3D v2 = new Point3D(points[(faceVertices[1]-1) * 3], points[(faceVertices[1]-1) * 3 + 1], points[(faceVertices[1]-1) * 3 + 2]);
+		Point3D v3 = new Point3D(points[(faceVertices[2]-1) * 3], points[(faceVertices[2]-1) * 3 + 1], points[(faceVertices[2]-1) * 3 + 2]);
+		Point3D centroid = v1.add(v2).add(v3).multiply(1.0/3.0);
+		
+		// Create a Point3D vector from the source vertex to the origin
+		Point3D axis = centroid.normalize();
+		
+		return axis;
 	}
 
 }
