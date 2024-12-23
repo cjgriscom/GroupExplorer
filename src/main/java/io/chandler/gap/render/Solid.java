@@ -104,6 +104,10 @@ public abstract class Solid extends Group {
 	protected abstract int[] getFaceVertices(int i);
 	protected abstract float[] getPoints();
 
+	public int nFaces() {
+		return nFaces;
+	}
+
     protected List<MeshView> createMesh() {
         List<MeshView> icosaGroup = new ArrayList<>();
 

@@ -3,6 +3,7 @@ package io.chandler.gap.render;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.concurrent.Task;
 import javafx.embed.swing.SwingFXUtils;
@@ -81,6 +82,7 @@ public class Renderer extends Application {
     private Label setPaginationLabel;
     private int currentSetIndex = 0;
     private int nColors = 0;
+    private int[][][] generator;
     private List<Pair<Integer, Color>> currentColorList = new ArrayList<>();
 
     private GifWriter gifWriter = new GifWriter(); // Instantiate GifWriter
@@ -91,11 +93,12 @@ public class Renderer extends Application {
     private long lastUpdate = 0;
 
     // New Checkboxes
-    private CheckBox showVerticesCheckBox;
+    private CheckBox showVerticesCheckBox = new CheckBox("Show vertices");
     private CheckBox animateVerticesCheckBox;
 
     // List to hold vertex MeshViews
     private List<MeshView> vertexMeshes = new ArrayList<>();
+    private SimpleBooleanProperty[] vertexVisible = new SimpleBooleanProperty[0];
 
     @Override
     public void start(Stage primaryStage) {
@@ -112,6 +115,7 @@ public class Renderer extends Application {
         // Initialize solid
         solid = new Icosahedron();
         solidsGroup.getChildren().addAll(solid.getMeshViews());
+        reloadVertices();
 
         // Set up mouse control
         solidsGroup.getTransforms().addAll(rotateX, rotateY);
@@ -272,9 +276,7 @@ public class Renderer extends Application {
         setPaginationLabel.setText("(0 / 0)");
 
         // Show Vertices Checkbox
-        showVerticesCheckBox = new CheckBox("Show vertices");
         showVerticesCheckBox.setTextFill(Color.WHITE);
-        showVerticesCheckBox.setOnAction(e -> handleShowVerticesToggle());
 
         // Animate Vertices Checkbox
         animateVerticesCheckBox = new CheckBox("Animate vertices");
@@ -323,11 +325,7 @@ public class Renderer extends Application {
 
     private void reloadVertices() {
         unloadVertices();
-
-        // Load vertices if "Show vertices" is checked
-        if (showVerticesCheckBox.isSelected()) {
-            loadVertices();
-        }
+        loadVertices();
     }
 
     private void handleSolidSelection() {
@@ -348,10 +346,11 @@ public class Renderer extends Application {
         solidsGroup.getChildren().clear();
         solidsGroup.getChildren().addAll(newSolid.getMeshViews());
 
-        reloadVertices();
-
         // Update the reference
         solid = newSolid;
+
+        // Update vertex models
+        reloadVertices();
 
         // Clear existing color lists
         currentColorList.clear();
@@ -437,7 +436,23 @@ public class Renderer extends Application {
             String selectedResult = parseResults.get(index);
 
             SimpleStringProperty description1 = new SimpleStringProperty();
-            currentColorList = ResultListParser.getColorList(solid, selectedResult, description1);
+
+            this.generator = ResultListParser.parseGenerator(selectedResult);
+
+            HashSet<Integer> usedVertices = new HashSet<>();
+            for (int[][] cycle : generator) {
+                for (int[] face : cycle) {
+                    for (int vertex : face) {
+                        usedVertices.add(vertex);
+                    }
+                }
+            }
+
+            for (int i = 0; i < vertexVisible.length; i++) {
+                vertexVisible[i].set(usedVertices.contains(i+1));
+            }
+
+            currentColorList = ResultListParser.getColorList(solid, generator, description1);
 
             HashSet<Integer> colors = new HashSet<>();
             for (Pair<Integer, Color> pair : currentColorList) {
@@ -697,22 +712,27 @@ public class Renderer extends Application {
         }
     }
 
-    private void handleShowVerticesToggle() {
-        reloadVertices();
-    }
-
     /**
      * Loads the vertices by executing the STL loading code.
      */
     private void loadVertices() {
         try {
             unloadVertices();
+
+            vertexVisible = new SimpleBooleanProperty[solid.nFaces()];
+            for (int i = 0; i < solid.nFaces(); i++) {
+                vertexVisible[i] = new SimpleBooleanProperty(true);
+            }
+            
             List<MeshView> stlModels = solid.getVertexMeshObjects();
             if (stlModels == null) return;
+            int i = 0;
             for (MeshView stlModel : stlModels) {
+                stlModel.visibleProperty().bind(showVerticesCheckBox.selectedProperty().and(vertexVisible[i]));
                 stlModel.setMaterial(createMaterial(Color.GRAY));
                 solidsGroup.getChildren().add(stlModel);
                 vertexMeshes.add(stlModel); // Add to the vertices list
+                i++;
             }
         } catch (Exception e) {
             System.err.println("Failed to load STL vertices: " + e.getMessage());
@@ -724,6 +744,10 @@ public class Renderer extends Application {
      * Unloads the vertices by removing them from the solidsGroup and clearing the list.
      */
     private void unloadVertices() {
+        for (MeshView stlModel : vertexMeshes) {
+            stlModel.visibleProperty().unbind();
+        }
+        vertexVisible = new SimpleBooleanProperty[0];
         solidsGroup.getChildren().removeAll(vertexMeshes);
         vertexMeshes.clear();
     }

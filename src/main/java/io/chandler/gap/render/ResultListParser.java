@@ -31,13 +31,17 @@ public class ResultListParser {
         Color.rgb(0, 102, 204),   // Dark Blue
         Color.rgb(102, 51, 153)   // Dark Purple
     };
-	public static List<Pair<Integer, Color>> getColorList(Solid solid, String selectedResult, SimpleStringProperty descriptionOut) {
-		TreeMap<Integer, Pair<Integer, Color>> colorMap = new TreeMap<>();
-		
+
+
+	public static int[][][] parseGenerator(String selectedResult) {
 		// Parse the selected result
 		String substring = selectedResult.substring(selectedResult.indexOf("[") + 1, selectedResult.indexOf("]"));
-		int[][][] generator = GroupExplorer.parseOperationsArr(substring);
-
+		return GroupExplorer.parseOperationsArr(substring);
+	}
+	
+	public static List<Pair<Integer, Color>> getColorList(Solid solid, int[][][] generator, SimpleStringProperty descriptionOut) {
+		TreeMap<Integer, Pair<Integer, Color>> colorMap = new TreeMap<>();
+		
 		StringBuilder description = new StringBuilder();
 		for (int color = 0; color < generator.length; color++) {
 			description.append("\n--\n");
