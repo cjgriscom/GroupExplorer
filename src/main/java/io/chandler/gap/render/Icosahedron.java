@@ -10,7 +10,7 @@ import javafx.util.Pair;
 
 public class Icosahedron extends Solid {
     private static final String STL_PATH = "stl/Anim_DodotCenter.STL";
-    private static final float STL_SCALE_ABOUT_ORIGIN = 0.05f;
+    private static final float STL_SCALE_ABOUT_ORIGIN = 0.055f;
     private static final int STL_VERTEX_INDEX = 12;
 
     public Icosahedron() {

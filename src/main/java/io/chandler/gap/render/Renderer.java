@@ -57,7 +57,7 @@ public class Renderer extends Application {
     private Solid solid;
     private Group solidsGroup; // Group to hold solids for easy switching
 
-    // UI Components
+    // Main Pagination
     private ComboBox<String> solidsComboBox;
     private TextArea parseTextArea;
     private Button parseButton;
@@ -66,7 +66,7 @@ public class Renderer extends Application {
     private Label paginationLabel;
     private Label descriptionLabel;
 
-    // New UI Component: Auto Rotate Checkbox
+    // Auto Rotate
     private CheckBox autoRotateCheckBox;
 
     // Parse Results
@@ -75,7 +75,7 @@ public class Renderer extends Application {
     private Stage stage; // Class-level variable
     private SubScene subScene; // Class-level variable
 
-    // New fields for Individual Sets
+    // Individual Sets
     private CheckBox isolateCheckBox;
     private Button setPrevButton;
     private Button setNextButton;
@@ -85,19 +85,23 @@ public class Renderer extends Application {
     private int[][][] generator;
     private List<Pair<Integer, Color>> currentColorList = new ArrayList<>();
 
-    private GifWriter gifWriter = new GifWriter(); // Instantiate GifWriter
+    private GifWriter gifWriter = new GifWriter();
 
     // AnimationTimer for Auto Rotation
     private AnimationTimer autoRotateTimer;
+    private AnimationTimer rotationAxesTimer;
     private static final int AUTO_ROTATE_DEGS_PER_SECOND = 60;
+    private static final int ROTATION_AXES_DEGS_PER_SECOND = 120;
     private long lastUpdate = 0;
-
+    private long lastRotationAxesUpdate = 0;
     // New Checkboxes
     private CheckBox showVerticesCheckBox = new CheckBox("Show vertices");
     private CheckBox animateVerticesCheckBox;
 
     // List to hold vertex MeshViews
     private List<MeshView> vertexMeshes = new ArrayList<>();
+    private List<Point3D> rotationAxes = new ArrayList<>();
+    private List<Rotate> vertexRotations = new ArrayList<>();
     private SimpleBooleanProperty[] vertexVisible = new SimpleBooleanProperty[0];
 
     @Override
@@ -148,6 +152,7 @@ public class Renderer extends Application {
 
         // Initialize Auto Rotate AnimationTimer
         initAutoRotateTimer();
+        initRotationAxesTimer();
 
     }
 
@@ -164,6 +169,26 @@ public class Renderer extends Application {
                     rotateAroundVisualYAxis(solidsGroup, angle);
                 }
                 lastUpdate = now;
+            }
+        };
+    }
+
+    private void initRotationAxesTimer() {
+        rotationAxesTimer = new AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                if (lastRotationAxesUpdate > 0) {
+                    double deltaSeconds = (now - lastRotationAxesUpdate) / 1_000_000_000.0;
+                    double angle = ROTATION_AXES_DEGS_PER_SECOND * deltaSeconds; // 5 degrees per second
+                    
+                    for (int i = 0; i < vertexRotations.size(); i++) {
+                        if (vertexRotations.get(i).getAngle() != 0) {
+                            double sign = Math.signum(vertexRotations.get(i).getAngle());
+                            vertexRotations.get(i).setAngle(vertexRotations.get(i).getAngle() + sign * angle);
+                        }
+                    }
+                }
+                lastRotationAxesUpdate = now;
             }
         };
     }
@@ -281,7 +306,7 @@ public class Renderer extends Application {
         // Animate Vertices Checkbox
         animateVerticesCheckBox = new CheckBox("Animate vertices");
         animateVerticesCheckBox.setTextFill(Color.WHITE);
-        // Future implementation: animateVerticesCheckBox.setOnAction(e -> handleAnimateVerticesToggle());
+        animateVerticesCheckBox.setOnAction(e -> handleAnimateVerticesToggle());
 
         autoRotateCheckBox = new CheckBox("Auto Rotate");
         autoRotateCheckBox.setTextFill(Color.WHITE);
@@ -320,6 +345,18 @@ public class Renderer extends Application {
         } else {
             // Stop the AnimationTimer
             autoRotateTimer.stop();
+        }
+    }
+
+    private void handleAnimateVerticesToggle() {
+        if (animateVerticesCheckBox.isSelected()) {
+            lastRotationAxesUpdate = 0;
+            rotationAxesTimer.start();
+        } else {
+            rotationAxesTimer.stop();
+            for (Rotate rotation : vertexRotations) {
+                rotation.setAngle(Math.signum(rotation.getAngle()) * 0.001);
+            }
         }
     }
 
@@ -371,7 +408,7 @@ public class Renderer extends Application {
         }
         updatePaginationLabel();
         updatePaginationButtons();
-
+        handleSetPagination(0);
     }
 
     private void handlePrevious() {
@@ -380,14 +417,7 @@ public class Renderer extends Application {
             onParseResultSelected(currentParseIndex);
             updatePaginationLabel();
             updatePaginationButtons();
-
-            // Update Individual Sets pagination
-            if (currentColorList.size() > 0) {
-                currentSetIndex = 0;
-                setPaginationLabel.setText("(" + (currentSetIndex + 1) + " / " + nColors + ")");
-                setPrevButton.setDisable(currentSetIndex <= 0);
-                setNextButton.setDisable(currentSetIndex >= nColors - 1);
-            }
+            handleSetPagination(0);
         }
     }
 
@@ -397,14 +427,7 @@ public class Renderer extends Application {
             onParseResultSelected(currentParseIndex);
             updatePaginationLabel();
             updatePaginationButtons();
-
-            // Update Individual Sets pagination
-            if (currentColorList.size() > 0) {
-                currentSetIndex = 0;
-                setPaginationLabel.setText("(" + (currentSetIndex + 1) + " / " + nColors + ")");
-                setPrevButton.setDisable(currentSetIndex <= 0);
-                setNextButton.setDisable(currentSetIndex >= nColors - 1);
-            }
+            handleSetPagination(0);
         }
     }
 
@@ -424,6 +447,22 @@ public class Renderer extends Application {
         setPrevButton.setDisable(currentSetIndex <= 0);
         setNextButton.setDisable(currentSetIndex >= nColors - 1);
         updateColorDisplay();
+
+        for (Rotate rotation : vertexRotations) {
+            rotation.setAngle(0);
+        }
+
+        if (nColors > 0) {
+            int[][] set = generator[currentSetIndex];
+            for (int[] face : set) {
+                int faceISigned = solid.getPosOrNegFaceFromGenerator(face);
+                int faceI = Math.abs(faceISigned) - 1;
+                for (int vertex : face) {
+                    vertexRotations.get(vertex-1).setAngle(0.001 * Math.signum(faceISigned));
+                    vertexRotations.get(vertex-1).setAxis(this.rotationAxes.get(faceI));
+                }
+            }
+        }
     }
 
     /**
@@ -710,6 +749,9 @@ public class Renderer extends Application {
         if (autoRotateTimer != null) {
             autoRotateTimer.stop();
         }
+        if (rotationAxesTimer != null) {
+            rotationAxesTimer.stop();
+        }
     }
 
     /**
@@ -718,6 +760,7 @@ public class Renderer extends Application {
     private void loadVertices() {
         try {
             unloadVertices();
+            rotationAxes.addAll(solid.getRotationAxes());
 
             vertexVisible = new SimpleBooleanProperty[solid.nFaces()];
             for (int i = 0; i < solid.nFaces(); i++) {
@@ -728,6 +771,9 @@ public class Renderer extends Application {
             if (stlModels == null) return;
             int i = 0;
             for (MeshView stlModel : stlModels) {
+                Rotate rotate = new Rotate(0, new Point3D(1, 0, 0));
+                this.vertexRotations.add(rotate);
+                stlModel.getTransforms().add(0,rotate);
                 stlModel.visibleProperty().bind(showVerticesCheckBox.selectedProperty().and(vertexVisible[i]));
                 stlModel.setMaterial(createMaterial(Color.GRAY));
                 solidsGroup.getChildren().add(stlModel);
@@ -750,6 +796,8 @@ public class Renderer extends Application {
         vertexVisible = new SimpleBooleanProperty[0];
         solidsGroup.getChildren().removeAll(vertexMeshes);
         vertexMeshes.clear();
+        rotationAxes.clear();
+        vertexRotations.clear();
     }
 
     public static void main(String[] args) {

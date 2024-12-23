@@ -27,10 +27,23 @@ public abstract class Solid extends Group {
     private final List<MeshView> l;
 	private final int nFaces;
 
+	private TreeMap<Integer, Point3D> rotationAxes;
+
     public Solid(int nFaces) {
         this.nFaces = nFaces;
         this.getChildren().addAll(l = createMesh());
     }
+
+	public List<Point3D> getRotationAxes() {
+		if (rotationAxes == null) {
+			rotationAxes = new TreeMap<>();
+			float[] points = getPoints();
+			for (int i = 0; i < nFaces; i++) {
+				rotationAxes.put(i, calculateRotationAxis(getFaceVertices(i), points));
+			}
+		}
+		return new ArrayList<>(rotationAxes.values());
+	}
 
 	public List<MeshView> getVertexMeshObjects() {
 		TreeMap<Integer, MeshView> m = new TreeMap<>();
@@ -69,7 +82,7 @@ public abstract class Solid extends Group {
 
 							// Calculate the rotation axis based on the face
 							Point3D rotationAxis = calculateRotationAxis(faceVertices, points);
-							
+
 							// Create two rotated copies (120° and 240°)
 							for (int i = 1; i <= 2; i++) {
 								double angle = 120.0 * i;
@@ -195,7 +208,8 @@ public abstract class Solid extends Group {
 		
 		// Add points to the mesh
 		for (Vector3 vertex : data.getVertices()) {
-			mesh.getPoints().addAll((float) vertex.getX() * scale, (float) vertex.getY() * 0.05f, (float) vertex.getZ() * 0.05f); // Apply scale here
+			// Scale about the origin
+			mesh.getPoints().addAll((float) vertex.getX() * scale, (float) vertex.getY() * scale, (float) vertex.getZ() * scale);
 		}
 		
 		// Since JavaFX TriangleMesh requires texture coordinates, add a dummy coordinate
