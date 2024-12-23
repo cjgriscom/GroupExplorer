@@ -90,6 +90,13 @@ public class Renderer extends Application {
     private static final int AUTO_ROTATE_DEGS_PER_SECOND = 60;
     private long lastUpdate = 0;
 
+    // New Checkboxes
+    private CheckBox showVerticesCheckBox;
+    private CheckBox animateVerticesCheckBox;
+
+    // List to hold vertex MeshViews
+    private List<MeshView> vertexMeshes = new ArrayList<>();
+
     @Override
     public void start(Stage primaryStage) {
         this.stage = primaryStage; // Assign to class-level variable
@@ -137,18 +144,6 @@ public class Renderer extends Application {
 
         // Initialize Auto Rotate AnimationTimer
         initAutoRotateTimer();
-
-        // TODO
-        try {
-            List<MeshView> stlModels = solid.getVertexMeshObjects();
-            for (MeshView stlModel : stlModels) {
-                stlModel.setMaterial(createMaterial(Color.GRAY));
-                solidsGroup.getChildren().add(stlModel);
-            }
-        } catch (Exception e) {
-            System.err.println("Failed to load STL file: " + e.getMessage());
-            e.printStackTrace();
-        }
 
     }
 
@@ -276,7 +271,16 @@ public class Renderer extends Application {
         setNextButton.setDisable(true);
         setPaginationLabel.setText("(0 / 0)");
 
-        // --- New Auto Rotate Checkbox ---
+        // Show Vertices Checkbox
+        showVerticesCheckBox = new CheckBox("Show vertices");
+        showVerticesCheckBox.setTextFill(Color.WHITE);
+        showVerticesCheckBox.setOnAction(e -> handleShowVerticesToggle());
+
+        // Animate Vertices Checkbox
+        animateVerticesCheckBox = new CheckBox("Animate vertices");
+        animateVerticesCheckBox.setTextFill(Color.WHITE);
+        // Future implementation: animateVerticesCheckBox.setOnAction(e -> handleAnimateVerticesToggle());
+
         autoRotateCheckBox = new CheckBox("Auto Rotate");
         autoRotateCheckBox.setTextFill(Color.WHITE);
         autoRotateCheckBox.setOnAction(e -> handleAutoRotateToggle());
@@ -293,7 +297,9 @@ public class Renderer extends Application {
                 individualSetsLabel,
                 isolateCheckBox,
                 setPaginationBox,
-                autoRotateCheckBox, // Added Auto Rotate Checkbox
+                showVerticesCheckBox,
+                animateVerticesCheckBox,
+                autoRotateCheckBox,
                 descriptionLabel
         );
 
@@ -315,13 +321,21 @@ public class Renderer extends Application {
         }
     }
 
+    private void reloadVertices() {
+        unloadVertices();
+
+        // Load vertices if "Show vertices" is checked
+        if (showVerticesCheckBox.isSelected()) {
+            loadVertices();
+        }
+    }
+
     private void handleSolidSelection() {
         String selectedSolid = solidsComboBox.getValue();
         Solid newSolid;
 
         switch (selectedSolid) {
             case "Snub Cube":
-                // Implement SnubCube similarly to Icosahedron
                 newSolid = new SnubCube();
                 break;
             case "Icosahedron":
@@ -333,6 +347,8 @@ public class Renderer extends Application {
         // Replace the current solid with the new one
         solidsGroup.getChildren().clear();
         solidsGroup.getChildren().addAll(newSolid.getMeshViews());
+
+        reloadVertices();
 
         // Update the reference
         solid = newSolid;
@@ -456,7 +472,7 @@ public class Renderer extends Application {
                 continue;
             }
             Pair<Integer, Color> color = currentColorList.get(i);
-            if (!isIsolated || (color.getKey() == currentSetIndex + 1 || color.getKey() == -1)) {
+            if (!isIsolated || (color.getKey() == currentSetIndex || color.getKey() == -1)) {
                 solid.getMeshViews().get(i).setMaterial(createMaterial(color.getValue()));
             } else {
                 solid.getMeshViews().get(i).setMaterial(createMaterial(Color.GRAY));
@@ -679,6 +695,37 @@ public class Renderer extends Application {
         if (autoRotateTimer != null) {
             autoRotateTimer.stop();
         }
+    }
+
+    private void handleShowVerticesToggle() {
+        reloadVertices();
+    }
+
+    /**
+     * Loads the vertices by executing the STL loading code.
+     */
+    private void loadVertices() {
+        try {
+            unloadVertices();
+            List<MeshView> stlModels = solid.getVertexMeshObjects();
+            if (stlModels == null) return;
+            for (MeshView stlModel : stlModels) {
+                stlModel.setMaterial(createMaterial(Color.GRAY));
+                solidsGroup.getChildren().add(stlModel);
+                vertexMeshes.add(stlModel); // Add to the vertices list
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to load STL vertices: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Unloads the vertices by removing them from the solidsGroup and clearing the list.
+     */
+    private void unloadVertices() {
+        solidsGroup.getChildren().removeAll(vertexMeshes);
+        vertexMeshes.clear();
     }
 
     public static void main(String[] args) {
