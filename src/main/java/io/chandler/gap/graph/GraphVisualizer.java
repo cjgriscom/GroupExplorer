@@ -3,6 +3,7 @@ package io.chandler.gap.graph;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.scene.layout.Pane;
+import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import org.jgrapht.Graph;
 import org.jgrapht.alg.interfaces.PlanarityTestingAlgorithm;
@@ -38,8 +39,8 @@ import org.json.JSONArray;
 
 public class GraphVisualizer extends Application {
 
-    private static final int WIDTH = 800;
-    private static final int HEIGHT = 600;
+    private static final int WIDTH = 1024;
+    private static final int HEIGHT = 768;
     private static final double NODE_RADIUS = 20;
 
     private String filePath;
@@ -178,7 +179,8 @@ public class GraphVisualizer extends Application {
             positions = computePlanarLayout(embedding);
         }
 
-        // Draw edges
+        // Draw edges and store Line objects in a map for interactivity.
+        Map<DefaultEdge, Line> edgeLineMap = new HashMap<>();
         for (DefaultEdge edge : graph.edgeSet()) {
             int source = graph.getEdgeSource(edge);
             int target = graph.getEdgeTarget(edge);
@@ -186,16 +188,56 @@ public class GraphVisualizer extends Application {
             double[] targetPos = positions.get(target);
 
             Line line = new Line(sourcePos[0], sourcePos[1], targetPos[0], targetPos[1]);
+            edgeLineMap.put(edge, line);
             pane.getChildren().add(line);
         }
 
-        // Draw nodes
+        // Draw nodes with interactive dragging.
+        Map<Integer, Circle> vertexCircleMap = new HashMap<>();
+        Map<Integer, Text> vertexLabelMap = new HashMap<>();
         for (Integer vertex : graph.vertexSet()) {
             double[] pos = positions.get(vertex);
             Circle circle = new Circle(pos[0], pos[1], NODE_RADIUS);
-            Text text = new Text(pos[0] - NODE_RADIUS / 2, pos[1] + NODE_RADIUS / 2, vertex.toString());
+			// translucent black
+			circle.setFill(Color.rgb(0, 0, 0, 0.5));
+            Text text = new Text(pos[0] - NODE_RADIUS/2, pos[1] + NODE_RADIUS/2, vertex.toString());
+            vertexCircleMap.put(vertex, circle);
+            vertexLabelMap.put(vertex, text);
 
-            pane.getChildren().addAll(circle, text);
+            final int v = vertex; // capture vertex id for use in lambdas
+            // Store offset between the mouse position and circle center.
+            circle.setOnMousePressed(e -> {
+                circle.setUserData(new double[] { circle.getCenterX() - e.getSceneX(), 
+                                                     circle.getCenterY() - e.getSceneY() });
+            });
+
+            circle.setOnMouseDragged(e -> {
+                double[] offset = (double[])circle.getUserData();
+                double newX = e.getSceneX() + offset[0];
+                double newY = e.getSceneY() + offset[1];
+                circle.setCenterX(newX);
+                circle.setCenterY(newY);
+                text.setX(newX - NODE_RADIUS/2);
+                text.setY(newY + NODE_RADIUS/2);
+
+                // Update connected edges.
+                for (DefaultEdge edge : graph.edgeSet()) {
+                    int source = graph.getEdgeSource(edge);
+                    int target = graph.getEdgeTarget(edge);
+                    if (source == v) {
+                        Line l = edgeLineMap.get(edge);
+                        l.setStartX(newX);
+                        l.setStartY(newY);
+                    }
+                    if (target == v) {
+                        Line l = edgeLineMap.get(edge);
+                        l.setEndX(newX);
+                        l.setEndY(newY);
+                    }
+                }
+            });
+
+            pane.getChildren().addAll(text, circle);
         }
     }
 
