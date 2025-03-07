@@ -8,6 +8,17 @@ def main():
         print("Error: no edge data provided", file=sys.stderr)
         sys.exit(1)
     edge_data = sys.argv[1]
+    # Default algorithm and seed.
+    algorithm = "planar"
+    seed = 42
+    if len(sys.argv) >= 3:
+        algorithm = sys.argv[2]
+    if len(sys.argv) >= 4:
+        try:
+            seed = int(sys.argv[3])
+        except ValueError:
+            seed = 42
+
     # edge_data format: "u,v;u,v;..."
     G = nx.Graph()
     for edge_str in edge_data.split(";"):
@@ -17,11 +28,20 @@ def main():
                 u = int(parts[0])
                 v = int(parts[1])
                 G.add_edge(u, v)
-    try:
-        pos = nx.planar_layout(G)
-    except Exception as e:
-        # Fallback to spring layout
-        pos = nx.spring_layout(G, seed=42)
+    if algorithm == "planar":
+        try:
+            pos = nx.planar_layout(G)
+        except Exception as e:
+            # Fallback if planar layout fails.
+            pos = nx.spring_layout(G, seed=seed)
+    elif algorithm == "spring":
+        pos = nx.spring_layout(G, seed=seed)
+    else:
+        # Default to planar layout.
+        try:
+            pos = nx.planar_layout(G)
+        except Exception as e:
+            pos = nx.spring_layout(G, seed=seed)
     # Normalize positions so that all coordinates are in [0.1, 0.9]
     min_x = min(p[0] for p in pos.values())
     max_x = max(p[0] for p in pos.values())

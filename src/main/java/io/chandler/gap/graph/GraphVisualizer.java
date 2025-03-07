@@ -17,6 +17,8 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.TextField;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -36,6 +38,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import org.json.JSONObject;
 import org.json.JSONArray;
+import org.jgrapht.alg.isomorphism.VF2GraphIsomorphismInspector;
 
 public class GraphVisualizer extends Application {
 
@@ -44,8 +47,15 @@ public class GraphVisualizer extends Application {
     private static final double NODE_RADIUS = 20;
 
     private String filePath;
-    private List<Graph<Integer, DefaultEdge>> graphPages;
+    private List<String> graphLines;
     private int currentGraphIndex = 0;
+    // Add a map to store edge frequencies; keys are in the form "min-max".
+    private Map<String, Integer> edgeFrequencyMap;
+    private Map<Integer, Integer> vertexFrequencyMap;
+
+    // Add new instance variables for layout configuration:
+    private CheckBox usePlanarCheckBox;
+    private TextField seedTextField;
 
     public static void main(String[] args) {
         if (args.length > 0) {
@@ -58,9 +68,9 @@ public class GraphVisualizer extends Application {
     @Override
     public void start(Stage primaryStage) {
         filePath = getParameters().getRaw().get(0);
-        graphPages = readGraphsFromFile(filePath);
+        graphLines = readGraphLinesFromFile(filePath);
 
-        if (graphPages.isEmpty()) {
+        if (graphLines.isEmpty()) {
             System.out.println("No graphs loaded from the file.");
             return;
         }
@@ -70,13 +80,41 @@ public class GraphVisualizer extends Application {
         Pane graphPane = new Pane();
         root.setCenter(graphPane);
 
+
         // Create the paginator controls.
         Button prevButton = new Button("Previous");
         Button nextButton = new Button("Next");
-        Label pageLabel = new Label("Graph 1 / " + graphPages.size());
+        Label pageLabel = new Label("Graph 1 / " + graphLines.size());
+		
+        // Create layout configuration controls.
+        usePlanarCheckBox = new CheckBox("Use Planar Layout");
+        usePlanarCheckBox.setSelected(true);
+		usePlanarCheckBox.setOnAction((e) -> {
+                updateGraph(graphPane, pageLabel);});
+        seedTextField = new TextField("42");
+		
+		// Add inc/dec arrows
+		
+		seedTextField.setOnKeyReleased(value -> {
+				updateGraph(graphPane, pageLabel);
+		});
+        // You could also limit TextField input to numbers if needed.
+        HBox layoutControls = new HBox(10, usePlanarCheckBox, new Label("Spring Seed:"), seedTextField);
+        layoutControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
+        root.setTop(layoutControls);
 
         HBox paginator = new HBox(10, prevButton, pageLabel, nextButton);
         paginator.setStyle("-fx-padding: 10; -fx-alignment: center;");
+        
+        // Add the "Remove Duplicates" button
+        Button removeDupButton = new Button("Remove Duplicates");
+        removeDupButton.setOnAction(e -> {
+            removeDuplicates();
+            currentGraphIndex = 0;
+            updateGraph(graphPane, pageLabel);
+        });
+        paginator.getChildren().add(removeDupButton);
+
         root.setBottom(paginator);
 
         // Set button actions to update the displayed graph.
@@ -88,7 +126,7 @@ public class GraphVisualizer extends Application {
         });
 
         nextButton.setOnAction(e -> {
-            if (currentGraphIndex < graphPages.size() - 1) {
+            if (currentGraphIndex < graphLines.size() - 1) {
                 currentGraphIndex++;
                 updateGraph(graphPane, pageLabel);
             }
@@ -104,25 +142,24 @@ public class GraphVisualizer extends Application {
     }
 
     /**
-     * Reads the entire file and builds a list of graphs (one per line).
+     * Reads the input file and stores each non-empty line.
      *
-     * @param filePath Path to the file containing the graph data.
-     * @return List of graphs.
+     * @param filePath Path to the file containing graph data.
+     * @return List of input lines.
      */
-    private List<Graph<Integer, DefaultEdge>> readGraphsFromFile(String filePath) {
-        List<Graph<Integer, DefaultEdge>> graphs = new ArrayList<>();
+    private List<String> readGraphLinesFromFile(String filePath) {
+        List<String> lines = new ArrayList<>();
         try (Scanner scanner = new Scanner(new File(filePath))) {
             while (scanner.hasNextLine()) {
                 String line = scanner.nextLine();
-                Graph<Integer, DefaultEdge> graph = buildGraphFromLine(line);
-                if (graph != null) {
-                    graphs.add(graph);
+                if (!line.trim().isEmpty()) {
+                    lines.add(line);
                 }
             }
         } catch (FileNotFoundException e) {
             System.err.println("File not found: " + filePath);
         }
-        return graphs;
+        return lines;
     }
 
     /**
@@ -133,16 +170,25 @@ public class GraphVisualizer extends Application {
      */
     private Graph<Integer, DefaultEdge> buildGraphFromLine(String line) {
         Graph<Integer, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
+        edgeFrequencyMap = new HashMap<>();
+        vertexFrequencyMap = new HashMap<>();
         int[][][] combinedGen = GroupExplorer.parseOperationsArr(line);
         for (int[][] cycle : combinedGen) {
             for (int[] polygon : cycle) {
-                // Add all vertices first.
+                // Add all vertices first and update vertex frequency count.
                 for (int vertex : polygon) {
                     graph.addVertex(vertex);
+                    vertexFrequencyMap.put(vertex, vertexFrequencyMap.getOrDefault(vertex, 0) + 1);
                 }
-                // Add edges to form a complete cycle.
+                // Add edges to form a complete cycle and update edge frequency count.
                 for (int i = 0; i < polygon.length; i++) {
-                    graph.addEdge(polygon[i], polygon[(i + 1) % polygon.length]);
+                    int a = polygon[i];
+                    int b = polygon[(i + 1) % polygon.length];
+                    int min = Math.min(a, b);
+                    int max = Math.max(a, b);
+                    String key = min + "-" + max;
+                    edgeFrequencyMap.put(key, edgeFrequencyMap.getOrDefault(key, 0) + 1);
+                    graph.addEdge(a, b);
                 }
             }
         }
@@ -169,15 +215,9 @@ public class GraphVisualizer extends Application {
             return;
         }
 
-        // Retrieve faces from the embedding using our helper method with getEdgesAround
-        List<List<DefaultEdge>> faces = computeFaces(embedding);
-
         // Compute positions for vertices using networkx via Python.
         Map<Integer, double[]> positions = getNetworkXCoordinates(graph);
-        if (positions == null) {
-            System.out.println("Failed to get coordinates from networkx. Falling back to Tutte's algorithm.");
-            positions = computePlanarLayout(embedding);
-        }
+        
 
         // Draw edges and store Line objects in a map for interactivity.
         Map<DefaultEdge, Line> edgeLineMap = new HashMap<>();
@@ -188,6 +228,19 @@ public class GraphVisualizer extends Application {
             double[] targetPos = positions.get(target);
 
             Line line = new Line(sourcePos[0], sourcePos[1], targetPos[0], targetPos[1]);
+            // Determine frequency for the edge using a canonical key.
+            int min = Math.min(source, target);
+            int max = Math.max(source, target);
+            String key = min + "-" + max;
+            Integer freq = edgeFrequencyMap.get(key);
+            if (freq != null && freq > 1) {
+                line.setStroke(Color.RED);
+                line.setStrokeWidth(2.0);
+            } else {
+                line.setStroke(Color.BLACK);
+                line.setStrokeWidth(1.0);
+            }
+
             edgeLineMap.put(edge, line);
             pane.getChildren().add(line);
         }
@@ -198,8 +251,12 @@ public class GraphVisualizer extends Application {
         for (Integer vertex : graph.vertexSet()) {
             double[] pos = positions.get(vertex);
             Circle circle = new Circle(pos[0], pos[1], NODE_RADIUS);
-			// translucent black
-			circle.setFill(Color.rgb(0, 0, 0, 0.5));
+            // Color the vertex based on its frequency.
+            int freq = vertexFrequencyMap.getOrDefault(vertex, 1);
+			Color color = getVertexColor(freq);
+			// Set opacity
+			color = Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.5);
+            circle.setFill(color);
             Text text = new Text(pos[0] - NODE_RADIUS/2, pos[1] + NODE_RADIUS/2, vertex.toString());
             vertexCircleMap.put(vertex, circle);
             vertexLabelMap.put(vertex, text);
@@ -239,106 +296,6 @@ public class GraphVisualizer extends Application {
 
             pane.getChildren().addAll(text, circle);
         }
-    }
-
-    /**
-     * Computes a planar layout for the graph using Tutte's algorithm.
-     *
-     * @param embedding The planar embedding of the graph.
-     * @return A map of vertex positions.
-     */
-    private Map<Integer, double[]> computePlanarLayout(PlanarityTestingAlgorithm.Embedding<Integer, DefaultEdge> embedding) {
-        Map<Integer, double[]> positions = new HashMap<>();
-        Graph<Integer, DefaultEdge> graph = embedding.getGraph();
- 
-        // Retrieve faces from the embedding using our helper method with getEdgesAround
-        List<List<DefaultEdge>> faces = computeFaces(embedding);
- 
-        // Choose the outer face as the face with the maximum number of distinct vertices
-        List<Integer> outerFaceVertices = null;
-        int maxFaceSize = 0;
-        if (faces != null && !faces.isEmpty()) {
-            for (List<DefaultEdge> face : faces) {
-                List<Integer> verticesInFace = new ArrayList<>();
-                for (DefaultEdge edge : face) {
-                    Integer source = graph.getEdgeSource(edge);
-                    Integer target = graph.getEdgeTarget(edge);
-                    if (!verticesInFace.contains(source)) verticesInFace.add(source);
-                    if (!verticesInFace.contains(target)) verticesInFace.add(target);
-                }
-                if (verticesInFace.size() > maxFaceSize) {
-                    maxFaceSize = verticesInFace.size();
-                    outerFaceVertices = verticesInFace;
-                }
-            }
-        }
- 
-        // Fallback: if no outer face found, use circular layout for all vertices 
-        if (outerFaceVertices == null) {
-            int numVertices = graph.vertexSet().size();
-            double angleIncrement = 2 * Math.PI / numVertices;
-            double radius = Math.min(WIDTH, HEIGHT) / 3;
-            double centerX = WIDTH / 2;
-            double centerY = HEIGHT / 2;
-            int i = 0;
-            for (Integer vertex : graph.vertexSet()) {
-                double angle = i * angleIncrement;
-                double x = centerX + radius * Math.cos(angle);
-                double y = centerY + radius * Math.sin(angle);
-                positions.put(vertex, new double[]{x, y});
-                i++;
-            }
-            return positions;
-        }
- 
-        // Place outer face vertices on a convex polygon (circle)
-        int outerCount = outerFaceVertices.size();
-        double angleIncrement = 2 * Math.PI / outerCount;
-        double outerRadius = Math.min(WIDTH, HEIGHT) / 3;
-        double centerX = WIDTH / 2;
-        double centerY = HEIGHT / 2;
-        for (int i = 0; i < outerCount; i++) {
-            double angle = i * angleIncrement;
-            double x = centerX + outerRadius * Math.cos(angle);
-            double y = centerY + outerRadius * Math.sin(angle);
-            positions.put(outerFaceVertices.get(i), new double[]{x, y});
-        }
- 
-        // Identify interior vertices (vertices not in the outer face)
-        Set<Integer> outerSet = new HashSet<>(outerFaceVertices);
-        List<Integer> interiorVertices = new ArrayList<>();
-        for (Integer vertex : graph.vertexSet()) {
-            if (!outerSet.contains(vertex)) {
-                interiorVertices.add(vertex);
-                // Initialize interior vertices at the center
-                positions.put(vertex, new double[]{centerX, centerY});
-            }
-        }
- 
-        // Iterative relaxation (Tutte's algorithm) for interior vertices
-        int iterations = 500;
-        for (int iter = 0; iter < iterations; iter++) {
-            for (Integer vertex : interiorVertices) {
-                double sumX = 0;
-                double sumY = 0;
-                int count = 0;
-                for (DefaultEdge edge : graph.edgesOf(vertex)) {
-                    Integer neighbor = graph.getEdgeSource(edge).equals(vertex) ?
-                            graph.getEdgeTarget(edge) : graph.getEdgeSource(edge);
-                    double[] neighborPos = positions.get(neighbor);
-                    sumX += neighborPos[0];
-                    sumY += neighborPos[1];
-                    count++;
-                }
-                if (count > 0) {
-                    double newX = sumX / count;
-                    double newY = sumY / count;
-                    positions.put(vertex, new double[]{newX, newY});
-                }
-            }
-        }
- 
-        return positions;
     }
 
     /**
@@ -426,9 +383,9 @@ public class GraphVisualizer extends Application {
      */
     private void updateGraph(Pane graphPane, Label pageLabel) {
         graphPane.getChildren().clear();
-        Graph<Integer, DefaultEdge> currentGraph = graphPages.get(currentGraphIndex);
+        Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(graphLines.get(currentGraphIndex));
         drawPlanarGraph(currentGraph, graphPane);
-        pageLabel.setText("Graph " + (currentGraphIndex + 1) + " / " + graphPages.size());
+        pageLabel.setText("Graph " + (currentGraphIndex + 1) + " / " + graphLines.size());
     }
 
     /**
@@ -453,11 +410,20 @@ public class GraphVisualizer extends Application {
         }
 
         try {
+            // Decide on algorithm using UI controls.
+            String algorithm = usePlanarCheckBox.isSelected() ? "planar" : "spring";
+            String seedArg = seedTextField.getText();
+            if (seedArg.isEmpty()) {
+                seedArg = "42";
+            }
+
             // Build the command, adjust "python3" if necessary.
             List<String> command = new ArrayList<>();
             command.add("python3");
             command.add("networkx_layout.py");
             command.add(edgeData.toString());
+            command.add(algorithm);
+            command.add(seedArg);
 
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(true);
@@ -488,5 +454,49 @@ public class GraphVisualizer extends Application {
             e.printStackTrace();
             return null;
         }
+    }
+
+    /**
+     * Returns a color for a vertex based on its frequency.
+     * Frequencies: 1 -> Light Gray, 2 -> Yellow, 3 -> Orange, and 4 or more -> Red.
+     *
+     * @param frequency The number of times the vertex appears.
+     * @return The chosen Color.
+     */
+    private Color getVertexColor(int frequency) {
+        if (frequency >= 4) {
+            return Color.DARKGREEN;
+        } else if (frequency == 3) {
+            return Color.DARKORANGE;
+        } else if (frequency == 2) {
+            return Color.DARKRED;
+        } else {
+            return Color.BLACK;
+        }
+    }
+
+    /**
+     * Iterates through the stored graph lines and removes duplicates.
+     * Two graphs are considered duplicates if they are isomorphic.
+     */
+    private void removeDuplicates() {
+        List<String> uniqueLines = new ArrayList<>();
+        for (String line : graphLines) {
+            Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(line);
+            boolean duplicate = false;
+            for (String uniqLine : uniqueLines) {
+                Graph<Integer, DefaultEdge> uniqGraph = buildGraphFromLine(uniqLine);
+                VF2GraphIsomorphismInspector<Integer, DefaultEdge> inspector =
+                        new VF2GraphIsomorphismInspector<>(currentGraph, uniqGraph);
+                if (inspector.isomorphismExists()) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                uniqueLines.add(line);
+            }
+        }
+        graphLines = uniqueLines;
     }
 }
