@@ -90,8 +90,214 @@ public class CubicGenerators {
         //doExhaustive3DSearchPI();
 
         //searchSquareVerticesOnPiM24();
-        searchSquareVerticesOnPiPSL2_23();
+        //searchSquareVerticesOnPiPSL2_23();
+        searchSquareVerticesOnDi();
 	}
+
+    private static void searchSquareVerticesOnDi() throws Exception {
+        GapInterface gap = new GapInterface();
+        HashMap<String, Integer> groupNameToCount = new HashMap<>();
+
+        int[] octSrcArray = new int[]{0,1,2,3,4,5,6,7};
+        int nOct = octSrcArray.length;
+    
+        List<int[]> inversionCombinationsOct = Permu.generateCombinations(nOct, nOct/2);
+        inversionCombinationsOct.add(new int[]{});
+
+        int[] cubeSrcArray = new int[]{0,1,2,3,4,5};
+        int nCube = cubeSrcArray.length;
+        List<int[]> inversionCombinationsCube = Permu.generateCombinations(nCube, nCube/2);
+        inversionCombinationsCube.add(new int[]{});
+    
+        // For tracking progress
+        long totalCombinations = inversionCombinationsOct.size() * inversionCombinationsCube.size();
+        long processed = 0;
+        long startTime = System.currentTimeMillis();
+    
+        // Process Set 1 (8 axes)
+        for (int[] inversionsOct : inversionCombinationsOct) {
+            // Create boolean array marking which positions should be inverted
+            boolean[] shouldInvertOct = new boolean[nOct];
+            for (int pos : inversionsOct) {
+                shouldInvertOct[pos] = true;
+            }
+    
+            // Create the first operation with appropriate inversions
+            ArrayList<int[]> operation1 = new ArrayList<>();
+            for (int i = 0; i < nOct; i++) {
+                // TODO permutations based on possible symms
+                int j = octSrcArray[i];
+                int[] axis = DeltoidalIcositetrahedron.cubeVertexToDifaces[j];
+                if (shouldInvertOct[i]) {
+                    operation1.add(CycleInverter.invertArray(axis));
+                } else {
+                    operation1.add(axis);
+                }
+            }
+    
+            // Process Set 2 (6 axes)
+            for (int[] inversionsCube : inversionCombinationsCube) {
+                boolean[] shouldInvertCube = new boolean[nCube];
+                for (int pos : inversionsCube) {
+                    shouldInvertCube[pos] = true;
+                }
+    
+                // Create the second operation with appropriate inversions
+                ArrayList<int[]> operation2 = new ArrayList<>();
+                for (int i = 0; i < nCube; i++) {
+                    int j = cubeSrcArray[i];
+                    int[] axis = DeltoidalIcositetrahedron.cubeFaceToDifaces[j];
+                    if (shouldInvertCube[i]) {
+                        operation2.add(CycleInverter.invertArray(axis));
+                    } else {
+                        operation2.add(axis);
+                    }
+                }
+    
+                // Construct the complete generator
+                Generator newGenerator = new Generator(new int[][][] {
+                    operation1.toArray(new int[0][]),
+                    operation2.toArray(new int[0][])
+                });
+    
+                // Check group size using GAP
+                String groupSize = gap.runGapSizeCommand(newGenerator.toString(), 2).get(1);
+                
+                // Only process results below a certain size threshold
+                if (groupSize.length() <= "244823040".length()) {
+                    String groupName = gap.runGapCommands(newGenerator.toString(), 3).get(2);
+                    groupNameToCount.merge(groupName, 1, Integer::sum);
+                    System.out.println(String.format("Found group: %s [%d/%d inversions] %s", 
+                        groupName, 
+                        inversionsOct.length, 
+                        inversionsCube.length,
+                        newGenerator.toString()));
+                }
+    
+                // Progress tracking
+                processed++;
+                if (processed % 100 == 0) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    long estimatedTotal = (long)((double)elapsed * totalCombinations / processed);
+                    long remaining = estimatedTotal - elapsed;
+                    System.out.println(String.format("Progress: %.2f%% (%d/%d) - ETA: %d min", 
+                        (100.0 * processed / totalCombinations),
+                        processed,
+                        totalCombinations,
+                        remaining / 60000));
+                }
+            }
+        }
+    
+        // Print summary of results
+        System.out.println("\nResults Summary:");
+        for (Entry<String, Integer> e : groupNameToCount.entrySet()) {
+            System.out.println(e.getKey() + ": " + e.getValue());
+        }
+    }
+
+    // Interesting (C2 x C2 x C2 x C2 x C2 x C2 x C2 x C2 x C2 x C2 x C2) : M12: 4
+    private static void searchSquareVerticesOnDi_M12() throws Exception {
+        GapInterface gap = new GapInterface();
+        HashMap<String, Integer> groupNameToCount = new HashMap<>();
+
+        int[] octSrcArray = new int[]{0,1,2,3,4,5,6,7};
+        int nOct = octSrcArray.length;
+    
+        List<int[]> inversionCombinationsOct = Permu.generateCombinations(nOct, nOct/2);
+        inversionCombinationsOct.add(new int[]{});
+
+        int[] cubeSrcArray = new int[]{0,1,3,4};
+        int nCube = cubeSrcArray.length;
+        List<int[]> inversionCombinationsCube = Permu.generateCombinations(nCube, nCube/2);
+        inversionCombinationsCube.add(new int[]{});
+    
+        // For tracking progress
+        long totalCombinations = inversionCombinationsOct.size() * inversionCombinationsCube.size();
+        long processed = 0;
+        long startTime = System.currentTimeMillis();
+    
+        // Process Set 1 (8 axes)
+        for (int[] inversionsOct : inversionCombinationsOct) {
+            // Create boolean array marking which positions should be inverted
+            boolean[] shouldInvertOct = new boolean[nOct];
+            for (int pos : inversionsOct) {
+                shouldInvertOct[pos] = true;
+            }
+    
+            // Create the first operation with appropriate inversions
+            ArrayList<int[]> operation1 = new ArrayList<>();
+            for (int i = 0; i < nOct; i++) {
+                // TODO permutations based on possible symms
+                int j = octSrcArray[i];
+                int[] axis = DeltoidalIcositetrahedron.cubeVertexToDifaces[j];
+                if (shouldInvertOct[i]) {
+                    operation1.add(CycleInverter.invertArray(axis));
+                } else {
+                    operation1.add(axis);
+                }
+            }
+    
+            // Process Set 2 (6 axes)
+            for (int[] inversionsCube : inversionCombinationsCube) {
+                boolean[] shouldInvertCube = new boolean[nCube];
+                for (int pos : inversionsCube) {
+                    shouldInvertCube[pos] = true;
+                }
+    
+                // Create the second operation with appropriate inversions
+                ArrayList<int[]> operation2 = new ArrayList<>();
+                for (int i = 0; i < nCube; i++) {
+                    int j = cubeSrcArray[i];
+                    int[] axis = DeltoidalIcositetrahedron.cubeFaceToDifaces[j];
+                    if (shouldInvertCube[i]) {
+                        operation2.add(CycleInverter.invertArray(axis));
+                    } else {
+                        operation2.add(axis);
+                    }
+                }
+    
+                // Construct the complete generator
+                Generator newGenerator = new Generator(new int[][][] {
+                    operation1.toArray(new int[0][]),
+                    operation2.toArray(new int[0][])
+                });
+    
+                // Check group size using GAP
+                String groupSize = gap.runGapSizeCommand(newGenerator.toString(), 2).get(1);
+                
+                // Only process results below a certain size threshold
+                if (groupSize.length() <= "244823040".length()) {
+                    String groupName = gap.runGapCommands(newGenerator.toString(), 3).get(2);
+                    groupNameToCount.merge(groupName, 1, Integer::sum);
+                    System.out.println(String.format("Found group: %s [%d/%d inversions] %s", 
+                        groupName, 
+                        inversionsOct.length, 
+                        inversionsCube.length,
+                        newGenerator.toString()));
+                }
+    
+                // Progress tracking
+                processed++;
+                if (processed % 100 == 0) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    long estimatedTotal = (long)((double)elapsed * totalCombinations / processed);
+                    long remaining = estimatedTotal - elapsed;
+                    System.out.println(String.format("Progress: %.2f%% (%d/%d) - ETA: %d min", 
+                        (100.0 * processed / totalCombinations),
+                        processed,
+                        totalCombinations,
+                        remaining / 60000));
+                }
+            }
+        }
+    
+        // Print summary of results
+        System.out.println("\nResults Summary:");
+        for (Entry<String, Integer> e : groupNameToCount.entrySet()) {
+            System.out.println(e.getKey() + ": " + e.getValue());
+        }
+    }
 
     private static void searchSquareVerticesOnPiPSL2_23() throws Exception {
         GapInterface gap = new GapInterface();

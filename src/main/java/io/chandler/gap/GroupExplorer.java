@@ -30,6 +30,7 @@ public class GroupExplorer implements AbstractGroupProperties {
     public int nElements;
     public final MemorySettings mem;
     public boolean multithread;
+    public boolean trackPath = false;
 
     public static class Generator {
         byte[][][] generator;
@@ -151,6 +152,10 @@ public class GroupExplorer implements AbstractGroupProperties {
 
     public void setMultithread(boolean multithread) {
         this.multithread = multithread;
+    }
+
+    public void setTrackPath(boolean trackPath) {
+        this.trackPath = trackPath;
     }
 
     public void resetElements(boolean addInitialState) {
@@ -312,7 +317,28 @@ public class GroupExplorer implements AbstractGroupProperties {
         iteration = 0;
     }
 
+    public static class PeekData {
+        public int operation;
+        public State oldState;
+        public State newState;
+        public PeekData(int operation, State oldState, State newState) {
+            this.operation = operation;
+            this.oldState = oldState;
+            this.newState = newState;
+        }
+        public PeekData(State newState) {
+            this.newState = newState;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
     public int iterateExploration(boolean debug, int stateLimit, BiConsumer<List<int[]>, Integer> peekStateAndDepth) {
+        return iterateExploration(debug, stateLimit, false, peekStateAndDepth == null ? null : (x,y) -> {
+            peekStateAndDepth.accept((List<int[]>) x, y);
+        });
+    }
+
+    public int iterateExploration(boolean debug, int stateLimit, boolean peekData, BiConsumer<List<?>, Integer> peekStateAndDepth) {
         int size = stateMap.size() + stateMapIncomplete.size();
         if (debug) System.out.println("Depth: " + iteration + " - " + (size - lastSize) + " - " + size);
         lastSize = size;
@@ -321,17 +347,35 @@ public class GroupExplorer implements AbstractGroupProperties {
         long sizeInit = size;
 
         Set<State> incompleteAdditions;
-        List<int[]> peekList;
+        final List<?> peekList;
+        final List<PeekData> peekDataList;
+        final List<int[]> peekArrList;
         boolean parallelStream;
 
         // Parallelize
         if (multithread && sizeInit > 10000) {
             incompleteAdditions = Collections.synchronizedSet(stateMapTmp);
-            peekList = Collections.synchronizedList(new ArrayList<int[]>());
+            if (peekData) {
+                peekDataList = Collections.synchronizedList(new ArrayList<PeekData>());
+                peekArrList = null;
+                peekList = peekDataList;
+            } else {
+                peekArrList = Collections.synchronizedList(new ArrayList<int[]>());
+                peekDataList = null;
+                peekList = peekArrList;
+            }
             parallelStream = true;
         } else {
             incompleteAdditions = stateMapTmp;
-            peekList = new ArrayList<int[]>();
+            if (peekData) {
+                peekDataList = new ArrayList<PeekData>();
+                peekArrList = null;
+                peekList = peekDataList;
+            } else {
+                peekArrList = new ArrayList<int[]>();
+                peekDataList = null;
+                peekList = peekArrList;
+            }
             parallelStream = false;
         }
 
@@ -356,13 +400,24 @@ public class GroupExplorer implements AbstractGroupProperties {
             stream.forEach((state) -> {
                 int[] currentState = state.state();
 
-                for (int[][] operation : parsedOperations) {
+                for (int i = 0; i < parsedOperations.size(); i++) {
+                    int[][] operation = parsedOperations.get(i);
                     int[] newState = applyOperation(currentState, operation);
                     State s = State.of(newState, nElements, mem);
 
                     if (!stateMapIncomplete.contains(s) && !stateMap.contains(s)) {
                         boolean addedFresh = incompleteAdditions.add(s);
-                        if (addedFresh && peekStateAndDepth != null) peekList.add(newState);
+                        if (addedFresh && peekStateAndDepth != null) {
+                            if (peekData) {
+                                if (trackPath) {
+                                    peekDataList.add(new PeekData(i, state, s));
+                                } else {
+                                    peekDataList.add(new PeekData(s));
+                                }
+                            } else {
+                                peekArrList.add(newState);
+                            }
+                        }
                     }
                 }
             });
@@ -632,8 +687,8 @@ public class GroupExplorer implements AbstractGroupProperties {
         return result;
     }
 
-    public static int[][][] renumberGenerators_fast(int[][][] generators) {
-        int[] newIndices = new int[256]; // Assuming max element is < 256
+    public static int[][][] renumberGenerators_fast(int[][][] generators, int maxElement) {
+        int[] newIndices = new int[maxElement];
         int nextIndex = 1;
         int[][][] result = new int[generators.length][][];
     
@@ -658,6 +713,10 @@ public class GroupExplorer implements AbstractGroupProperties {
         }
     
         return result;
+    }
+
+    public static int[][][] renumberGenerators_fast(int[][][] generators) {
+        return renumberGenerators_fast(generators, 256); // Assuming max element is < 256
     }
 
     // Helper method to convert int[][][] to String (for debugging or display purposes)

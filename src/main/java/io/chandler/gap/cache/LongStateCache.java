@@ -1,7 +1,5 @@
 package io.chandler.gap.cache;
 
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-
 import java.util.AbstractSet;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -21,7 +19,7 @@ public class LongStateCache extends AbstractSet<State> {
     long cvt(int[] state) {
         long value = 0;
         int x = nElements + 1;
-        for (int i = 0; i < elementsToStore; i++) {
+        for (int i = 0; i < elementsToStore && i < state.length; i++) {
             value = value * x + (state[i]);
             //x--;
         }

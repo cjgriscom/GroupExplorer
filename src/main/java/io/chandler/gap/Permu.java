@@ -195,4 +195,35 @@ public class Permu {
         arr[i] = arr[j];
         arr[j] = temp;
     }
+
+    /**
+     * Generates all k-permutations of n elements (nPr).
+     * 
+     * @param n the total number of elements to choose from
+     * @param k the number of elements to arrange
+     * @return a list of integer arrays, each representing a permutation
+     */
+    public static List<int[]> generatePermutations(int n, int k) {
+        List<int[]> permutations = new ArrayList<>();
+        int[] current = new int[k];
+        boolean[] used = new boolean[n];
+        generatePermutationsHelper(n, k, 0, current, used, permutations);
+        return permutations;
+    }
+
+    private static void generatePermutationsHelper(int n, int k, int index, int[] current, boolean[] used, List<int[]> permutations) {
+        if (index == k) {
+            permutations.add(current.clone());
+            return;
+        }
+
+        for (int i = 0; i < n; i++) {
+            if (!used[i]) {
+                used[i] = true;
+                current[index] = i + 1;  // Using 1-based indexing to match existing code
+                generatePermutationsHelper(n, k, index + 1, current, used, permutations);
+                used[i] = false;
+            }
+        }
+    }
 }

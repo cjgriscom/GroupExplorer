@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -36,7 +37,7 @@ public class FullSelectionSearchResults {
             Scanner scanner = new Scanner(System.in);
 
             // Parse the existing results file
-            String filePath = "/home/cjgriscom/Programming/GroupTxt/2024-12-11 2x6 FullSelectionSearch_PI_resize.txt";
+            String filePath = "/home/cjgriscom/Programming/GroupTxt/FSS2x3Short.txt";
             FileReader reader = new FileReader(filePath);
             FullSelectionSearchResults results = FullSelectionSearchResults.parse(reader);
             reader.close();
@@ -110,24 +111,48 @@ public class FullSelectionSearchResults {
 	
     // Map from group size to list of generator entries
     private Map<Integer, List<GeneratorEntry>> results = new TreeMap<>();
-
-
+    
+    private TreeSet<String> axisStructureSet = new TreeSet<>();
+    
 	GapInterface gap;
 
 	public FullSelectionSearchResults() throws IOException {
 		gap = new GapInterface();
 	}
 
+    public Set<String> getAxisStructureSet() {
+        return axisStructureSet;
+    }
+
+    public List<GeneratorEntry> getResultsByAxisStructure(String axisStructure) {
+        ArrayList<GeneratorEntry> entries = new ArrayList<>();
+        for (List<GeneratorEntry> entryList : results.values()) {
+            for (GeneratorEntry entry : entryList) {
+                if (entry.axisStructure.equals(axisStructure)) {
+                    entries.add(entry);
+                }
+            }
+        }
+        return entries;
+    }
+
     // Inner class to hold generator entries
     public static class GeneratorEntry {
         public String generator;
         public int elements;
         public String structureDescription;
+        public String axisStructure;
 
-        public GeneratorEntry(String generator, int elements, String structureDescription) {
+        public GeneratorEntry(String generator, int elements, String structureDescription, String axisStructure) {
             this.generator = generator;
             this.elements = elements;
             this.structureDescription = structureDescription;
+            this.axisStructure = axisStructure;
+
+        }
+
+        public Generator toGenerator() {
+            return new Generator(GroupExplorer.parseOperationsArr(generator));
         }
     }
 
@@ -186,8 +211,19 @@ public class FullSelectionSearchResults {
 				// Clean up the generator string
 				generatorStr = generatorStr.trim();
 
+                // Get the axis structure
+                int[][][] generatorArr = GroupExplorer.parseOperationsArr(generatorStr);
+                int[] axisStructureSrc = new int[generatorArr.length];
+                for (int i = 0; i < generatorArr.length; i++) {
+                    axisStructureSrc[i] = generatorArr[i].length;
+                }
+                Arrays.sort(axisStructureSrc);
+                String axisStructure = Arrays.toString(axisStructureSrc);
+                // Add to the set
+                fullResults.axisStructureSet.add(axisStructure);
+                
 				fullResults.results.get(currentGroupSize)
-						.add(new GeneratorEntry(generatorStr, elements, structureDescription));
+						.add(new GeneratorEntry(generatorStr, elements, structureDescription, axisStructure));
 				actualCount++;
 			} else {
 				// Skip or handle unexpected lines

@@ -22,22 +22,115 @@ import io.chandler.gap.cache.LongStateCache;
 import io.chandler.gap.cache.LongLongStateCache;
 import io.chandler.gap.cache.ParityStateCache;
 import io.chandler.gap.cache.State;
+import io.chandler.gap.render.Cuboctahedron;
 import io.chandler.gap.render.Icosahedron;
+import io.chandler.gap.render.Icosidodecahedron;
 import io.chandler.gap.render.SnubCube;
 import io.chandler.gap.render.SnubDodecahedron;
 
 public class FullSelectionSearch {
 	public static void main(String[] args) throws Exception{
-		runDodecahedralSearch();
-		//runPentagonalIcositrahedralSearch();
+        //runRhombicDodecahedralSearch();
+		//runDodecahedralSearch();
+        //runRhombicTriacontahedralSearch();
+		runPentagonalIcositrahedralSearch();
         //runPentagonalHexecontahedralSearch();
 	}
 
-	public static void runDodecahedralSearch() {
-        int elementsToStore = 5; // Limits the transitivity in results
+
+
+    static FullSelectionSearch getCubeEdgeSearch(boolean considerReverse, boolean reduceMirror) {
+        int elementsToStore = 6; // Limits the transitivity in results
         int maxGroupSize = 95040+2;
+
+        Generator symmG = Generator.combine(new Generator(
+            new int[][] {
+                {1,2,3,4},{7,9,11,5},{8,10,12,6}
+            }), new Generator(
+            new int[][] {
+                {2,7,8,9},{1,6,10,3},{4,5,12,11}
+            }));
+
+        if (reduceMirror) {
+            symmG = Generator.combine(symmG, new Generator(
+                new int[][]{ {12,8}, {5,7}, {2,4}, {9,11} }));
+        }
+
+
+        Cuboctahedron cuboctahedron = new Cuboctahedron();
+
+        FullSelectionSearch search = new FullSelectionSearch(
+            symmG,
+            8,
+            1,
+            (i) -> cuboctahedron.getFaceVertices(i-1),
+            cuboctahedron::getPosOrNegFaceFromGenerator,
+            (generator) -> {
+                // Renumber is important for cache behavior
+                GroupExplorer group = new GroupExplorer(
+                    GroupExplorer.generatorsToString((generator)),
+                    MemorySettings.FASTEST, new ParityStateCache(new LongStateCache(elementsToStore,12)));
+                try {
+                    int iterations = group.exploreStates(false, maxGroupSize, null);
+                    if (iterations <= 0) {
+                        return iterations;
+                    }
+                    
+                } catch (Exception e) {
+                    //System.out.println("Error exploring states: " + e.getMessage());
+                    return -2;
+                }
+                return group.order();
+            });
+
+        return search;
+    }
+
+	public static void runRhombicDodecahedralSearch() {
+
         boolean considerReverse = true;
         boolean reduceMirror = true;
+        FullSelectionSearch search = getCubeEdgeSearch(considerReverse, reduceMirror);
+        
+        System.out.println("Searching for 1,1,1 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(1,1,1), considerReverse, true);
+
+        System.out.println("Searching for 2,1 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(2,1), considerReverse, true);
+
+        System.out.println("Searching for 3,2 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(3,2), considerReverse, true);
+
+        System.out.println("Searching for 4,3 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(4,3), considerReverse, true);
+
+        System.out.println("Searching for 4,2 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(4,2), considerReverse, true);
+
+
+        System.out.println("Searching for 2x2 selections");
+        search.exhaustiveMultiAxisSearch(2, 2, considerReverse, true);
+        System.out.println("Searching for 3x2 selections");
+        search.exhaustiveMultiAxisSearch(3, 2, considerReverse, true);
+
+
+
+        System.out.println("Searching for 2x3 selections");
+        search.exhaustiveMultiAxisSearch(2, 3, considerReverse, true);
+        System.out.println("Searching for 3x3 selections");
+        search.exhaustiveMultiAxisSearch(3, 3, considerReverse, true);
+
+        System.out.println("Searching for 2x4 selections");
+        search.exhaustiveMultiAxisSearch(2, 4, considerReverse, true);
+
+	}
+
+
+
+
+    static FullSelectionSearch getIcosahedralSearch(boolean considerReverse, boolean reduceMirror) {
+        int elementsToStore = 6; // Limits the transitivity in results
+        int maxGroupSize = 95040+2;
 
         Generator symmG = Generator.combine(new Generator(
             new int[][] {
@@ -70,8 +163,8 @@ public class FullSelectionSearch {
             (generator) -> {
                 // Renumber is important for cache behavior
                 GroupExplorer group = new GroupExplorer(
-                    GroupExplorer.generatorsToString(GroupExplorer.renumberGenerators_fast(generator)),
-                    MemorySettings.FASTEST, new ParityStateCache(new LongStateCache(elementsToStore,13)));
+                    GroupExplorer.generatorsToString((generator)),
+                    MemorySettings.FASTEST, new ParityStateCache(new LongStateCache(elementsToStore,12)));
                 try {
                     int iterations = group.exploreStates(false, maxGroupSize, null);
                     if (iterations <= 0) {
@@ -85,51 +178,182 @@ public class FullSelectionSearch {
                 return group.order();
             });
 
-        System.out.println("Searching for 5x4 selections");
-        search.exhaustiveMultiAxisSearch(Arrays.asList(3,3,4,4), considerReverse);
+        return search;
+    }
+
+	public static void runDodecahedralSearch() {
+
+        boolean considerReverse = true;
+        boolean reduceMirror = true;
+        FullSelectionSearch search = getIcosahedralSearch(considerReverse, reduceMirror);
+
+        System.out.println("Searching for misc selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(3, 4), considerReverse, true);
+	
         System.exit(0);
 
         System.out.println("Searching for 3x2 selections");
-        search.exhaustiveMultiAxisSearch(3, 2, considerReverse);
+        search.exhaustiveMultiAxisSearch(3, 2, considerReverse, true);
         System.out.println("Searching for 4x2 selections");
-        search.exhaustiveMultiAxisSearch(4, 2, considerReverse);
+        search.exhaustiveMultiAxisSearch(4, 2, considerReverse, true);
         System.out.println("Searching for 5x2 selections");
-        search.exhaustiveMultiAxisSearch(5, 2, considerReverse);
+        search.exhaustiveMultiAxisSearch(5, 2, considerReverse, true);
         System.out.println("Searching for 6x2 selections");
-        search.exhaustiveMultiAxisSearch(6, 2, considerReverse);
+        search.exhaustiveMultiAxisSearch(6, 2, considerReverse, true);
         System.out.println("Searching for 7x2 selections");
-        search.exhaustiveMultiAxisSearch(7, 2, considerReverse);
+        search.exhaustiveMultiAxisSearch(7, 2, considerReverse, true);
         System.out.println("Searching for 8x2 selections");
-        search.exhaustiveMultiAxisSearch(8, 2, considerReverse);
+        search.exhaustiveMultiAxisSearch(8, 2, considerReverse, true);
         System.out.println("Searching for 9x2 selections");
-        search.exhaustiveMultiAxisSearch(9, 2, considerReverse);
+        search.exhaustiveMultiAxisSearch(9, 2, considerReverse, true);
         System.out.println("Searching for 10x2 selections");
-        search.exhaustiveMultiAxisSearch(10, 2, considerReverse);
+        search.exhaustiveMultiAxisSearch(10, 2, considerReverse, true);
 
         System.out.println("Searching for 2x3 selections");
-        search.exhaustiveMultiAxisSearch(2, 3, considerReverse);
+        search.exhaustiveMultiAxisSearch(2, 3, considerReverse, true);
         System.out.println("Searching for 3x3 selections");
-        search.exhaustiveMultiAxisSearch(3, 3, considerReverse);
+        search.exhaustiveMultiAxisSearch(3, 3, considerReverse, true);
         System.out.println("Searching for 4x3 selections");
-        search.exhaustiveMultiAxisSearch(4, 3, considerReverse);
+        search.exhaustiveMultiAxisSearch(4, 3, considerReverse, true);
         System.out.println("Searching for 5x3 selections");
-        search.exhaustiveMultiAxisSearch(5, 3, considerReverse);
+        search.exhaustiveMultiAxisSearch(5, 3, considerReverse, true);
         System.out.println("Searching for 6x3 selections");
-        search.exhaustiveMultiAxisSearch(6, 3, considerReverse);
+        search.exhaustiveMultiAxisSearch(6, 3, considerReverse, true);
 
         System.out.println("Searching for 2x4 selections");
-        search.exhaustiveMultiAxisSearch(2, 4, considerReverse);
+        search.exhaustiveMultiAxisSearch(2, 4, considerReverse, true);
         System.out.println("Searching for 3x4 selections");
-        search.exhaustiveMultiAxisSearch(3, 4, considerReverse);
+        search.exhaustiveMultiAxisSearch(3, 4, considerReverse, true);
         System.out.println("Searching for 4x4 selections");
-        search.exhaustiveMultiAxisSearch(4, 4, considerReverse);
+        search.exhaustiveMultiAxisSearch(4, 4, considerReverse, true);
         System.out.println("Searching for 5x4 selections");
-        search.exhaustiveMultiAxisSearch(5, 4, considerReverse);
+        search.exhaustiveMultiAxisSearch(5, 4, considerReverse, true);
 
         System.out.println("Searching for 3,3,4 selections");
-        search.exhaustiveMultiAxisSearch(Arrays.asList(3, 3, 4), considerReverse);
+        search.exhaustiveMultiAxisSearch(Arrays.asList(3, 3, 4), considerReverse, true);
+        System.out.println("Searching for 3,3,3,4 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(3, 3, 3, 4), considerReverse, true);
+        System.out.println("Searching for 3,3,3,3,4 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(3, 3, 3, 3, 4), considerReverse, true);
+        System.out.println("Searching for 3,4,4 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(3, 4, 4), considerReverse, true);
+        System.out.println("Searching for 3,3,4,4 selections");
+        search.exhaustiveMultiAxisSearch(Arrays.asList(3, 3, 4, 4), considerReverse, true);
+	}
+
+
+
+    static FullSelectionSearch getDodecahedronEdgeSearch(boolean considerReverse, boolean reduceMirror) {
+        
+        int elementsToStore = 8; // Limits the transitivity in results
+        int maxGroupSize = 443520+2; // TODO M22
+
+        Generator symmG = Generator.combine(new Generator(
+            new int[][] {
+                {1,2,3,4,5},{6,9,20,19,27},
+                {7,13,15,25,28},{26,29,8,16,18},
+                {30,10,12,14,24},{11,17,21,23,22}
+            }), new Generator(
+            new int[][] {
+                {1,6,7,8,9},{2,5,29,10,13},
+                {22,12,20,4,28},{11,16,3,27,30},
+                {26,23,17,15,19},{14,18,25,24,21}
+            }));
+
+        if (reduceMirror) {
+            symmG = Generator.combine(symmG, new Generator(
+                new int[][]{ 
+                    {24,25},{21,18},{17,15},{12,16},
+                    {8,9},{1,7},{5,29},{27,28},
+                    {30,4},{19,23},{11,20},{2,10},
+                    {22,3}
+                }));
+        }
+
+
+        Icosidodecahedron icosidodecahedron = new Icosidodecahedron();
+
+        FullSelectionSearch search = new FullSelectionSearch(
+            symmG,
+            20,
+            1,
+            (i) -> icosidodecahedron.getFaceVertices(i-1),
+            icosidodecahedron::getPosOrNegFaceFromGenerator,
+            (generator) -> {
+                GroupExplorer group = new GroupExplorer(
+                    GroupExplorer.generatorsToString(GroupExplorer.renumberGenerators_fast(generator)),
+                    MemorySettings.FASTEST, new ParityStateCache(new LongStateCache(elementsToStore, 25)));
+
+                group.initIterativeExploration();
+                int iters = -2;
+                
+                while (iters <= 0) {
+                    try {
+                        Set<String> descs = Collections.synchronizedSet(new HashSet<>());
+                        iters = group.iterateExploration(false, maxGroupSize, (states, depth) -> {
+                            if (states.size() > 10000) {
+                                try {
+                                    states.parallelStream().forEach(s -> {
+                                        String desc = GroupExplorer.describeStateForCache(group.nElements, s);
+                                        synchronized(descs) {
+                                            descs.add(desc);
+                                            if (descs.size() > 35) {
+                                                throw new RuntimeException("Too many descriptions");
+                                            }
+                                        }
+                                    });
+                                } catch (Exception e) {
+                                    throw new RuntimeException("Too many descriptions");
+                                }
+                            } else {
+                                for (int[] s : states) {
+                                    
+                                    String desc = GroupExplorer.describeStateForCache(group.nElements, s);
+                                    descs.add(desc);
+                                    if (descs.size() > 35) { // TODO
+                                    
+                                        //System.out.println(desc);
+                                        //System.out.println("Reject due to cycle desc " + desc + " - " + descs.size());
+                                        throw new RuntimeException();
+                                    }
+                                }
+                            }
+                        });
+                        
+                        if (iters == -1) {
+                            //System.out.println("Lapsed");
+                            //System.out.println(GroupExplorer.generatorsToString(generator));
+                            return -1;
+                        }
+                    } catch (Exception e) {
+                        //System.out.println("Exception " + e.getMessage());
+                        //System.out.println("Error exploring states: " + e.getMessage());
+                        return -2;
+                    }
+                }
+                //System.out.println("Order: " + group.order());
+                
+                return group.order();
+            });
+
+        return search;
+    }
+
+	public static void runRhombicTriacontahedralSearch() {
+
+        boolean considerReverse = true;
+        boolean reduceMirror = true;
+        FullSelectionSearch search = getDodecahedronEdgeSearch(considerReverse, reduceMirror);
+        
+        System.out.println("Searching for 2x6 selections");
+        search.exhaustiveMultiAxisSearch(2, 8, considerReverse, true);
+
 
 	}
+
+
+
+
 	public static void runPentagonalHexecontahedralSearch() throws IOException {
         Generator symmG = new Generator(GroupExplorer.parseOperationsArr(PHGenerators.triPHSymmetryF1));
         symmG = Generator.combine(symmG, new Generator(GroupExplorer.parseOperationsArr(PHGenerators.pentPHSymmetryF1)));
@@ -210,7 +434,7 @@ public class FullSelectionSearch {
         
 
         System.out.println("Searching for 3x20 selections");
-        search.exhaustiveMultiAxisSearch(3, 20, considerReverse);
+        search.exhaustiveMultiAxisSearch(3, 20, considerReverse, false);
 
     }
 
@@ -219,11 +443,13 @@ public class FullSelectionSearch {
 
         int elementsToStore = 8; // Limits the transitivity in results
         boolean considerReverse = true;
-        int maxGroupSize = 443520+2; // TODO M22
+
+        int maxGroupSize = 1344+2; // TODO M12
+        //int maxGroupSize = 443520+2; // TODO M22
 
         //int maxGroupSize = 10200960 + 2; // M23
 
-        boolean includeOctahedral = true;
+        boolean includeOctahedral = false;
         boolean forceOctahedral = false;
 
         SnubCube snubCube = new SnubCube();
@@ -263,7 +489,7 @@ public class FullSelectionSearch {
                             } else {
                                 for (int[] s : states) {
                                     
-                                    String desc = GroupExplorer.describeStateForCache(group.nElements, s);
+                                    String desc = GroupExplorer.describeState(group.nElements, s);
                                     descs.add(desc);
                                     if (descs.size() > 35) { // TODO
                                     
@@ -278,13 +504,15 @@ public class FullSelectionSearch {
                         if (iters == -1) {
                             //System.out.println("Lapsed");
                             //System.out.println(GroupExplorer.generatorsToString(generator));
-                            return -1;
+                            return -2;
                         }
+
                     } catch (Exception e) {
                         //System.out.println("Exception " + e.getMessage());
                         //System.out.println("Error exploring states: " + e.getMessage());
                         return -2;
                     }
+
                 }
                 //System.out.println("Order: " + group.order());
                 
@@ -292,8 +520,8 @@ public class FullSelectionSearch {
             });
         
 
-        System.out.println("Searching for 2x6 selections");
-        search.exhaustiveMultiAxisSearch(2, 6, considerReverse);
+        System.out.println("Searching for 2x4 selections");
+        search.exhaustiveMultiAxisSearch(2, 4, considerReverse, false);
 
         //System.out.println("Searching for 2x8 selections");
         //search.exhaustiveMultiAxisSearch(2, 8, considerReverse);
@@ -345,22 +573,147 @@ public class FullSelectionSearch {
     }
 
     /**
+     * Checks if sub is a subset of main - if so it returns the first found
+     * indices of main that align with the subset.  If not, it returns null.
+     * @param main
+     * @param sub
+     * @return
+     */
+    public int[] asSubset(Generator main, Generator sub) {
+        boolean debug = false;
+
+        // Build cache from main that matches the layout of sub
+
+        // Sub lengths are, for example, {4, 3, 3}
+        // Main lengths are, for example, {4, 4, 4, 3, 3, 3}
+
+        FSSCache cache = new FSSCache();
+        int[][] mainAxesSelections = buildAxisSelectionsForCache(main.generator());
+        int[][] subAxesSelections = buildAxisSelectionsForCache(sub.generator());
+
+        // Sort both arrays by their length in reverse order
+        Arrays.sort(mainAxesSelections, (a, b) -> b.length - a.length);
+        Arrays.sort(subAxesSelections, (a, b) -> b.length - a.length);
+
+        if (debug) {
+            System.out.println("Main: " + Arrays.deepToString(mainAxesSelections));
+            System.out.println("Sub: " + Arrays.deepToString(subAxesSelections));
+        }
+        
+        // If the structure of main is {4, 4, 4, 3, 3, 3}, this will contain { 4=3, 4=3 }
+        TreeMap<Integer, Integer> layoutMain = new TreeMap<>(Comparator.reverseOrder());
+        for (int i = 0; i < mainAxesSelections.length; i++) {
+            int key = mainAxesSelections[i].length;
+            layoutMain.putIfAbsent(key, 0);
+            layoutMain.put(key, layoutMain.get(key) + 1);
+        }
+        // If the structure of sub is {4, 3, 3}, this will contain { 4=1, 3=2 }
+        TreeMap<Integer, Integer> layoutSub = new TreeMap<>(Comparator.reverseOrder());
+        for (int i = 0; i < subAxesSelections.length; i++) {
+            int key = subAxesSelections[i].length;
+            layoutSub.putIfAbsent(key, 0);
+            layoutSub.put(key, layoutSub.get(key) + 1);
+        }
+
+        if (debug) {
+            System.out.println("Layout main: " + layoutMain);
+            System.out.println("Layout sub: " + layoutSub);
+        }
+
+        // Cache every permutation of main that matches the layout of sub
+        // We'll have to loop over each unique length, pick int pr(subL, mainL)
+        // So in the example, for the first length 4, it will be nPr(3, 1)
+        //   then for the next length 3 it will be nPr(3, 2)
+
+        // Loop through main
+
+        ArrayList<int[]> permutations = new ArrayList<>();
+        permutations.add(new int[0]); // Initial permutation is empty
+        
+        int mainOffset = 0;
+        for (int mainK : layoutMain.keySet()) {
+            int mainL = layoutMain.get(mainK);
+            Integer subL = layoutSub.get(mainK);
+            if (subL == null) {
+                if (debug) {
+                    System.out.println("No subL for mainL " + mainL);
+                }
+                return null;
+            }
+            if (mainL < subL) {
+                if (debug) {
+                    System.out.println("mainL < subL for mainL " + mainL + " and subL " + subL);
+                }
+                return null;
+            }
+            List<int[]> nPr = Permu.generatePermutations(mainL, subL);
+
+            ArrayList<int[]> newPermutations = new ArrayList<>();
+            // For each existing permutation, add the new indices
+            for (int[] perm : permutations) {
+                for (int[] additional : nPr) {
+                    int[] newPerm = new int[perm.length + subL];
+                    System.arraycopy(perm, 0, newPerm, 0, perm.length);
+                    for (int i = 0; i < subL; i++) {
+                        // The indices returned by nPr don't match the layout of sub
+                        //   so we need to add the mainOffset to each index
+                        newPerm[perm.length + i] = additional[i]-1 + mainOffset;
+                    }
+                    newPermutations.add(newPerm);
+                }
+            }
+            permutations.addAll(newPermutations);
+
+            // Update the indexing offsets
+            mainOffset += mainL;
+        }
+
+        // Now loop through the permutations and add them to the cache
+        for (int[] perm : permutations) {
+            int[][] axisSelectionsForCache = new int[perm.length][];
+            for (int i = 0; i < perm.length; i++) {
+                axisSelectionsForCache[i] = mainAxesSelections[perm[i]];
+            }
+            cache.cacheWithMetadata(axisSelectionsForCache, perm);
+        }
+
+        // Now check if the cache contains the subAxesSelections
+        int[][] match = cache.getMatch(subAxesSelections);
+        if (match != null) {
+            // Convert back to generator
+            int[][][] generator = new int[match.length][][];
+            for (int i = 0; i < match.length; i++) {
+                generator[i] = new int[match[i].length][];
+                for (int j = 0; j < match[i].length; j++) {
+                    generator[i][j] = this.getFaceAboutVertex.apply(Math.abs(match[i][j])).clone();
+                    if (match[i][j] < 0) {
+                        generator[i][j] = reverseArray(generator[i][j]);
+                    }
+                }
+            }
+
+            return (int[]) cache.extractMetadata(match);
+        }
+        return null;
+    }
+
+    /**
      * Helper method to support legacy behavior with nSelections and nAxesPerSelection.
      * It constructs a list with nAxesPerSelection repeated nSelections times.
      */
-    public void exhaustiveMultiAxisSearch(int nSelections, int nAxesPerSelection, boolean considerReverse) {
+    public void exhaustiveMultiAxisSearch(int nSelections, int nAxesPerSelection, boolean considerReverse, boolean useGap) {
         List<Integer> axesPerSelection = new ArrayList<>();
         for (int i = 0; i < nSelections; i++) {
             axesPerSelection.add(nAxesPerSelection);
         }
-        exhaustiveMultiAxisSearch(axesPerSelection, considerReverse);
+        exhaustiveMultiAxisSearch(axesPerSelection, considerReverse, useGap);
     }
     
     /**
      * Accepts a list specifying the number of axes per selection.
      * Example: List {4, 3, 3} selects 10 axes in groups of 4, 3, and 3.
      */
-    public void exhaustiveMultiAxisSearch(List<Integer> axesPerSelection, boolean considerReverse) {        
+    public void exhaustiveMultiAxisSearch(List<Integer> axesPerSelection, boolean considerReverse, boolean useGap) {        
         Map<Integer, List<int[][][]>> results = new TreeMap<>();
         List<Integer> selections = new ArrayList<>();
         FSSCache cache = new FSSCache();
@@ -379,10 +732,7 @@ public class FullSelectionSearch {
 
         exhaustiveMultiAxisSearchRecursive(cache, considerReverse, n, axesPerSelection, selections, results);
 
-        System.out.println("Results without GAP:");
-        printResults(System.out, true, false, results);
-        System.out.println("Results with GAP:");
-        printResults(System.out, true, true, results);
+        printResults(System.out, true, useGap, results);
     }
 
     private void printResults(PrintStream out, boolean printDetails, boolean printGap, Map<Integer, List<int[][][]>> results) {
@@ -429,6 +779,20 @@ public class FullSelectionSearch {
                 out.println();
             }
         }
+    }
+
+    private int[][] buildAxisSelectionsForCache(int[][][] generator) {
+        int[][] axesSelectionsForCache = new int[generator.length][];
+        
+        for (int i = 0; i < generator.length; i++) {
+            int nAxesInGroup = generator[i].length;
+            axesSelectionsForCache[i] = new int[nAxesInGroup];
+            for (int j = 0; j < nAxesInGroup; j++) {
+                int selection = this.getVertexFromFacesReversable.apply(generator[i][j]);
+                axesSelectionsForCache[i][j] = selection;
+            }
+        }
+        return axesSelectionsForCache;
     }
 
     /**
@@ -568,8 +932,9 @@ public class FullSelectionSearch {
         while (it.hasNext()) {
             int i = it.next();
             int[] faces = getFaceAboutVertex.apply(i);
-            if (i <= maxAxisInCurrentGroup ||
-                usedFaces.contains(faces[0]) || usedFaces.contains(faces[1]) || usedFaces.contains(faces[2])) {
+            boolean anyFaceUsed = false;
+            for (int f : faces) anyFaceUsed |= usedFaces.contains(f);
+            if (i <= maxAxisInCurrentGroup || anyFaceUsed) {
                 it.remove();
             }
         }
@@ -598,7 +963,12 @@ public class FullSelectionSearch {
     static class FSSCacheObject {
         byte[] data;
         Integer cachedHashCode;
+        Object metadata;
         public FSSCacheObject(int[][] axes) {
+            this(axes, null);
+        }
+        public FSSCacheObject(int[][] axes, Object metadata) {
+            this.metadata = metadata;
             int length = axes.length;
             for (int[] axis : axes) {
                 length += axis.length;
@@ -662,12 +1032,19 @@ public class FullSelectionSearch {
         public void cache(int[][] axesSelectionsForCache) {
             cache.add(new FSSCacheObject(normalizeAxes(axesSelectionsForCache)));
         }
-    
+
+        public void cacheWithMetadata(int[][] axesSelectionsForCache, Object metadata) {
+            cache.add(new FSSCacheObject(normalizeAxes(axesSelectionsForCache), metadata));
+        }
+        
         public boolean checkContains(int[][] axesSelectionsForCache) {
+            return getMatch(axesSelectionsForCache) != null;
+        }
+        public int[][] getMatch(int[][] axesSelectionsForCache) {
             
             int[][] normalizedAxes = normalizeAxes(axesSelectionsForCache);
             if (cache.contains(new FSSCacheObject(normalizedAxes))) {
-                return true;
+                return normalizedAxes;
             }
 
             int symmSize = axisSymm[0].length;
@@ -682,12 +1059,25 @@ public class FullSelectionSearch {
                     }
                 }
 
-                if (cache.contains(new FSSCacheObject(normalizeAxes(replacementAxes)))) {
-                    return true;
+                int[][] tmpCheck = normalizeAxes(replacementAxes);
+                if (cache.contains(new FSSCacheObject(tmpCheck))) {
+                    return tmpCheck;
                 }
             }
             
-            return false;
+            return null;
+        }
+
+        public Object extractMetadata(int[][] axesSelectionsForCache) {
+            FSSCacheObject tmp = new FSSCacheObject(axesSelectionsForCache);
+            Iterator<FSSCacheObject> it = cache.iterator();
+            while (it.hasNext()) {
+                FSSCacheObject obj = it.next();
+                if (Arrays.equals(obj.data, tmp.data)) {
+                    return obj.metadata;
+                }
+            }
+            return null;
         }
     }
     

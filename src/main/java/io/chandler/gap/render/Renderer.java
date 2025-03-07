@@ -37,8 +37,8 @@ import java.util.List;
  * handling user interactions, and rendering the 3D models.
  */
 public class Renderer extends Application {
-    private static final double SCENE_WIDTH = 1280;
-    private static final double SCENE_HEIGHT = 900;
+    private static final double SCENE_WIDTH = 2000;
+    private static final double SCENE_HEIGHT = 1000;
     private static final double SIDEBAR_WIDTH = 400;
 
     private double anchorX, anchorY, anchorAngleX = 0, anchorAngleY = 0;
