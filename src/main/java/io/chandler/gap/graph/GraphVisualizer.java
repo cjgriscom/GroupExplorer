@@ -7,7 +7,6 @@ import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import org.jgrapht.Graph;
 import org.jgrapht.alg.interfaces.PlanarityTestingAlgorithm;
-import org.jgrapht.alg.planar.BoyerMyrvoldPlanarityInspector;
 import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleGraph;
 import javafx.scene.shape.Circle;
@@ -19,17 +18,25 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.TextField;
+import javafx.scene.control.ComboBox;
+import javafx.stage.FileChooser;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Random;
 import java.util.Scanner;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.Collection;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import io.chandler.gap.GroupExplorer;
 
@@ -39,6 +46,11 @@ import java.io.InputStreamReader;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import org.jgrapht.alg.isomorphism.VF2GraphIsomorphismInspector;
+import org.jgrapht.alg.drawing.IndexedFRLayoutAlgorithm2D;
+import org.jgrapht.alg.drawing.model.Box2D;
+import org.jgrapht.alg.drawing.model.LayoutModel2D;
+import org.jgrapht.alg.drawing.model.MapLayoutModel2D;
+import org.jgrapht.alg.drawing.model.Point2D;
 
 public class GraphVisualizer extends Application {
 
@@ -54,19 +66,21 @@ public class GraphVisualizer extends Application {
     private Map<Integer, Integer> vertexFrequencyMap;
 
     // Add new instance variables for layout configuration:
-    private CheckBox usePlanarCheckBox;
-    private TextField seedTextField;
+    private TextField seedTextField, itersTextField, thetaTextField, normTextField;
+    private ComboBox<String> layoutChoiceBox;
+	private Label numSharedLinesLabel;
 
     public static void main(String[] args) {
         if (args.length > 0) {
             launch(args);
         } else {
-            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudy/m22/6p 3-cycles-6p 3-cycles-filtered.txt" });
+            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudy/m12/quadruple 3-cycles-quadruple 3-cycles-filtered.txt" });
         }
     }
 
     @Override
     public void start(Stage primaryStage) {
+		System.out.println(bFoldsA(new int[] {17,18,19,20}, new int[] {19,18,17}));
         filePath = getParameters().getRaw().get(0);
         graphLines = readGraphLinesFromFile(filePath);
 
@@ -87,19 +101,47 @@ public class GraphVisualizer extends Application {
         Label pageLabel = new Label("Graph 1 / " + graphLines.size());
 		
         // Create layout configuration controls.
-        usePlanarCheckBox = new CheckBox("Use Planar Layout");
-        usePlanarCheckBox.setSelected(true);
-		usePlanarCheckBox.setOnAction((e) -> {
-                updateGraph(graphPane, pageLabel);});
-        seedTextField = new TextField("42");
-		
-		// Add inc/dec arrows
-		
-		seedTextField.setOnKeyReleased(value -> {
+        seedTextField = new TextField("0");
+		itersTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_ITERATIONS));
+		normTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_NORMALIZATION_FACTOR));
+		thetaTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_THETA_FACTOR));
+        numSharedLinesLabel = new Label("Shared Lines: 0");
+                
+		for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField}) {
+			// Set width
+			textField.setPrefWidth(50);
+			textField.setOnKeyReleased(value -> {
 				updateGraph(graphPane, pageLabel);
-		});
-        // You could also limit TextField input to numbers if needed.
-        HBox layoutControls = new HBox(10, usePlanarCheckBox, new Label("Spring Seed:"), seedTextField);
+			});
+		}
+
+        Button randomizeButton = new Button("Randomize");
+        randomizeButton.setOnAction(e -> {
+            seedTextField.setText(String.valueOf(new Random().nextInt(10000)));
+            updateGraph(graphPane, pageLabel);
+        });
+
+        // Add Load button to select a new TXT file.
+        Button loadButton = new Button("Load");
+        loadButton.setOnAction(e -> {
+            FileChooser fileChooser = new FileChooser();
+            fileChooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("Text Files", "*.txt")
+            );
+            File selectedFile = fileChooser.showOpenDialog(primaryStage);
+            if (selectedFile != null) {
+                graphLines = readGraphLinesFromFile(selectedFile.getAbsolutePath());
+                currentGraphIndex = 0;
+                updateGraph(graphPane, pageLabel);
+            }
+        });
+
+
+        layoutChoiceBox = new ComboBox<>();
+        layoutChoiceBox.getItems().addAll("Python Spring", "Python Planar", "Java Spring");
+        layoutChoiceBox.setValue("Java Spring");  // default choice
+        layoutChoiceBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
+        HBox layoutControls = new HBox(10, new Label("Layout:"), layoutChoiceBox, new Label("Seed:"), seedTextField, new Label("Iters:"), itersTextField, new Label("Theta Factor:"), thetaTextField, new Label("Norm Factor:"), normTextField, randomizeButton, loadButton);
         layoutControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
         root.setTop(layoutControls);
 
@@ -113,7 +155,21 @@ public class GraphVisualizer extends Application {
             currentGraphIndex = 0;
             updateGraph(graphPane, pageLabel);
         });
-        paginator.getChildren().add(removeDupButton);
+        // Add the "Remove Folded" button
+        Button removeFoldedButton = new Button("Remove Folded");
+        removeFoldedButton.setOnAction(e -> {
+            // Filter the graphLines list: keep only those that do not have folded polygons.
+            List<String> filteredLines = new ArrayList<>();
+            for (String line : graphLines) {
+                if (!hasFoldedPolygons(line)) {
+                    filteredLines.add(line);
+                }
+            }
+            graphLines = filteredLines;
+            currentGraphIndex = 0;
+            updateGraph(graphPane, pageLabel);
+        });
+        paginator.getChildren().addAll(removeDupButton, removeFoldedButton, numSharedLinesLabel);
 
         root.setBottom(paginator);
 
@@ -201,23 +257,43 @@ public class GraphVisualizer extends Application {
      * @param graph The graph to draw.
      * @param pane  The pane to draw the graph on.
      */
-    private void drawPlanarGraph(Graph<Integer, DefaultEdge> graph, Pane pane) {
-        // Check planarity and get the embedding
-        BoyerMyrvoldPlanarityInspector<Integer, DefaultEdge> inspector = new BoyerMyrvoldPlanarityInspector<>(graph);
-		if (!inspector.isPlanar()) {
-			System.out.println("Graph is not planar (!isPlanar).");
-			return;
-		}
-        PlanarityTestingAlgorithm.Embedding<Integer, DefaultEdge> embedding = inspector.getEmbedding();
+    private void drawPlanarGraph(Graph<Integer, DefaultEdge> graph, Pane pane, String sourceLine, Map<Integer, double[]> positions) {
+        // --- Draw translucent shaded polygons based on source data ---
+        // Parse the source line into a 3D array of polygons.
+        int[][][] polys = GroupExplorer.parseOperationsArr(sourceLine);
+        // Define an array of translucent fill colors for groups.
+        Color[] groupColors = {
+            Color.RED.deriveColor(0, 1, 1, 0.2),
+            Color.BLUE.deriveColor(0, 1, 1, 0.2),
+            Color.GREEN.deriveColor(0, 1, 1, 0.2),
+            Color.ORANGE.deriveColor(0, 1, 1, 0.2)
+        };
 
-        if (embedding == null) {
-            System.out.println("Graph is not planar.");
-            return;
+        // Create a list to hold references to the shaded polygons.
+        final List<ShadedPolygonWrapper> shadedPolygons = new ArrayList<>();
+
+        // Iterate through each group in the source data.
+        for (int g = 0; g < polys.length; g++) {
+            Color fillColor = groupColors[g % groupColors.length];
+            // Each set may consist of multiple polygons.
+            for (int[] polygon : polys[g]) {
+                javafx.scene.shape.Polygon shadedPoly = new javafx.scene.shape.Polygon();
+                // For each vertex in the polygon, add the computed coordinates.
+                for (int vertex : polygon) {
+                    double[] pos = positions.get(vertex);
+                    if (pos != null) {
+                        shadedPoly.getPoints().addAll(pos[0], pos[1]);
+                    }
+                }
+                shadedPoly.setFill(fillColor);
+                shadedPoly.setStroke(null);
+                // Add the polygon to the pane first so it appears beneath nodes/edges.
+                pane.getChildren().add(shadedPoly);
+
+                // Save a wrapper that associates this polygon with its vertex IDs.
+                shadedPolygons.add(new ShadedPolygonWrapper(shadedPoly, polygon));
+            }
         }
-
-        // Compute positions for vertices using networkx via Python.
-        Map<Integer, double[]> positions = getNetworkXCoordinates(graph);
-        
 
         // Draw edges and store Line objects in a map for interactivity.
         Map<DefaultEdge, Line> edgeLineMap = new HashMap<>();
@@ -269,7 +345,7 @@ public class GraphVisualizer extends Application {
             });
 
             circle.setOnMouseDragged(e -> {
-                double[] offset = (double[])circle.getUserData();
+                double[] offset = (double[]) circle.getUserData();
                 double newX = e.getSceneX() + offset[0];
                 double newY = e.getSceneY() + offset[1];
                 circle.setCenterX(newX);
@@ -292,6 +368,9 @@ public class GraphVisualizer extends Application {
                         l.setEndY(newY);
                     }
                 }
+
+                // Update shaded polygons based on current node positions.
+                updateShadedPolygons(vertexCircleMap, shadedPolygons);
             });
 
             pane.getChildren().addAll(text, circle);
@@ -382,22 +461,53 @@ public class GraphVisualizer extends Application {
      * @param pageLabel The Label showing the current page.
      */
     private void updateGraph(Pane graphPane, Label pageLabel) {
-        graphPane.getChildren().clear();
-        Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(graphLines.get(currentGraphIndex));
-        drawPlanarGraph(currentGraph, graphPane);
-        pageLabel.setText("Graph " + (currentGraphIndex + 1) + " / " + graphLines.size());
+        String currentLine = graphLines.get(currentGraphIndex);
+        Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(currentLine);
+        Map<Integer, double[]> positions = getCoordinates(currentGraph);
+
+		if (positions != null) {
+			graphPane.getChildren().clear();
+			pageLabel.setText("Graph " + (currentGraphIndex + 1) + " / " + graphLines.size());
+			drawPlanarGraph(currentGraph, graphPane, currentLine, positions);
+			numSharedLinesLabel.setText("Shared Lines: " + countSharedLines());
+		}
     }
 
+	private int countSharedLines() {
+		int count = 0;
+		for (Map.Entry<String, Integer> entry : edgeFrequencyMap.entrySet()) {
+			if (entry.getValue() > 1) {
+				count += 1;
+			}
+		}
+		return count;
+	}
+
     /**
-     * Uses a Python shell to compute the coordinates of the graph using networkx's planar_layout.
-     * The Python script (networkx_layout.py) must be in your working directory.
-     * 
+     * New method that selects the layout method based on the dropdown.
+     *
      * @param graph The graph to layout.
      * @return A mapping from vertex to (x, y) coordinates scaled to the window size, or null if an error occurs.
      */
-    private Map<Integer, double[]> getNetworkXCoordinates(Graph<Integer, DefaultEdge> graph) {
+    private Map<Integer, double[]> getCoordinates(Graph<Integer, DefaultEdge> graph) {
+        String method = layoutChoiceBox.getValue();
+        if ("Java Spring".equals(method)) {
+            return getJavaSpringCoordinates(graph);
+        } else {
+            String algorithm = method.equals("Python Planar") ? "planar" : "spring";
+            return getPythonCoordinates(graph, algorithm);
+        }
+    }
+
+    /**
+     * Refactor the original networkx method into this new helper for Python-based layouts.
+     *
+     * @param graph The graph to layout.
+     * @param algorithm The layout algorithm to use.
+     * @return A mapping from vertex to (x, y) coordinates scaled to the window size, or null if an error occurs.
+     */
+    private Map<Integer, double[]> getPythonCoordinates(Graph<Integer, DefaultEdge> graph, String algorithm) {
         Map<Integer, double[]> positions = new HashMap<>();
-        // Build edge data string in the format: "u,v;u,v;..."
         StringBuilder edgeData = new StringBuilder();
         for (DefaultEdge edge : graph.edgeSet()) {
             int u = graph.getEdgeSource(edge);
@@ -405,19 +515,13 @@ public class GraphVisualizer extends Application {
             edgeData.append(u).append(",").append(v).append(";");
         }
         if (edgeData.length() > 0) {
-            // Remove trailing semicolon
             edgeData.setLength(edgeData.length() - 1);
         }
-
         try {
-            // Decide on algorithm using UI controls.
-            String algorithm = usePlanarCheckBox.isSelected() ? "planar" : "spring";
             String seedArg = seedTextField.getText();
             if (seedArg.isEmpty()) {
                 seedArg = "42";
             }
-
-            // Build the command, adjust "python3" if necessary.
             List<String> command = new ArrayList<>();
             command.add("python3");
             command.add("networkx_layout.py");
@@ -428,7 +532,6 @@ public class GraphVisualizer extends Application {
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(true);
             Process process = pb.start();
-            
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             StringBuilder output = new StringBuilder();
             String line;
@@ -436,17 +539,12 @@ public class GraphVisualizer extends Application {
                 output.append(line);
             }
             process.waitFor();
-            
-            // Parse the JSON output.
             String jsonString = output.toString();
             JSONObject json = new JSONObject(jsonString);
-            for(String key : json.keySet()) {
+            for (String key : json.keySet()) {
                 JSONArray coords = json.getJSONArray(key);
-                double x = coords.getDouble(0);
-                double y = coords.getDouble(1);
-                // Assume the python output is normalized to [0,1]. Scale up to our pane dimensions:
-                x = x * WIDTH;
-                y = y * HEIGHT;
+                double x = coords.getDouble(0) * WIDTH;
+                double y = coords.getDouble(1) * HEIGHT;
                 positions.put(Integer.parseInt(key), new double[]{x, y});
             }
             return positions;
@@ -498,5 +596,182 @@ public class GraphVisualizer extends Application {
             }
         }
         graphLines = uniqueLines;
+    }
+
+    /**
+     * Updates the points of every shaded polygon wrapper based on the current positions of the corresponding nodes.
+     *
+     * @param vertexCircleMap Map of vertex IDs to their Circle objects.
+     * @param shadedPolys List of wrapped shaded polygons.
+     */
+    private void updateShadedPolygons(Map<Integer, Circle> vertexCircleMap, List<ShadedPolygonWrapper> shadedPolys) {
+        for (ShadedPolygonWrapper wrapper : shadedPolys) {
+            javafx.scene.shape.Polygon poly = wrapper.polygon;
+            poly.getPoints().clear();
+            for (int vertex : wrapper.vertices) {
+                Circle c = vertexCircleMap.get(vertex);
+                if (c != null) {
+                    poly.getPoints().addAll(c.getCenterX(), c.getCenterY());
+                }
+            }
+        }
+    }
+    
+    /**
+     * Helper class that wraps a Polygon along with its source vertex IDs.
+     */
+    private static class ShadedPolygonWrapper {
+        javafx.scene.shape.Polygon polygon;
+        int[] vertices;
+        
+        ShadedPolygonWrapper(javafx.scene.shape.Polygon polygon, int[] vertices) {
+            this.polygon = polygon;
+            this.vertices = vertices;
+        }
+    }
+
+    private boolean hasFoldedPolygons(String line) {
+        int[][][] generator = GroupExplorer.parseOperationsArr(line);
+
+		// For every combination in both orders
+		for (int i = 0; i < generator.length; i++) {
+			for (int j = 0; j < generator.length; j++) {
+				if (j == i) continue;
+				if (hasFoldedPolygon(generator[i], generator[j])) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private boolean hasFoldedPolygon(int[][] listA, int[][] listB) {
+		for (int[] a : listA) {
+			for (int[] b : listB) {
+				if (bFoldsA(a, b)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 *  For every possible pair of numbers in B, confirm if they are adjacent in A.
+	 * Adjacent in A means they are next to each other in the array or at the start and end.
+	 * If there are any pairs in B which are non-adjacent in A, return false.
+	 * @param a
+	 * @param b
+	 * @return
+	 */
+	private boolean bFoldsA(int[] a, int[] b) {
+        // If b has fewer than 2 vertices, nothing to check.
+        if (b == null || b.length < 2) return true;
+        // For every distinct pair in b, check that they appear adjacent in a (cyclically)
+        for (int i = 0; i < b.length; i++) {
+            for (int j = i + 1; j < b.length; j++) {
+				if (i == j) continue;
+                if (containsBoth(a, b[i], b[j]) && !areAdjacent(a, b[i], b[j])) {
+                    return true;
+                }
+            }
+        }
+        return false;
+	}
+
+	/**
+	 * Returns true if both x and y are in the array a.
+	 */
+	private boolean containsBoth(int[] a, int x, int y) {
+		boolean xFound = false, yFound = false;
+		for (int i = 0; i < a.length; i++) {
+			if (a[i] == x) xFound = true;
+			if (a[i] == y) yFound = true;
+		}
+		return xFound && yFound;
+	}
+	
+	/**
+	 * Helper method: returns true if x and y appear adjacent (in either order) in the circular array a.
+	 */
+	private boolean areAdjacent(int[] a, int x, int y) {
+	    for (int i = 0; i < a.length; i++) {
+	        int next = (i + 1) % a.length;
+	        if ((a[i] == x && a[next] == y) || (a[i] == y && a[next] == x)) {
+	            return true;
+	        }
+	    }
+	    return false;
+	}
+
+	private Map<Integer, double[]> getJavaSpringCoordinates_Async(Graph<Integer, DefaultEdge> graph) {
+		Map<Integer, double[]> positions = new HashMap<>();
+		ExecutorService executor = Executors.newFixedThreadPool(1);
+		Future<Map<Integer, double[]>> future = executor.submit(() -> getJavaSpringCoordinates(graph));
+		try {
+			positions = future.get(5, TimeUnit.SECONDS);
+		} catch (InterruptedException | ExecutionException | TimeoutException e) {
+			e.printStackTrace();
+		}
+		executor.shutdownNow();
+		return positions;
+	}
+
+    /**
+     * Uses the JGraphT IndexedFRLayoutAlgorithm2D (a variant of Fruchterman-Reingold) to compute positions.
+     */
+    private Map<Integer, double[]> getJavaSpringCoordinates(Graph<Integer, DefaultEdge> graph) {
+        // Create a layout model; here we use the same WIDTH/HEIGHT as defined.
+        LayoutModel2D<Integer> layoutModel = new MapLayoutModel2D<Integer>(new Box2D(WIDTH*2, HEIGHT*2));
+
+		int iterations;
+		double theta;
+		double normalizationFactor;
+		int seed;
+
+		try {
+			iterations = Integer.parseInt(itersTextField.getText());
+			theta = Double.parseDouble(thetaTextField.getText());
+			normalizationFactor = Double.parseDouble(normTextField.getText());
+			seed = Integer.parseInt(seedTextField.getText());
+		} catch (NumberFormatException e) {
+			e.printStackTrace();
+			return null;
+		}
+
+		if (iterations < 0) iterations = 1;
+		if (normalizationFactor < 0.01) normalizationFactor = 0.01;
+		if (theta < 0.01) theta = 0.01;
+		if (iterations > 10000) iterations = 10000;
+		if (normalizationFactor > 0.99) normalizationFactor = 0.99;
+		if (theta > 0.99) theta = 0.99;
+
+        // Create an instance of the JGraphT force-directed algorithm.
+        IndexedFRLayoutAlgorithm2D<Integer, DefaultEdge> algorithm = new IndexedFRLayoutAlgorithm2D<>(
+			iterations, theta, normalizationFactor, new Random(seed));
+        algorithm.layout(graph, layoutModel);
+
+        Map<Integer, double[]> positions = new HashMap<>();
+        for (Integer vertex : graph.vertexSet()) {
+            Point2D point = layoutModel.get(vertex);
+            positions.put(vertex, new double[]{ point.getX(), point.getY() });
+        }
+
+		// Normalize positions to 0.1*WIDTH and 0.1*HEIGHT to 0.9*WIDTH and 0.9*HEIGHT
+		// Get min max x and y values
+		double minX = Double.MAX_VALUE, maxX = Double.MIN_VALUE;
+		double minY = Double.MAX_VALUE, maxY = Double.MIN_VALUE;
+		for (double[] position : positions.values()) {
+			minX = Math.min(minX, position[0]);
+			maxX = Math.max(maxX, position[0]);
+			minY = Math.min(minY, position[1]);
+			maxY = Math.max(maxY, position[1]);
+		}
+		// Normalize to 0.1*WIDTH and 0.1*HEIGHT to 0.9*WIDTH and 0.9*HEIGHT
+		for (double[] position : positions.values()) {
+			position[0] = (position[0] - minX) / (maxX - minX) * 0.8 * WIDTH + 0.1 * WIDTH;
+			position[1] = (position[1] - minY) / (maxY - minY) * 0.8 * HEIGHT + 0.1 * HEIGHT;
+		}
+        return positions;
     }
 }

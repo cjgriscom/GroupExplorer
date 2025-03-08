@@ -8,6 +8,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -27,11 +28,21 @@ public class M24Generator {
     static final File outDir = new File("m24.gap.states");
     static final File categoryListings = outDir.toPath().resolve("dir.txt").toFile();
 	public static void main(String[] args) throws Exception {
-        Files.createDirectories(outDir.toPath());
+       // Files.createDirectories(outDir.toPath());
 		//GenerateM24(m24States);
 		//categorizeM24States(m24States, outDir);
 
-        List<int[][]> cycles = loadM24CategoryStates("8p 3-cycles");
+        List<int[][]> cycles = loadM24CategoryStates("6p 4-cycles");
+
+
+        // Save these cycles to a file
+        File cyclesFile = new File("PlanarStudy/m24/6p 4-cycles.txt");
+        try (PrintWriter writer = new PrintWriter(cyclesFile)) {
+            for (int[][] cycle : cycles) {
+                writer.println(GroupExplorer.cyclesToNotation(cycle));
+            }
+        }
+        
         System.out.println(cycles.size());
 
 	}

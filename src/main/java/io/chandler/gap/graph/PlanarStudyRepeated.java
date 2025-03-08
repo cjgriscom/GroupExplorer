@@ -1,0 +1,339 @@
+package io.chandler.gap.graph;
+
+import java.io.IOException;
+import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Scanner;
+import java.util.List;
+import java.util.Collections;
+import java.util.Random;
+import java.io.File;
+import java.util.Set;
+
+import org.jgrapht.Graph;
+import org.jgrapht.alg.planar.BoyerMyrvoldPlanarityInspector;
+import org.jgrapht.graph.DefaultEdge;
+import org.jgrapht.graph.SimpleGraph;
+import org.jgrapht.alg.isomorphism.VF2GraphIsomorphismInspector;
+
+import io.chandler.gap.GapInterface;
+import io.chandler.gap.Generators;
+import io.chandler.gap.GroupExplorer;
+import io.chandler.gap.GroupExplorer.MemorySettings;
+
+public class PlanarStudyRepeated {
+
+    public static void main(String[] args) throws IOException {
+        // --------------------------------------------------------
+        // Configuration variables
+        // --------------------------------------------------------
+        boolean requirePlanar = true;
+        // In this experiment we want to generate files and then filter in two stages.
+        boolean generate = true;
+        
+        int order = -1;
+        MemorySettings mem = MemorySettings.COMPACT;
+        
+        // We use two cycle descriptions for the candidate pairs.
+        String[] conj = new String[] {
+            "6p 3-cycles", "6p 3-cycles"
+            // You can change these strings to use different cycle types.
+        };
+        // For phase 1, we use two different files (indices 0 and 1).
+        int[] phase1Indices = new int[]{0, 1};
+
+        String generator = Generators.m22;
+        String groupName = "m22";
+        File root = new File("PlanarStudyMulti/" + groupName);
+        root.mkdirs();
+
+        // --------------------------------------------------------
+        // Generation branch: generate input files if needed.
+        // --------------------------------------------------------
+        if (generate && !generator.equals(Generators.m24)) {
+            boolean multithread = true;
+            PrintStream[] filesOut = new PrintStream[conj.length];
+            for (int i = 0; i < conj.length; i++) {
+                filesOut[i] = new PrintStream(root.getAbsolutePath() + "/" + conj[i] + ".txt");
+            }
+            
+            GroupExplorer g = new GroupExplorer(generator, mem, new HashSet<>(), new HashSet<>(), new HashSet<>(), multithread);
+            Generators.exploreGroup(g, (state, description) -> {
+                for (int i = 0; i < conj.length; i++) {
+                    if (description.equals(conj[i])) {
+                        String cycles = GroupExplorer.stateToNotation(state);
+                        filesOut[i].println(cycles);
+                    }
+                }
+            });
+            order = g.order();
+            
+            // Close the generation files.
+            for (int i = 0; i < conj.length; i++) {
+                filesOut[i].close();
+            }
+        } else {
+            // If not generated then obtain the order from GAP.
+            GapInterface gap = new GapInterface();
+            String orderS = gap.runGapSizeCommand(generator, 2).get(1).trim();
+            System.out.println("Order: " + orderS);
+            order = Integer.parseInt(orderS);
+        }
+        
+        // --------------------------------------------------------
+        // Phase 1: Pair Filtering
+        // --------------------------------------------------------
+        System.out.println("Starting Phase 1: Pair Filtering");
+        // Read lines from the two designated files.
+        List<String> lines1 = new ArrayList<>();
+        File file1 = new File(root.getAbsolutePath() + "/" + conj[phase1Indices[0]] + ".txt");
+        try (Scanner scanner1 = new Scanner(file1)) {
+            while (scanner1.hasNextLine()) {
+                String l = scanner1.nextLine();
+                if (!l.trim().isEmpty()) {
+                    lines1.add(l);
+                }
+            }
+        }
+        Collections.shuffle(lines1, new Random());
+
+        List<String> lines2 = new ArrayList<>();
+        File file2 = new File(root.getAbsolutePath() + "/" + conj[phase1Indices[1]] + ".txt");
+        try (Scanner scanner2 = new Scanner(file2)) {
+            while (scanner2.hasNextLine()) {
+                String l = scanner2.nextLine();
+                if (!l.trim().isEmpty()) {
+                    lines2.add(l);
+                }
+            }
+        }
+        Collections.shuffle(lines2, new Random());
+
+        // instantiate GAP to check group order.
+        GapInterface gap = new GapInterface();
+        
+        // Create a list to save unique candidate pairs.
+        List<int[][][]> candidatePairs = new ArrayList<>();
+        List<Graph<Integer, DefaultEdge>> pairGraphs = new ArrayList<>();
+        PrintStream phase1Out = new PrintStream(root.getAbsolutePath() + "/Phase1Filtered.txt");
+        int found = 0;
+
+        // Nested loops over the two files with early termination support.
+        phase1Loop: for (String l1 : lines1) {
+            int[][][] parsed1 = GroupExplorer.parseOperationsArr(l1);
+            int[][] firstCandidate = parsed1[0]; // use the first generator set from file1.
+            for (String l2 : lines2) {
+                // Check for a key press to allow early termination of Phase 1 filtering.
+                try {
+                    if (System.in.available() > 0) {
+                        System.out.println("Key press detected. Early termination of Phase 1 filtering.");
+                        while (System.in.available() > 0) {
+                            System.in.read();
+                        }
+                        break phase1Loop;
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                int[][][] parsed2 = GroupExplorer.parseOperationsArr(l2);
+                int[][] secondCandidate = parsed2[0]; // use the first generator set from file2.
+                // Combine the two generators into a pair.
+                int[][][] combinedPair = new int[][][]{firstCandidate, secondCandidate};
+                
+                // Check for duplicate polygons (e.g. [1,2,3] vs [2,1,3]).
+                if (hasDuplicatePolygon(combinedPair)) {
+                    continue;
+                }
+                
+                // Check planarity if required.
+                if (requirePlanar && !checkPlanarity(combinedPair)) {
+                    continue;
+                }
+                
+                // Check for isomorphic duplicates.
+                Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair);
+                boolean duplicate = false;
+                for (Graph<Integer, DefaultEdge> g : pairGraphs) {
+                    VF2GraphIsomorphismInspector<Integer, DefaultEdge> inspector =
+                            new VF2GraphIsomorphismInspector<>(candGraph, g);
+                    if (inspector.isomorphismExists()) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate)
+                    continue;
+                else {
+                    String size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
+                    System.out.println("Found new "+(!requirePlanar ? "non-" : "")+"planar graph " + found + " with order " + size);
+                    found++;
+                }
+                
+                candidatePairs.add(combinedPair);
+                pairGraphs.add(candGraph);
+                phase1Out.println(GroupExplorer.generatorsToString(combinedPair));
+            }
+        }
+        phase1Out.close();
+        System.out.println("Phase 1 completed. Unique candidate pairs: " + candidatePairs.size());
+        
+        
+        // --------------------------------------------------------
+        // Phase 2: Triple Candidate Generation
+        // --------------------------------------------------------
+        System.out.println("Starting Phase 2: Triple Candidate Generation");
+        // Construct the output file name according to the original naming scheme.
+        // Here we use the same conj for file1 and file2 and then for the triple, we have:
+        // [conj[phase1Indices[0]]]-[conj[phase1Indices[1]]]-[conj[phase1Indices[1]]]-filtered.txt
+        String tripleFileName = conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase1Indices[1]];
+        PrintStream phase2Out = new PrintStream(root.getAbsolutePath() + "/" + tripleFileName + "-filtered.txt");
+        List<Graph<Integer, DefaultEdge>> tripleGraphs = new ArrayList<>();
+        
+        int tripleCount = 0;
+        // Outer loop: iterate over candidate pairs from Phase 1.
+        for (int i = 0; i < candidatePairs.size(); i++) {
+            int[][][] pairA = candidatePairs.get(i);
+            // Inner loop: iterate over individual lines from file2.
+            outerLoop: for (String l : lines2) {
+                // Key press listener for early termination of the inner loop.
+                try {
+                    if (System.in.available() > 0) {
+                        System.out.println("Key press detected. Early termination of Phase 2 inner loop.");
+                        while (System.in.available() > 0) {
+                            System.in.read();
+                        }
+                        break outerLoop;
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                // Parse the line from file2 and use the second generator (index 1).
+                int[][][] parsedTriple = GroupExplorer.parseOperationsArr(l);
+                int[][] thirdCandidate = parsedTriple[0];
+                // Build the triple candidate.
+                int[][][] tripleCandidate = new int[3][][];
+                tripleCandidate[0] = pairA[0];
+                tripleCandidate[1] = pairA[1];
+                tripleCandidate[2] = thirdCandidate;
+                // Renumber the triple candidate.
+                tripleCandidate = GroupExplorer.renumberGenerators_fast(tripleCandidate, 300);
+                // Check for duplicate polygons in the triple candidate.
+                if (hasDuplicatePolygon(tripleCandidate)) {
+                    continue;
+                }
+                // Use GAP to check the group order now.
+                String size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(tripleCandidate), 2).get(1).trim();
+                if (!size.equals(String.valueOf(order))) {
+                    //System.out.println("Skipping triple candidate due to incorrect group order: " + size);
+                    continue;
+                }
+                // Check planarity if required.
+                if (requirePlanar && !checkPlanarity(GroupExplorer.renumberGenerators_fast(tripleCandidate, 300))) {
+                    //System.out.println("Skipping triple candidate due to non-planarity");
+                    continue;
+                }
+                // Build the graph and ensure it is non-isomorphic with earlier triple candidates.
+                Graph<Integer, DefaultEdge> tripleGraph = buildGraphFromCombinedGen(tripleCandidate);
+                boolean isDuplicate = false;
+                for (Graph<Integer, DefaultEdge> g : tripleGraphs) {
+                    VF2GraphIsomorphismInspector<Integer, DefaultEdge> inspector =
+                            new VF2GraphIsomorphismInspector<>(tripleGraph, g);
+                    if (inspector.isomorphismExists()) {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+                if (isDuplicate) 
+                    continue;
+                else {
+                    System.out.println("Found new "+(!requirePlanar ? "non-" : "")+"planar graph " + found + " with order " + size);
+                    found++;
+                }
+                tripleGraphs.add(tripleGraph);
+                phase2Out.println(GroupExplorer.generatorsToString(tripleCandidate));
+                tripleCount++;
+            }
+            // Completed the inner loop.
+            System.out.println("Completed the inner loop for candidate pair " + i);
+        }
+        phase2Out.close();
+        System.out.println("Phase 2 completed. Unique triple candidates: " + tripleCount);
+    }
+    
+    /**
+     * Checks whether any duplicate polygon appears in the combined generator array.
+     * Two polygons are considered duplicates if their canonical (sorted) representation is equal.
+     */
+    private static boolean hasDuplicatePolygon(int[][][] combinedGen) {
+        Set<String> set = new HashSet<>();
+        for (int[][] cycle : combinedGen) {
+            for (int[] polygon : cycle) {
+                String canon = canonicalPolygon(polygon);
+                if (!set.add(canon)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Computes a canonical representation of a polygon (an int array) by sorting.
+     * This is used in duplicate checks to ignore ordering differences (e.g. [1,2,3] vs [2,1,3]).
+     */
+    private static String canonicalPolygon(int[] polygon) {
+        int[] copy = Arrays.copyOf(polygon, polygon.length);
+        Arrays.sort(copy);
+        return Arrays.toString(copy);
+    }
+    
+    /**
+     * Checks if the graph constructed from combinedGen is planar.
+     *
+     * @param combinedGen A 3D array representing the generators.
+     * @return true if the graph is planar, false otherwise.
+     */
+    public static boolean checkPlanarity(int[][][] combinedGen) {
+        Graph<Integer, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
+        for (int[][] cycle : combinedGen) {
+            for (int[] polygon : cycle) {
+                for (int vertex : polygon) {
+                    graph.addVertex(vertex);
+                }
+                for (int i = 0; i < polygon.length; i++) {
+                    graph.addEdge(polygon[i], polygon[(i + 1) % polygon.length]);
+                }
+            }
+        }
+        BoyerMyrvoldPlanarityInspector<Integer, DefaultEdge> inspector = new BoyerMyrvoldPlanarityInspector<>(graph);
+        return inspector.isPlanar();
+    }
+    
+    /**
+     * Builds a JGraphT graph from a combined generator array.
+     *
+     * @param combinedGen A 3D array representing the generators.
+     * @return A constructed Graph.
+     */
+    public static Graph<Integer, DefaultEdge> buildGraphFromCombinedGen(int[][][] combinedGen) {
+        Graph<Integer, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
+        for (int[][] cycle : combinedGen) {
+            for (int[] polygon : cycle) {
+                for (int vertex : polygon) {
+                    if (!graph.containsVertex(vertex)) {
+                        graph.addVertex(vertex);
+                    }
+                }
+                for (int i = 0; i < polygon.length; i++) {
+                    int v1 = polygon[i], v2 = polygon[(i + 1) % polygon.length];
+                    if (!graph.containsEdge(v1, v2)) {
+                        graph.addEdge(v1, v2);
+                    }
+                }
+            }
+        }
+        return graph;
+    }
+} 
