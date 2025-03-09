@@ -1,6 +1,7 @@
 package io.chandler.gap.graph;
 
 import javafx.application.Application;
+import javafx.beans.binding.When;
 import javafx.scene.Scene;
 import javafx.scene.layout.Pane;
 import javafx.scene.paint.Color;
@@ -20,6 +21,8 @@ import javafx.scene.control.CheckBox;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ComboBox;
 import javafx.stage.FileChooser;
+import javafx.scene.control.TextInputDialog;
+import javafx.scene.control.Slider;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -69,6 +72,20 @@ public class GraphVisualizer extends Application {
     private TextField seedTextField, itersTextField, thetaTextField, normTextField;
     private ComboBox<String> layoutChoiceBox;
 	private Label numSharedLinesLabel;
+    // New checkbox to toggle the display of circles
+    private CheckBox showCirclesCheckBox;
+    // Remove the slider and add a trackball control for full 3D rotation.
+    private Pane trackballPane;
+    // Rotation angles (in radians) around X and Y axes.
+    private double rotationX = 0;
+    private double rotationY = 0;
+    // For tracking mouse movement in the trackball.
+    private double lastMouseX = 0;
+    private double lastMouseY = 0;
+
+    // Variables for caching the base coordinates using a composite key.
+    private String cachedGraphKey = null;
+    private Map<Integer, double[]> cachedBasePositions = new HashMap<>();
 
     public static void main(String[] args) {
         if (args.length > 0) {
@@ -106,6 +123,26 @@ public class GraphVisualizer extends Application {
 		normTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_NORMALIZATION_FACTOR));
 		thetaTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_THETA_FACTOR));
         numSharedLinesLabel = new Label("Shared Lines: 0");
+        // Create a trackball control for full 3D rotation.
+        trackballPane = new Pane();
+        trackballPane.setPrefSize(150, 150);
+        trackballPane.setStyle("-fx-background-color: lightgray; -fx-border-color: black;");
+        // When the user presses the mouse, record the starting position.
+        trackballPane.setOnMousePressed(e -> {
+            lastMouseX = e.getSceneX();
+            lastMouseY = e.getSceneY();
+        });
+        // When dragging, compute the deltas and update rotation angles.
+        trackballPane.setOnMouseDragged(e -> {
+            double deltaX = e.getSceneX() - lastMouseX;
+            double deltaY = e.getSceneY() - lastMouseY;
+            // Adjust these factors to control sensitivity.
+            rotationY += deltaX * 0.01;
+            rotationX += deltaY * 0.01;
+            lastMouseX = e.getSceneX();
+            lastMouseY = e.getSceneY();
+            updateGraph(graphPane, pageLabel);
+        });
                 
 		for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField}) {
 			// Set width
@@ -141,7 +178,10 @@ public class GraphVisualizer extends Application {
         layoutChoiceBox.getItems().addAll("Python Spring", "Python Planar", "Java Spring");
         layoutChoiceBox.setValue("Java Spring");  // default choice
         layoutChoiceBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
-        HBox layoutControls = new HBox(10, new Label("Layout:"), layoutChoiceBox, new Label("Seed:"), seedTextField, new Label("Iters:"), itersTextField, new Label("Theta Factor:"), thetaTextField, new Label("Norm Factor:"), normTextField, randomizeButton, loadButton);
+        // Create the "Show Circles" checkbox. When toggled, updateGraph() is called.
+        showCirclesCheckBox = new CheckBox("Show Circles");
+        showCirclesCheckBox.setSelected(true);
+        HBox layoutControls = new HBox(10, new Label("Layout:"), layoutChoiceBox, new Label("Seed:"), seedTextField, new Label("Iters:"), itersTextField, new Label("Theta Factor:"), thetaTextField, new Label("Norm Factor:"), normTextField, new Label("Trackball:"), trackballPane, showCirclesCheckBox, randomizeButton, loadButton);
         layoutControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
         root.setTop(layoutControls);
 
@@ -155,6 +195,7 @@ public class GraphVisualizer extends Application {
             currentGraphIndex = 0;
             updateGraph(graphPane, pageLabel);
         });
+
         // Add the "Remove Folded" button
         Button removeFoldedButton = new Button("Remove Folded");
         removeFoldedButton.setOnAction(e -> {
@@ -169,7 +210,40 @@ public class GraphVisualizer extends Application {
             currentGraphIndex = 0;
             updateGraph(graphPane, pageLabel);
         });
-        paginator.getChildren().addAll(removeDupButton, removeFoldedButton, numSharedLinesLabel);
+
+        // Add the "Filter Share Lines..." button.
+        Button filterShareButton = new Button("Filter Share Lines...");
+        filterShareButton.setOnAction(e -> {
+            TextInputDialog dialog = new TextInputDialog("");
+			dialog.resizableProperty().set(true);
+			dialog.setWidth(400);
+			dialog.setHeight(200);
+            dialog.setTitle("Filter by Shared Lines");
+            dialog.setHeaderText("Enter the number of shared lines required:");
+            dialog.setContentText("Number:");
+            dialog.showAndWait().ifPresent(input -> {
+                try {
+                    int target = Integer.parseInt(input);
+                    // Filter the graphLines list based on the shared line count.
+                    List<String> filteredLines = new ArrayList<>();
+                    for (String line : graphLines) {
+                        // Calling buildGraphFromLine will update the edgeFrequencyMap.
+                        Graph<Integer, DefaultEdge> tempGraph = buildGraphFromLine(line);
+                        int shared = countSharedLines();
+                        if (shared == target) {
+                            filteredLines.add(line);
+                        }
+                    }
+                    graphLines = filteredLines;
+                    currentGraphIndex = 0;
+                    updateGraph(graphPane, pageLabel);
+                } catch (NumberFormatException ex) {
+                    System.out.println("Invalid number input for filtering shared lines.");
+                }
+            });
+        });
+
+        paginator.getChildren().addAll(removeDupButton, removeFoldedButton, filterShareButton, numSharedLinesLabel);
 
         root.setBottom(paginator);
 
@@ -327,6 +401,7 @@ public class GraphVisualizer extends Application {
         for (Integer vertex : graph.vertexSet()) {
             double[] pos = positions.get(vertex);
             Circle circle = new Circle(pos[0], pos[1], NODE_RADIUS);
+			circle.visibleProperty().bind(showCirclesCheckBox.selectedProperty());
             // Color the vertex based on its frequency.
             int freq = vertexFrequencyMap.getOrDefault(vertex, 1);
 			Color color = getVertexColor(freq);
@@ -378,83 +453,6 @@ public class GraphVisualizer extends Application {
     }
 
     /**
-     * Computes faces from the planar embedding using the cyclic order available via getEdgesAround.
-     *
-     * Each face is traced by following directed edges. A directed edge (u -> v) is marked as visited
-     * so that each face is computed only once.
-     *
-     * @param embedding The planar embedding.
-     * @return A list of faces. Each face is represented as a list of DefaultEdge.
-     */
-    private List<List<DefaultEdge>> computeFaces(PlanarityTestingAlgorithm.Embedding<Integer, DefaultEdge> embedding) {
-        Graph<Integer, DefaultEdge> graph = embedding.getGraph();
-        List<List<DefaultEdge>> faces = new ArrayList<>();
-        Set<String> visitedDirectedEdges = new HashSet<>();
-
-        // Iterate over all vertices
-        for (Integer u : graph.vertexSet()) {
-            List<DefaultEdge> edgesAroundU = embedding.getEdgesAround(u);
-            if (edgesAroundU == null) continue;
-            // For each edge (as a candidate starting directed edge)
-            for (DefaultEdge e : edgesAroundU) {
-                Integer v = graph.getEdgeSource(e).equals(u) ? graph.getEdgeTarget(e) : graph.getEdgeSource(e);
-                String key = u + "->" + v;
-                if (visitedDirectedEdges.contains(key))
-                    continue;
-
-                List<DefaultEdge> faceEdges = new ArrayList<>();
-
-                Integer startU = u;
-                Integer startV = v;
-                Integer currentU = u;
-                Integer currentV = v;
-                DefaultEdge currentEdge = e;
-
-                // Walk around the face until the starting directed edge is encountered again.
-                do {
-                    faceEdges.add(currentEdge);
-                    visitedDirectedEdges.add(currentU + "->" + currentV);
-
-                    // At vertex currentV, get the cyclic order of edges.
-                    List<DefaultEdge> cyclicEdges = embedding.getEdgesAround(currentV);
-                    if (cyclicEdges == null || cyclicEdges.isEmpty())
-                        break;
-
-                    // Find the position of the edge coming from currentU.
-                    int pos = -1;
-                    for (int i = 0; i < cyclicEdges.size(); i++) {
-                        DefaultEdge edge = cyclicEdges.get(i);
-                        if ((graph.getEdgeSource(edge).equals(currentV) && graph.getEdgeTarget(edge).equals(currentU)) ||
-                            (graph.getEdgeTarget(edge).equals(currentV) && graph.getEdgeSource(edge).equals(currentU))) {
-                            pos = i;
-                            break;
-                        }
-                    }
-                    if (pos == -1)
-                        break; // should not happen, but exit if it does
-
-                    // Pick the next edge in the cyclic order.
-                    int nextPos = (pos + 1) % cyclicEdges.size();
-                    DefaultEdge nextEdge = cyclicEdges.get(nextPos);
-
-                    // Determine the next vertex from the current vertex.
-                    Integer nextVertex = graph.getEdgeSource(nextEdge).equals(currentV)
-                            ? graph.getEdgeTarget(nextEdge)
-                            : graph.getEdgeSource(nextEdge);
-
-                    // Move to the next directed edge.
-                    currentU = currentV;
-                    currentV = nextVertex;
-                    currentEdge = nextEdge;
-                } while (!(currentU.equals(startU) && currentV.equals(startV)));
-
-                faces.add(faceEdges);
-            }
-        }
-        return faces;
-    }
-
-    /**
      * Updates the graph pane with the current graph and updates the page label.
      *
      * @param graphPane The Pane used for drawing.
@@ -463,14 +461,69 @@ public class GraphVisualizer extends Application {
     private void updateGraph(Pane graphPane, Label pageLabel) {
         String currentLine = graphLines.get(currentGraphIndex);
         Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(currentLine);
-        Map<Integer, double[]> positions = getCoordinates(currentGraph);
+        Map<Integer, double[]> positions;
+        // Build a composite key based on the current line and all layout parameters.
+        String newCacheKey = currentLine + "_" + seedTextField.getText() + "_" + itersTextField.getText() 
+                             + "_" + thetaTextField.getText() + "_" + normTextField.getText()
+                             + "_" + layoutChoiceBox.getValue();
+        if (cachedGraphKey == null || !cachedGraphKey.equals(newCacheKey)) {
+            cachedBasePositions = getCoordinates(currentGraph);
+            cachedGraphKey = newCacheKey;
+        }
+        // Make a fresh copy of the cached base coordinates.
+        positions = new HashMap<>();
+        for (Map.Entry<Integer, double[]> entry : cachedBasePositions.entrySet()) {
+            double[] coord = entry.getValue();
+            double[] copy = new double[coord.length];
+            System.arraycopy(coord, 0, copy, 0, coord.length);
+            positions.put(entry.getKey(), copy);
+        }
 
-		if (positions != null) {
-			graphPane.getChildren().clear();
-			pageLabel.setText("Graph " + (currentGraphIndex + 1) + " / " + graphLines.size());
-			drawPlanarGraph(currentGraph, graphPane, currentLine, positions);
-			numSharedLinesLabel.setText("Shared Lines: " + countSharedLines());
-		}
+        // If positions are 3D, apply the trackball rotation (using rotationX and rotationY) then re-center.
+        if (!positions.isEmpty()) {
+            int dim = positions.values().iterator().next().length;
+            if (dim == 3) {
+                double angleX = rotationX; // rotation about horizontal axis
+                double angleY = rotationY; // rotation about vertical axis
+                for (Map.Entry<Integer, double[]> entry : positions.entrySet()) {
+                    double[] pos = entry.getValue();
+                    double x = pos[0], y = pos[1], z = pos[2];
+                    // First, rotate around the x-axis:
+                    double y1 = Math.cos(angleX) * y - Math.sin(angleX) * z;
+                    double z1 = Math.sin(angleX) * y + Math.cos(angleX) * z;
+                    // Next, rotate around the y-axis:
+                    double rotatedX = Math.cos(angleY) * x + Math.sin(angleY) * z1;
+                    double rotatedY = y1;
+                    pos[0] = rotatedX;
+                    pos[1] = rotatedY;
+                }
+
+                // Compute the average x and y to center the graph.
+                double sumX = 0, sumY = 0;
+                int count = positions.size();
+                for (double[] pos : positions.values()){
+                    sumX += pos[0];
+                    sumY += pos[1];
+                }
+                double avgX = sumX / count;
+                double avgY = sumY / count;
+
+                // Calculate the translation offset to center the graph in the pane.
+                double offsetX = WIDTH / 2.0 - avgX;
+                double offsetY = HEIGHT / 2.0 - avgY;
+                for (double[] pos : positions.values()){
+                    pos[0] += offsetX;
+                    pos[1] += offsetY;
+                }
+            }
+        }
+        
+        if (positions != null) {
+            graphPane.getChildren().clear();
+            pageLabel.setText("Graph " + (currentGraphIndex + 1) + " / " + graphLines.size());
+            drawPlanarGraph(currentGraph, graphPane, currentLine, positions);
+            numSharedLinesLabel.setText("Shared Lines: " + countSharedLines());
+        }
     }
 
 	private int countSharedLines() {
@@ -544,8 +597,9 @@ public class GraphVisualizer extends Application {
             for (String key : json.keySet()) {
                 JSONArray coords = json.getJSONArray(key);
                 double x = coords.getDouble(0) * WIDTH;
-                double y = coords.getDouble(1) * HEIGHT;
-                positions.put(Integer.parseInt(key), new double[]{x, y});
+                double y = coords.getDouble(1) * WIDTH;
+                double z = coords.getDouble(2) * WIDTH;
+                positions.put(Integer.parseInt(key), new double[]{x, y, z});
             }
             return positions;
         } catch (Exception e) {
@@ -702,19 +756,6 @@ public class GraphVisualizer extends Application {
 	        }
 	    }
 	    return false;
-	}
-
-	private Map<Integer, double[]> getJavaSpringCoordinates_Async(Graph<Integer, DefaultEdge> graph) {
-		Map<Integer, double[]> positions = new HashMap<>();
-		ExecutorService executor = Executors.newFixedThreadPool(1);
-		Future<Map<Integer, double[]>> future = executor.submit(() -> getJavaSpringCoordinates(graph));
-		try {
-			positions = future.get(5, TimeUnit.SECONDS);
-		} catch (InterruptedException | ExecutionException | TimeoutException e) {
-			e.printStackTrace();
-		}
-		executor.shutdownNow();
-		return positions;
 	}
 
     /**

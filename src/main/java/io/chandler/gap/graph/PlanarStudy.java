@@ -35,7 +35,7 @@ public class PlanarStudy {
 		int order = -1;
 		MemorySettings mem = MemorySettings.COMPACT;
 		String[] conj = new String[] {
-			"32p 3-cycles", "30p 3-cycles"
+			"32p 3-cycles", "32p 3-cycles"
 		};
 		int filterCombination0 = 0, filterCombination1 = 1;
 		String generator = Generators.j2;
