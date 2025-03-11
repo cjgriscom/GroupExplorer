@@ -88,19 +88,12 @@ genus again.
 #include <memory.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <emscripten.h>
-
+#include <stdint.h>
 #define leer 255
 
-#ifdef LONG
 #define knoten 128
 #define d_kanten 1024  // maximum number of directed edges
 #define LONGTYPE unsigned __int128
-#else
-#define knoten 64
-#define LONGTYPE unsigned long int
-#define d_kanten 512  // maximum number of directed edges
-#endif
 
 typedef unsigned char GRAPH[knoten + 1][knoten];
 typedef unsigned char ADJAZENZ[knoten + 1];
@@ -146,7 +139,7 @@ LONGTYPE rememberfaces[d_kanten];
 int globalnv, globalne, write = 0, filter = -1, filter2 = -1, filterl = -1,
                         all = 0, edgelimit = 0;
 int filterlarge = 0, compute_lower_bound = 1, do_bfs = 1;
-unsigned long int written = 0UL;
+uint64_t written = 0UL;
 
 int reduce2 = 1;  // May vertices of degree 1 and 2 be reduced ?
 int reconstruct[knoten + 1][4], number_reconstruct;
@@ -216,13 +209,8 @@ void writeset(char name[], LONGTYPE s) {
 
   fprintf(stderr, "%s:", name);
 
-#ifdef LONG
   for (i = 1; i <= 128; i++)
     if (s & bit(i)) fprintf(stderr, " %d", i);
-#else
-  for (i = 1; i <= 64; i++)
-    if (s & bit(i)) fprintf(stderr, " %d", i);
-#endif
 
   fprintf(stderr, "\n");
 }
@@ -484,7 +472,7 @@ int lese_multicode(unsigned char **code, int *codelaenge, FILE *fil)
     if ((a == '>') && (b == 'm')) /*garantiert header*/
     {
       gepuffert = 0;
-      while ((ucharpuffer = getc(fil)) != '<');
+      while ((ucharpuffer = getc(fil)) != '<') {}
       /* noch zweimal: */ ucharpuffer = getc(fil);
       if (ucharpuffer != '<') {
         fprintf(stderr, "Problems with header -- single '<'\n");
@@ -1376,7 +1364,7 @@ void rec_genus_max(KANTE edgelist[], LONGTYPE bit_edgelist[], int ell,
   /* When maxgenus is reached we only check for edges that cannot be embedded:
    */
 
-  if ((last->faceleft == last->invers->faceleft))
+  if (last->faceleft == last->invers->faceleft)
     i = MIN0(last - edgelist + 2);
   else
     i = 0;
@@ -1474,7 +1462,7 @@ void rec_genus(KANTE edgelist[], LONGTYPE bit_edgelist[], int ell, int genus,
 
   if (ell < edgelimit)  // that is: "close" to the leaves
   {
-    if ((last->faceleft == last->invers->faceleft))
+    if (last->faceleft == last->invers->faceleft)
       i = MIN0(last - edgelist + 2);
     else
       i = 0;
@@ -1778,10 +1766,21 @@ double compute_fractions(GRAPH graph, ADJAZENZ adj)
 // computes an upper bound for the number of faces via fractions 1/k for edges
 // which require a face of length at least k
 {
+
   int knotenzahl, i, j, k, start, end, buffer;
   double facebound1, facebound2;
   int lengtharray[d_kanten], sizes[d_kanten], max, ll;
-  int sizes_aroundvertex[knoten + 1][d_kanten], max_a[knoten + 1];
+  int *sizes_aroundvertex[knoten + 1];
+  int max_a[knoten + 1];
+
+  // Allocate memory for sizes_aroundvertex
+  for (i = 0; i <= knoten; i++) {
+    sizes_aroundvertex[i] = (int *)malloc(d_kanten * sizeof(int));
+    if (sizes_aroundvertex[i] == NULL) {
+      fprintf(stderr, "Memory allocation failed for sizes_aroundvertex[%d]\n", i);
+      exit(1);
+    }
+  }
 
   knotenzahl = graph[0][0];
   for (i = 1; i <= knotenzahl; i++) {
@@ -1789,8 +1788,8 @@ double compute_fractions(GRAPH graph, ADJAZENZ adj)
   }
   max = 1;
 
-  for (start = 1; start < knotenzahl; start++)
-    for (j = 0; j < adj[start]; j++)
+  for (start = 1; start < knotenzahl; start++) {
+    for (j = 0; j < adj[start]; j++) {
       if ((end = graph[start][j]) > start) {
         buffer = getshortestdpath(graph, adj, start, end);
 #ifdef TEST
@@ -1801,23 +1800,28 @@ double compute_fractions(GRAPH graph, ADJAZENZ adj)
             sizes_aroundvertex[start][i] = 0;
           max_a[start] = buffer;
           sizes_aroundvertex[start][buffer] = 1;
-        } else
+        } else {
           (sizes_aroundvertex[start][buffer])++;
+        }
         if (buffer > max_a[end]) {
           for (i = max_a[end] + 1; i < buffer; i++)
             sizes_aroundvertex[end][i] = 0;
           max_a[end] = buffer;
           sizes_aroundvertex[end][buffer] = 1;
-        } else
+        } else {
           (sizes_aroundvertex[end][buffer])++;
+        }
 
         if (buffer > max) {
           for (i = max + 1; i < buffer; i++) sizes[i] = 0;
           max = buffer;
           sizes[max] = 2;
-        } else
+        } else {
           sizes[buffer] += 2;
+        }
       }
+    }
+  }
 
   // fprintf(stderr,"sum= %lf\n", sum);
 
@@ -1848,10 +1852,10 @@ double compute_fractions(GRAPH graph, ADJAZENZ adj)
   facebound2 = 0.0;
   for (start = 1; start <= knotenzahl; start++)
     if (adj[start]) {
-      for (j = 2; (sizes_aroundvertex[start][j] == 0); j++);  // searches min
-      if (j == max_a[start])
+      for (j = 2; sizes_aroundvertex[start][j] == 0; j++);  // searches min
+      if (j == max_a[start]) {
         facebound2 += ((double)sizes_aroundvertex[start][j]) / ((double)j);
-      else {
+      } else {
         facebound2 += ((double)(sizes_aroundvertex[start][j] - 1)) /
                       ((double)j);  // one less for the smallest
         for (j++; j < max_a[start]; j++)
@@ -1864,6 +1868,11 @@ double compute_fractions(GRAPH graph, ADJAZENZ adj)
 #ifdef TEST
   stupidtestfractions(graph, adj);
 #endif
+
+  // Free allocated memory
+  for (i = 0; i <= knoten; i++) {
+    free(sizes_aroundvertex[i]);
+  }
 
   if (facebound2 > facebound1)
     return facebound1;
@@ -2019,6 +2028,9 @@ void usage(char name[]) {
           "L: \t write an unsigned char 255 on stdout each time work on a new "
           "graph is started.\n");
   fprintf(stderr,
+          "N: \t write an unsigned char 255 and then a char representing the "
+          "genus number on stdout each a graph is finished.\n");
+  fprintf(stderr,
           "\t In combination with the output of codes this can be used to "
           "decide when codes\n");
   fprintf(stderr, "\t for a new graph are output.\n");
@@ -2047,7 +2059,7 @@ void sort(unsigned char list[], int length)
 // FFSL should be a processor instruction and fast
 {
   int i;
-  unsigned long int small = 0UL, large = 0UL;
+  uint64_t small = 0UL, large = 0UL;
 
   for (i = 0; i < length; i++) {
     if (list[i] <= 64)
@@ -2122,23 +2134,18 @@ int bfsnum(GRAPH gr, ADJAZENZ adj, GRAPH newgr, ADJAZENZ newadj)
 
 /**************MAIN****************************/
 
-EMSCRIPTEN_KEEPALIVE
-int main(argc, argv)
-
-int argc;
-char *argv[];
-
+int main(int argc, char *argv[])
 {
   GRAPH graph, newgraph;
   ADJAZENZ adj, newadj;
   int zaehlen;
   unsigned char *code = NULL;
-  int i, codelaenge, write_separator = 0;
+  int i, codelaenge, write_separator = 0, write_genus = 0;
   int genus, larger = 0;
   int list[100] = {0};
 
-  if (sizeof(unsigned long int) != 8) {
-    fprintf(stderr, "Expected 64 bit for unsigned long int -- exit!\n");
+  if (sizeof(uint64_t) != 8) {
+    fprintf(stderr, "Expected 64 bit for uint64_t -- exit!\n");
     exit(1);
   }
 
@@ -2157,6 +2164,8 @@ char *argv[];
       do_bfs = 0;
     } else if (argv[i][0] == 'L') {
       write_separator = 1;
+    } else if (argv[i][0] == 'N') {
+      write_genus = 1;
     } else if (argv[i][0] == 'w') {
       write = 1;
       if (argv[i][1] == 'a') {
@@ -2208,9 +2217,9 @@ char *argv[];
     // fprintf(stderr,"zaehlen=%d\n",zaehlen);
     decodiere(code, graph, adj, codelaenge);
     // fprintf(stderr,"Graph Nr. %d\n",zaehlen); schreibegraph(graph,adj);
-    if (globalnv < 3)
+    if (globalnv < 3) {
       genus = smallgenus(globalnv);
-    else {
+    } else {
       if (do_bfs) {
         if (bfsnum(graph, adj, newgraph, newadj)) {
           genus = get_genus(newgraph, newadj);
@@ -2232,6 +2241,10 @@ char *argv[];
             fwrite(code, sizeof(unsigned char), codelaenge, stdout);
         }
       }
+    }
+    if (write_genus) {
+      putchar(255);
+      putchar(genus);
     }
   }
 
@@ -2261,7 +2274,7 @@ char *argv[];
   }
 
   if (write || (filter >= 0) || (filter2 >= 0))
-    fprintf(stderr, "Wrote %lu embeddings.\n", written);
+    fprintf(stderr, "Wrote %llu embeddings.\n", written);
 
   return (0);
 }
