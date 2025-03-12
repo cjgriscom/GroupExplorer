@@ -38,15 +38,15 @@ public class AxisConstrainedLayout {
     }
 
     /**
-     * A small helper class to hold triangle parameters.
-     * For each triangle we store offsetAlongAxis, scale, rotation.
+     * A small helper class to hold polygon parameters.
+     * For each polygon we store offsetAlongAxis, scale, rotation.
      */
-    public static class TriangleParams {
+    public static class PolygonParams {
         public double offset;    // distance from origin along the axis
-        public double scale;     // scale factor of the triangle
+        public double scale;     // scale factor of the polygon
         public double rotation;  // rotation in the plane perpendicular to the axis
 
-        public TriangleParams(double offset, double scale, double rotation) {
+        public PolygonParams(double offset, double scale, double rotation) {
             this.offset = offset;
             this.scale = scale;
             this.rotation = rotation;
@@ -71,15 +71,15 @@ public class AxisConstrainedLayout {
      */
     public static LayoutResult computeLayout(
             Graph mergedVertices,
-            int nTriangles1,
-            int nTriangles2,
+            int nPolygons1, int verticesPerPolygon1,
+            int nPolygons2, int verticesPerPolygon2,
             int iterations,
             Random random,
             double scale // global scale factor
     ) {
 
         // --------------------------------------------------------------------
-        // 1) Set up data structures: two 3D axes and per-triangle parameters.
+        // 1) Set up data structures: two 3D axes and per-polygon parameters.
         // --------------------------------------------------------------------
         double[] axis1 = randomDirection(random);
         // Fix axis1 and restrict axis2 to one degree of freedom (axis2 lies in the plane perpendicular to axis1)
@@ -91,29 +91,32 @@ public class AxisConstrainedLayout {
         double[] axis2AngleHolder = new double[]{ random.nextDouble() * 2 * Math.PI };
         axis2 = computeAxis2FromAngle(axis2AngleHolder[0], e0, e1);
 
-        TriangleParams[] triParams1 = new TriangleParams[nTriangles1];
-        for (int i = 0; i < nTriangles1; i++) {
-            triParams1[i] = new TriangleParams(
+        // Initialize per-polygon parameters.
+        PolygonParams[] polyParams1 = new PolygonParams[nPolygons1];
+        for (int i = 0; i < nPolygons1; i++) {
+            polyParams1[i] = new PolygonParams(
                     random.nextDouble() * 2 - 1,              // offset
-                    1.0,                                     // initial scale = 1.0
-                    random.nextDouble() * 2 * Math.PI        // rotation in [0,2π)
+                    1.0,                                      // initial scale = 1.0
+                    random.nextDouble() * 2 * Math.PI         // rotation in [0,2π)
             );
         }
-        TriangleParams[] triParams2 = new TriangleParams[nTriangles2];
-        for (int i = 0; i < nTriangles2; i++) {
-            triParams2[i] = new TriangleParams(
+        PolygonParams[] polyParams2 = new PolygonParams[nPolygons2];
+        for (int i = 0; i < nPolygons2; i++) {
+            polyParams2[i] = new PolygonParams(
                     random.nextDouble() * 2 - 1,
                     1.0,
                     random.nextDouble() * 2 * Math.PI
             );
         }
 
-        // Map from triangle index to the three vertex IDs.
-        // Group 1: triangle 0 => vertices (1,2,3), triangle 1 => vertices (4,5,6), etc.
-        Map<Integer, int[]> triangleToVerticesMap1 = buildTriangleToVertexMap(1, nTriangles1);
-        // Group 2 vertices start after group 1, i.e. at 3*nTriangles1+1.
-        int startIdx2 = 3 * nTriangles1 + 1;
-        Map<Integer, int[]> triangleToVerticesMap2 = buildTriangleToVertexMap(startIdx2, nTriangles2);
+        // Map from polygon (previously triangle) index to the vertex IDs.
+        Map<Integer, int[]> polygonToVerticesMap1 = buildPolygonToVertexMap(1, nPolygons1, verticesPerPolygon1);
+        int startIdx2 = verticesPerPolygon1 * nPolygons1 + 1;
+        Map<Integer, int[]> polygonToVerticesMap2 = buildPolygonToVertexMap(startIdx2, nPolygons2, verticesPerPolygon2);
+
+        // Get local shapes for each group.
+        double[][] local2DGroup1 = getDefaultLocal2DPolygon(verticesPerPolygon1);
+        double[][] local2DGroup2 = getDefaultLocal2DPolygon(verticesPerPolygon2);
 
         // We will update vertex positions in each iteration.
         Map<Integer, double[]> vertexPositions = new HashMap<>();
@@ -125,20 +128,20 @@ public class AxisConstrainedLayout {
         for (int iter = 0; iter < iterations; iter++) {
 
             // (a) Compute vertex positions from the current parameters.
-            for (int t = 0; t < nTriangles1; t++) {
-                int[] vIDs = triangleToVerticesMap1.get(t);
-                TriangleParams tp = triParams1[t];
-                for (int i = 0; i < 3; i++) {
-                    double[] pos = computeVertexPositionOnAxis(axis1, tp, i, scale);
+            for (int t = 0; t < nPolygons1; t++) {
+                int[] vIDs = polygonToVerticesMap1.get(t);
+                PolygonParams pp = polyParams1[t];
+                for (int i = 0; i < verticesPerPolygon1; i++) {
+                    double[] pos = computePolygonVertexPositionOnAxis(axis1, pp, i, scale, local2DGroup1);
                     vertexPositions.put(vIDs[i], pos);
                 }
             }
             double[] currentAxis2 = computeAxis2FromAngle(axis2AngleHolder[0], e0, e1);
-            for (int t = 0; t < nTriangles2; t++) {
-                int[] vIDs = triangleToVerticesMap2.get(t);
-                TriangleParams tp = triParams2[t];
-                for (int i = 0; i < 3; i++) {
-                    double[] pos = computeVertexPositionOnAxis(currentAxis2, tp, i, scale);
+            for (int t = 0; t < nPolygons2; t++) {
+                int[] vIDs = polygonToVerticesMap2.get(t);
+                PolygonParams pp = polyParams2[t];
+                for (int i = 0; i < verticesPerPolygon2; i++) {
+                    double[] pos = computePolygonVertexPositionOnAxis(currentAxis2, pp, i, scale, local2DGroup2);
                     vertexPositions.put(vIDs[i], pos);
                 }
             }
@@ -147,25 +150,27 @@ public class AxisConstrainedLayout {
             double costBefore = computeConnectivityCost(mergedVertices, vertexPositions);
 
             // (c) Perform local parameter search.
-            localParameterSearchRestricted(random, axis1, e0, e1, axis2AngleHolder, triParams1, triParams2, mergedVertices,
-                    triangleToVerticesMap1, triangleToVerticesMap2, scale);
+            localParameterSearchRestricted(random, axis1, e0, e1, axis2AngleHolder,
+                    polyParams1, polyParams2, mergedVertices,
+                    polygonToVerticesMap1, polygonToVerticesMap2, scale,
+                    verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
 
             // Recompute vertex positions after the local changes.
-            for (int t = 0; t < nTriangles1; t++) {
-                int[] vIDs = triangleToVerticesMap1.get(t);
-                for (int i = 0; i < 3; i++) {
-                    vertexPositions.put(vIDs[i], computeVertexPositionOnAxis(axis1, triParams1[t], i, scale));
+            for (int t = 0; t < nPolygons1; t++) {
+                int[] vIDs = polygonToVerticesMap1.get(t);
+                for (int i = 0; i < verticesPerPolygon1; i++) {
+                    vertexPositions.put(vIDs[i], computePolygonVertexPositionOnAxis(axis1, polyParams1[t], i, scale, local2DGroup1));
                 }
             }
-            for (int t = 0; t < nTriangles2; t++) {
-                int[] vIDs = triangleToVerticesMap2.get(t);
-                for (int i = 0; i < 3; i++) {
-                    vertexPositions.put(vIDs[i], computeVertexPositionOnAxis(currentAxis2, triParams2[t], i, scale));
+            for (int t = 0; t < nPolygons2; t++) {
+                int[] vIDs = polygonToVerticesMap2.get(t);
+                for (int i = 0; i < verticesPerPolygon2; i++) {
+                    vertexPositions.put(vIDs[i], computePolygonVertexPositionOnAxis(currentAxis2, polyParams2[t], i, scale, local2DGroup2));
                 }
             }
             costAfter = computeConnectivityCost(mergedVertices, vertexPositions);
 
-            // (d) If the cost did not improve substantially, break early.
+            // (d) Exit early if the cost did not improve substantially.
             if (Math.abs(costBefore - costAfter) < THRESHOLD) {
                 break;
             }
@@ -174,17 +179,17 @@ public class AxisConstrainedLayout {
         // --------------------------------------------------------------------
         // 3) Finalize: recompute positions and normalize the final axis directions.
         // --------------------------------------------------------------------
-        for (int t = 0; t < nTriangles1; t++) {
-            int[] vIDs = triangleToVerticesMap1.get(t);
-            for (int i = 0; i < 3; i++) {
-                vertexPositions.put(vIDs[i], computeVertexPositionOnAxis(axis1, triParams1[t], i, scale));
+        for (int t = 0; t < nPolygons1; t++) {
+            int[] vIDs = polygonToVerticesMap1.get(t);
+            for (int i = 0; i < verticesPerPolygon1; i++) {
+                vertexPositions.put(vIDs[i], computePolygonVertexPositionOnAxis(axis1, polyParams1[t], i, scale, local2DGroup1));
             }
         }
         double[] finalAxis2 = computeAxis2FromAngle(axis2AngleHolder[0], e0, e1);
-        for (int t = 0; t < nTriangles2; t++) {
-            int[] vIDs = triangleToVerticesMap2.get(t);
-            for (int i = 0; i < 3; i++) {
-                vertexPositions.put(vIDs[i], computeVertexPositionOnAxis(finalAxis2, triParams2[t], i, scale));
+        for (int t = 0; t < nPolygons2; t++) {
+            int[] vIDs = polygonToVerticesMap2.get(t);
+            for (int i = 0; i < verticesPerPolygon2; i++) {
+                vertexPositions.put(vIDs[i], computePolygonVertexPositionOnAxis(finalAxis2, polyParams2[t], i, scale, local2DGroup2));
             }
         }
 
@@ -248,40 +253,27 @@ public class AxisConstrainedLayout {
      * 4. The triangle is scaled and rotated, then embedded in the plane perpendicular to the axis.
      * </p>
      */
-    private static double[] computeVertexPositionOnAxis(double[] axis, TriangleParams tp, int i, double globalScale) {
-        // Center of the triangle along the axis.
-        double[] center = new double[]{axis[0] * tp.offset, axis[1] * tp.offset, axis[2] * tp.offset};
+    private static double[] computePolygonVertexPositionOnAxis(double[] axis, PolygonParams pp, int i, double globalScale, double[][] local2D) {
+        // Center of the polygon along the axis.
+        double[] center = new double[]{axis[0] * pp.offset, axis[1] * pp.offset, axis[2] * pp.offset};
 
-        // Define local coordinates for a centered equilateral triangle.
-        // Original vertices for an equilateral triangle: (0,0), (1,0), (0.5, sqrt(3)/2)
-        // Its centroid is at (0.5, sqrt(3)/6). We subtract that from each point.
-        // Thus, the new vertices are: (-0.5, -sqrt(3)/6), (0.5, -sqrt(3)/6), (0.0, sqrt(3)/3)
-        double sqrt3 = Math.sqrt(3.0);
-        double[][] local2D = new double[][]{
-            {-0.5, -sqrt3 / 6.0},
-            {0.5, -sqrt3 / 6.0},
-            {0.0, sqrt3 / 3.0}
-        };
-
-        // Get local coordinate for vertex i.
+        // Get the local coordinate for vertex i from the provided local2D array.
         double lx = local2D[i][0];
         double ly = local2D[i][1];
 
-        // Scale the 2D coordinates (triangle's scale + globalScale).
-        double s = tp.scale * globalScale;
+        // Scale (by polygon's scale and global scale) and apply rotation.
+        double s = pp.scale * globalScale;
         lx *= s;
         ly *= s;
-
-        // Rotate the 2D coordinates.
-        double cosR = Math.cos(tp.rotation);
-        double sinR = Math.sin(tp.rotation);
+        double cosR = Math.cos(pp.rotation);
+        double sinR = Math.sin(pp.rotation);
         double rx = lx * cosR - ly * sinR;
         double ry = lx * sinR + ly * cosR;
 
         // Embed in 3D: find two orthogonal vectors perpendicular to 'axis'
         double[] perp1 = findPerpVector(axis);
-        double[] perp2 = cross(axis, perp1);
         normalize(perp1);
+        double[] perp2 = cross(axis, perp1);
         normalize(perp2);
 
         double px = center[0] + rx * perp1[0] + ry * perp2[0];
@@ -333,33 +325,37 @@ public class AxisConstrainedLayout {
     }
 
     /**
-     * Rebuilds vertex positions from the current axes and triangle parameters,
+     * Rebuilds vertex positions from the current axes and polygon parameters,
      * then computes and returns the connectivity cost.
      */
     private static double attemptRecomputeAndCost(
             Graph g,
-            Map<Integer, int[]> triangleToVerticesMap1,
-            Map<Integer, int[]> triangleToVerticesMap2,
+            Map<Integer, int[]> polygonToVerticesMap1,
+            Map<Integer, int[]> polygonToVerticesMap2,
             double scale,
             double[] axis1,
             double[] axis2,
-            TriangleParams[] triParams1,
-            TriangleParams[] triParams2
+            PolygonParams[] polyParams1,
+            PolygonParams[] polyParams2,
+            int verticesPerPolygon1,
+            double[][] local2DGroup1,
+            int verticesPerPolygon2,
+            double[][] local2DGroup2
     ) {
         Map<Integer, double[]> positions = new HashMap<>();
-        // Group 1 triangles.
-        for (int t = 0; t < triParams1.length; t++) {
-            int[] vIDs = triangleToVerticesMap1.get(t);
-            for (int i = 0; i < 3; i++) {
-                double[] pos = computeVertexPositionOnAxis(axis1, triParams1[t], i, scale);
+        // Group 1 polygons.
+        for (int t = 0; t < polyParams1.length; t++) {
+            int[] vIDs = polygonToVerticesMap1.get(t);
+            for (int i = 0; i < verticesPerPolygon1; i++) {
+                double[] pos = computePolygonVertexPositionOnAxis(axis1, polyParams1[t], i, scale, local2DGroup1);
                 positions.put(vIDs[i], pos);
             }
         }
-        // Group 2 triangles.
-        for (int t = 0; t < triParams2.length; t++) {
-            int[] vIDs = triangleToVerticesMap2.get(t);
-            for (int i = 0; i < 3; i++) {
-                double[] pos = computeVertexPositionOnAxis(axis2, triParams2[t], i, scale);
+        // Group 2 polygons.
+        for (int t = 0; t < polyParams2.length; t++) {
+            int[] vIDs = polygonToVerticesMap2.get(t);
+            for (int i = 0; i < verticesPerPolygon2; i++) {
+                double[] pos = computePolygonVertexPositionOnAxis(axis2, polyParams2[t], i, scale, local2DGroup2);
                 positions.put(vIDs[i], pos);
             }
         }
@@ -367,60 +363,64 @@ public class AxisConstrainedLayout {
     }
 
     /**
-     * Makes small random adjustments to the parameters of a given triangle.
+     * Makes small random adjustments to the parameters of a given polygon.
      */
-    private static void smallRandomTweakTriangle(
-            TriangleParams tp,
+    private static void smallRandomTweakPolygon(
+            PolygonParams pp,
             Random random,
             Graph g,
-            Map<Integer, int[]> triangleToVerticesMap1,
-            Map<Integer, int[]> triangleToVerticesMap2,
+            Map<Integer, int[]> polygonToVerticesMap1,
+            Map<Integer, int[]> polygonToVerticesMap2,
             double scale,
             double[] axis1,
             double[] axis2,
-            TriangleParams[] triParams1,
-            TriangleParams[] triParams2
+            PolygonParams[] polyParams1,
+            PolygonParams[] polyParams2,
+            int verticesPerPolygon1,
+            double[][] local2DGroup1,
+            int verticesPerPolygon2,
+            double[][] local2DGroup2
     ) {
         // Compute baseline cost using current parameters.
-        double baselineCost = attemptRecomputeAndCost(g, triangleToVerticesMap1, triangleToVerticesMap2, scale, axis1, axis2, triParams1, triParams2);
+        double baselineCost = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
+                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
 
         // Tweak offset.
-        double origOffset = tp.offset;
+        double origOffset = pp.offset;
         double tweak = (random.nextDouble() - 0.5) * STEP_SIZE;
-        tp.offset += tweak;
-        // Ensure offset remains positive
-        //if (tp.offset < EPS) {
-         //   tp.offset = EPS;
-        //}
-        double costNew = attemptRecomputeAndCost(g, triangleToVerticesMap1, triangleToVerticesMap2, scale, axis1, axis2, triParams1, triParams2);
+        pp.offset += tweak;
+        double costNew = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
+                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
         if (costNew < baselineCost) {
             baselineCost = costNew;
         } else {
-            tp.offset = origOffset; // revert
+            pp.offset = origOffset; // revert
         }
 
-        // Tweak scale unless this is the fixed triangle (anchor) to avoid catastrophic scaling.
-        if (!(triParams1.length > 0 && tp == triParams1[0])) {
-            double origScale = tp.scale;
+        // Tweak scale unless this is a fixed (anchor) polygon.
+        if (!(polyParams1.length > 0 && pp == polyParams1[0])) {
+            double origScale = pp.scale;
             tweak = (random.nextDouble() - 0.5) * STEP_SIZE;
-            tp.scale += tweak;
-            if (tp.scale < EPS)
-                tp.scale = EPS;
-            costNew = attemptRecomputeAndCost(g, triangleToVerticesMap1, triangleToVerticesMap2, scale, axis1, axis2, triParams1, triParams2);
+            pp.scale += tweak;
+            if (pp.scale < EPS)
+                pp.scale = EPS;
+            costNew = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
+                    axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
             if (costNew < baselineCost) {
                 baselineCost = costNew;
             } else {
-                tp.scale = origScale;
+                pp.scale = origScale;
             }
         }
 
         // Tweak rotation.
-        double origRotation = tp.rotation;
+        double origRotation = pp.rotation;
         tweak = (random.nextDouble() - 0.5) * STEP_SIZE * 2;
-        tp.rotation += tweak;
-        costNew = attemptRecomputeAndCost(g, triangleToVerticesMap1, triangleToVerticesMap2, scale, axis1, axis2, triParams1, triParams2);
+        pp.rotation += tweak;
+        costNew = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
+                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
         if (!(costNew < baselineCost)) {
-            tp.rotation = origRotation;
+            pp.rotation = origRotation;
         }
     }
 
@@ -445,23 +445,26 @@ public class AxisConstrainedLayout {
         
         System.out.println(Arrays.deepToString(generator));
         if (generator.length != 2) throw new IllegalArgumentException("Generator must have exactly two groups");
-        int nTriangles1 = generator[0].length;
-        int nTriangles2 = generator[1].length;
+        int nPolygons1 = generator[0].length;
+        int nPolygons2 = generator[1].length;
+        // Derive the number of vertices per polygon from the generator.
+        int verticesPerPolygon1 = generator[0][0].length;
+        int verticesPerPolygon2 = generator[1][0].length;
 
         TreeSet<Integer> equivalentVertices = new TreeSet<>();
 
-        // Loop through second set of triangles and build the graph.
+        // Loop through second group and build the graph.
         Graph g = new Graph();
-        int triangle2Offset = nTriangles1 * 3;
-        for (int t = 0; t < nTriangles2; t++) {
-            int[] triangle = generator[1][t];
-            for (int j = 0; j < 3; j++) {
-                int idx = triangle[j];
-                if (idx <= triangle2Offset) {
-                    int trinagle2Idx = triangle2Offset + t * 3 + 1 + j;
-                    g.addEdge(trinagle2Idx, idx);
-                    equivalentVertices.add(trinagle2Idx);
-                    System.out.println("Adding edge " + trinagle2Idx + " -> " + idx);
+        int polygon2Offset = nPolygons1 * verticesPerPolygon1;
+        for (int t = 0; t < nPolygons2; t++) {
+            int[] poly = generator[1][t];
+            for (int j = 0; j < verticesPerPolygon2; j++) {
+                int idx = poly[j];
+                if (idx <= polygon2Offset) {
+                    int poly2Idx = polygon2Offset + t * verticesPerPolygon2 + 1 + j;
+                    g.addEdge(poly2Idx, idx);
+                    equivalentVertices.add(poly2Idx);
+                    System.out.println("Adding edge " + poly2Idx + " -> " + idx);
                 }
             }
         }
@@ -473,7 +476,7 @@ public class AxisConstrainedLayout {
 
         Random random = new Random(seed);
         for (int i = 0; i < tries; i++) {
-            LayoutResult result0 = computeLayout(g, nTriangles1, nTriangles2, iterations, random, 1);
+            LayoutResult result0 = computeLayout(g, nPolygons1, verticesPerPolygon1, nPolygons2, verticesPerPolygon2, iterations, random, 1);
             if (result0.fit < bestFit) {
                 bestFit = result0.fit;
                 result = result0;
@@ -481,7 +484,6 @@ public class AxisConstrainedLayout {
         }
         System.out.println("Final positions: ");
         for (Map.Entry<Integer, double[]> entry : result.positions.entrySet()) {
-            
             System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
         }
 
@@ -489,7 +491,6 @@ public class AxisConstrainedLayout {
         double maxRadius = 0;
         for (int i = 1; i <= result.positions.size(); i++) {
             double[] pos = result.positions.get(i);
-            // get the radius of the vector
             double radius = Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
             maxRadius = Math.max(maxRadius, radius);
             resultList.add(new double[]{pos[0], pos[1], pos[2]});
@@ -513,11 +514,11 @@ public class AxisConstrainedLayout {
             }
         }
 
-        for (int i = 0; i < dupePositions.size(); i++) {
+        /*for (int i = 0; i < dupePositions.size(); i++) {
             double[] pos = dupePositions.get(i);
             positions.put(nextKey, new double[]{pos[0] * scale, pos[1] * scale, pos[2] * scale});
             nextKey++;
-        }
+        }*/
 
         System.out.println("Fit: " + result.fit);
         System.out.println("Axis 1: " + Arrays.toString(result.axis1));
@@ -527,26 +528,29 @@ public class AxisConstrainedLayout {
     }
 
     public static void main(String[] args) {
-        // Run the AxisConstrainedLayout algorithm
+        // Run the AxisConstrainedLayout algorithm with custom polygon types
         int iterations = 1000;
         long seed = 5111;
 
-        int nTriangles1 = 2;
-        int nTriangles2 = 2;
+        // For example, group 1 is lines (2 vertices each) and group 2 is squares (4 vertices each).
+        int nPolygons1 = 2;
+        int verticesPerPolygon1 = 2;
+        int nPolygons2 = 2;
+        int verticesPerPolygon2 = 4;
 
-        // Vertices are numbered 1,2,3,    4,5,6
-        //                       7,8,9,    10,11,12
+        // Vertices are numbered for group 1: line 0 => vertices (1,2), line 1 => vertices (3,4);
+        // For group 2: square 0 => vertices (5,6,7,8), square 1 => vertices (9,10,11,12)
 
-        // Merge 2<->7, 4<->9, 5<->10
-
+        // Define connectivity (merge some vertices)
         Graph mergedVertices = new Graph();
-        mergedVertices.addEdge(2, 7);
-        mergedVertices.addEdge(4, 9);
-        mergedVertices.addEdge(5, 10);
+        mergedVertices.addEdge(2, 5);   // e.g. merge vertex 2 (from group1) with vertex 5 (from group2)
+        mergedVertices.addEdge(3, 7);   // merge vertex 3 with vertex 7
+        mergedVertices.addEdge(4, 10);  // merge vertex 4 with vertex 10
 
-        LayoutResult result = computeLayout(mergedVertices, nTriangles1, nTriangles2, iterations, new Random(seed), 1);
+        LayoutResult result = computeLayout(mergedVertices, nPolygons1, verticesPerPolygon1,
+                nPolygons2, verticesPerPolygon2, iterations, new Random(seed), 1);
 
-        // Print the results
+        // Print the results.
         System.out.println("Final Positions:");
         for (Map.Entry<Integer, double[]> entry : result.positions.entrySet()) {
             System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
@@ -555,13 +559,14 @@ public class AxisConstrainedLayout {
         System.out.println("Axis 1: " + Arrays.toString(result.axis1));
         System.out.println("Axis 2: " + Arrays.toString(result.axis2));
 
-        // Now test it with generator notation.
-        String generatorS = "[(1,2,3)(4,5,6),(2,7,4)(5,8,9)]";
+        // Now test with generator notation.
+        // The generator string should now reflect the polygon types;
+        // for instance, group 1: lines [(1,2)(3,4)], group 2: squares [(2,5,6,7)(8,9,10,11)]
+        String generatorS = "[(1,2)(3,4),(2,5,6,7)(8,9,10,11)]";
         Map<Integer, double[]> result2 = computeLayout(generatorS, iterations, seed, 1);
         for (Map.Entry<Integer, double[]> entry : result2.entrySet()) {
             System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
         }
-
     }
 
     private static double[] computeAxis2FromAngle(double angle, double[] e0, double[] e1) {
@@ -577,23 +582,29 @@ public class AxisConstrainedLayout {
                                               double[] e0,
                                               double[] e1,
                                               Graph g,
-                                              Map<Integer, int[]> triangleToVerticesMap1,
-                                              Map<Integer, int[]> triangleToVerticesMap2,
+                                              Map<Integer, int[]> polygonToVerticesMap1,
+                                              Map<Integer, int[]> polygonToVerticesMap2,
                                               double scale,
                                               double[] fixedAxis1,
-                                              TriangleParams[] triParams1,
-                                              TriangleParams[] triParams2) {
+                                              PolygonParams[] polyParams1,
+                                              PolygonParams[] polyParams2,
+                                              int verticesPerPolygon1,
+                                              double[][] local2DGroup1,
+                                              int verticesPerPolygon2,
+                                              double[][] local2DGroup2) {
         double originalAngle = axis2AngleHolder[0];
         double[] currentAxis2 = computeAxis2FromAngle(originalAngle, e0, e1);
-        double baselineCost = attemptRecomputeAndCost(g, triangleToVerticesMap1, triangleToVerticesMap2,
+        double baselineCost = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2,
                                                       scale, fixedAxis1, currentAxis2,
-                                                      triParams1, triParams2);
+                                                      polyParams1, polyParams2,
+                                                      verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
         double tweak = (random.nextDouble() - 0.5) * STEP_SIZE;
         axis2AngleHolder[0] = originalAngle + tweak;
         double[] newAxis2 = computeAxis2FromAngle(axis2AngleHolder[0], e0, e1);
-        double newCost = attemptRecomputeAndCost(g, triangleToVerticesMap1, triangleToVerticesMap2,
+        double newCost = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2,
                                                  scale, fixedAxis1, newAxis2,
-                                                 triParams1, triParams2);
+                                                 polyParams1, polyParams2,
+                                                 verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
         if (newCost >= baselineCost) {
             axis2AngleHolder[0] = originalAngle;
         }
@@ -604,22 +615,63 @@ public class AxisConstrainedLayout {
                                                          double[] e0,
                                                          double[] e1,
                                                          double[] axis2AngleHolder,
-                                                         TriangleParams[] triParams1,
-                                                         TriangleParams[] triParams2,
+                                                         PolygonParams[] polyParams1,
+                                                         PolygonParams[] polyParams2,
                                                          Graph g,
-                                                         Map<Integer, int[]> triangleToVerticesMap1,
-                                                         Map<Integer, int[]> triangleToVerticesMap2,
-                                                         double scale) {
+                                                         Map<Integer, int[]> polygonToVerticesMap1,
+                                                         Map<Integer, int[]> polygonToVerticesMap2,
+                                                         double scale,
+                                                         int verticesPerPolygon1,
+                                                         double[][] local2DGroup1,
+                                                         int verticesPerPolygon2,
+                                                         double[][] local2DGroup2) {
         // Do not tweak fixedAxis1
-        smallRandomTweakAxis2(random, axis2AngleHolder, e0, e1, g, triangleToVerticesMap1, triangleToVerticesMap2, scale,
-                               fixedAxis1, triParams1, triParams2);
-        for (TriangleParams tp : triParams1) {
-            smallRandomTweakTriangle(tp, random, g, triangleToVerticesMap1, triangleToVerticesMap2, scale,
-                                      fixedAxis1, computeAxis2FromAngle(axis2AngleHolder[0], e0, e1), triParams1, triParams2);
+        smallRandomTweakAxis2(random, axis2AngleHolder, e0, e1, g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
+                               fixedAxis1, polyParams1, polyParams2,
+                               verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+        for (PolygonParams pp : polyParams1) {
+            smallRandomTweakPolygon(pp, random, g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
+                                      fixedAxis1, computeAxis2FromAngle(axis2AngleHolder[0], e0, e1),
+                                      polyParams1, polyParams2,
+                                      verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
         }
-        for (TriangleParams tp : triParams2) {
-            smallRandomTweakTriangle(tp, random, g, triangleToVerticesMap1, triangleToVerticesMap2, scale,
-                                      fixedAxis1, computeAxis2FromAngle(axis2AngleHolder[0], e0, e1), triParams1, triParams2);
+        for (PolygonParams pp : polyParams2) {
+            smallRandomTweakPolygon(pp, random, g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
+                                      fixedAxis1, computeAxis2FromAngle(axis2AngleHolder[0], e0, e1),
+                                      polyParams1, polyParams2,
+                                      verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
         }
+    }
+
+    // ------------------------------------------------------------------------
+    // Updated polygon mapping: now each polygon may have an arbitrary number of vertices.
+    private static Map<Integer, int[]> buildPolygonToVertexMap(int startVertex, int nPolygons, int verticesPerPolygon) {
+        Map<Integer, int[]> map = new HashMap<>();
+        int current = startVertex;
+        for (int t = 0; t < nPolygons; t++) {
+            int[] verts = new int[verticesPerPolygon];
+            for (int i = 0; i < verticesPerPolygon; i++) {
+                verts[i] = current++;
+            }
+            map.put(t, verts);
+        }
+        return map;
+    }
+
+    // ------------------------------------------------------------------------
+    // Returns a default local 2D representation for a polygon with the given number of vertices.
+    // For a line (2 vertices) we use (-0.5,0) and (0.5,0); otherwise we build a regular polygon.
+    private static double[][] getDefaultLocal2DPolygon(int verticesCount) {
+        double[][] local2D = new double[verticesCount][2];
+        if (verticesCount == 2) {
+            local2D[0] = new double[]{ -0.5, 0 };
+            local2D[1] = new double[]{ 0.5, 0 };
+        } else {
+            for (int i = 0; i < verticesCount; i++) {
+                double angle = 2 * Math.PI * i / verticesCount;
+                local2D[i] = new double[]{ Math.cos(angle), Math.sin(angle) };
+            }
+        }
+        return local2D;
     }
 } 

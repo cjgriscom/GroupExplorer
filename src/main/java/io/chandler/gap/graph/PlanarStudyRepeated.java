@@ -36,21 +36,21 @@ public class PlanarStudyRepeated {
         boolean generate = true;
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
-        boolean directed = false;
+        boolean directed = true;
 
         int order = -1;
         MemorySettings mem = MemorySettings.COMPACT;
         
         // We use two cycle descriptions for the candidate pairs.
         String[] conj = new String[] {
-            "128p 2-cycles", "128p 2-cycles"
+            "triple 3-cycles", "quadruple 2-cycles"
             // You can change these strings to use different cycle types.
         };
         // For phase 1, we use two different files (indices 0 and 1).
-        int[] phase1Indices = new int[]{1,0};
+        int[] phase1Indices = new int[]{0,1};
 
-        String generator = Generators.j1;
-        String groupName = "j1";
+        String generator = Generators.m11;
+        String groupName = "m11";
         File root = new File("PlanarStudyMulti/" + groupName);
         root.mkdirs();
 

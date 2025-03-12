@@ -102,7 +102,7 @@ public class GraphVisualizer extends Application {
         if (args.length > 0) {
             launch(args);
         } else {
-            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudyMulti/ree3/dual 3-cycles-dual 3-cycles-filtered.txt" });
+            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudyMulti/eliac/dual 4-cycles-triple 2-cycles-filtered.txt" });
         }
     }
 
@@ -205,7 +205,7 @@ public class GraphVisualizer extends Application {
 
 
         layoutChoiceBox = new ComboBox<>();
-        layoutChoiceBox.getItems().addAll("Python Spring", "Python Planar", "Java Spring", "Java 3D", "Java Networkx", "Axis Constrained");
+        layoutChoiceBox.getItems().addAll("Python Spring", "Python Planar", "Java Spring", "Java 3D", "Java Networkx", "Axis Constrained", "Planar Puzzle");
         layoutChoiceBox.setValue("Java Spring");  // default choice
         layoutChoiceBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
         // Create the "Show Circles" checkbox. When toggled, updateGraph() is called.
@@ -664,6 +664,8 @@ public class GraphVisualizer extends Application {
             return getJavaNetworkxCoordinates(graph);
         } else if ("Axis Constrained".equals(method)) {
             return getJavaAxisConstrainedCoordinates(line);
+        } else if ("Planar Puzzle".equals(method)) {
+            return getJavaPlanarPuzzleCoordinates(line);
         } else {
             String algorithm = method.equals("Python Planar") ? "planar" : "spring";
             return getPythonCoordinates(graph, algorithm);
@@ -1058,6 +1060,12 @@ public class GraphVisualizer extends Application {
     private Map<Integer, double[]> getJavaAxisConstrainedCoordinates(String line) {
         long seedVal = Long.parseLong(seedTextField.getText());
         Map<Integer, double[]> positions = networkx.AxisConstrainedLayout.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight());
+        return positions;
+    }
+
+    private Map<Integer, double[]> getJavaPlanarPuzzleCoordinates(String line) {
+        long seedVal = Long.parseLong(seedTextField.getText());
+        Map<Integer, double[]> positions = networkx.ConcentricConstrainedLayout.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight());
         return positions;
     }
 
