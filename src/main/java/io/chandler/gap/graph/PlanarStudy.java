@@ -35,11 +35,11 @@ public class PlanarStudy {
 		int order = -1;
 		MemorySettings mem = MemorySettings.COMPACT;
 		String[] conj = new String[] {
-			"32p 3-cycles", "32p 3-cycles"
+			"triple 3-cycles", "triple 3-cycles"
 		};
 		int filterCombination0 = 0, filterCombination1 = 1;
-		String generator = Generators.j2;
-		String groupName = "j2";
+		String generator = Generators.m10_a6;
+		String groupName = "m10";
 		File root = new File("PlanarStudy/" + groupName);
 		root.mkdirs();
 
@@ -86,7 +86,7 @@ public class PlanarStudy {
 					}
 				}
 			}
-			Collections.shuffle(lines1, new Random());
+			Collections.shuffle(lines1, new Random(123));
 
 			System.out.println(conj[filterCombination0] + ": " + lines1.size());
 			

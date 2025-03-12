@@ -30,33 +30,37 @@ public class PlanarStudyRepeated {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
+        boolean allowSubgroups = true;
         boolean requirePlanar = true;
         // In this experiment we want to generate files and then filter in two stages.
         boolean generate = true;
-        int repetitions = 6; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
+        int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
-        boolean directed = true;
+        boolean directed = false;
 
         int order = -1;
         MemorySettings mem = MemorySettings.COMPACT;
         
         // We use two cycle descriptions for the candidate pairs.
         String[] conj = new String[] {
-            "triple 3-cycles", "triple 3-cycles"
+            "128p 2-cycles", "128p 2-cycles"
             // You can change these strings to use different cycle types.
         };
         // For phase 1, we use two different files (indices 0 and 1).
-        int[] phase1Indices = new int[]{0, 1};
+        int[] phase1Indices = new int[]{1,0};
 
-        String generator = Generators.m12;
-        String groupName = "m12";
+        String generator = Generators.j1;
+        String groupName = "j1";
         File root = new File("PlanarStudyMulti/" + groupName);
         root.mkdirs();
 
         // --------------------------------------------------------
         // Generation branch: generate input files if needed.
         // --------------------------------------------------------
-        if (generate && !generator.equals(Generators.m24) && !generator.equals(Generators.hs)) {
+        if (generate &&
+                      !generator.equals(Generators.m24) &&
+                      !generator.equals(Generators.hs) &&
+                      !generator.equals(Generators.mcl)) {
             boolean multithread = true;
             PrintStream[] filesOut = new PrintStream[conj.length];
             for (int i = 0; i < conj.length; i++) {
@@ -65,6 +69,7 @@ public class PlanarStudyRepeated {
             
             GroupExplorer g = new GroupExplorer(generator, mem, new HashSet<>(), new HashSet<>(), new HashSet<>(), multithread);
             Generators.exploreGroup(g, (state, description) -> {
+                //if (description.endsWith("3-cycles") || description.endsWith("2-cycles")) System.out.println(description);
                 for (int i = 0; i < conj.length; i++) {
                     if (description.equals(conj[i])) {
                         String cycles = GroupExplorer.stateToNotation(state);
@@ -101,7 +106,7 @@ public class PlanarStudyRepeated {
                 }
             }
         }
-        Collections.shuffle(lines1, new Random());
+        Collections.shuffle(lines1, new Random(123));
 
         List<String> lines2 = new ArrayList<>();
         File file2 = new File(root.getAbsolutePath() + "/" + conj[phase1Indices[1]] + ".txt");
@@ -113,7 +118,7 @@ public class PlanarStudyRepeated {
                 }
             }
         }
-        Collections.shuffle(lines2, new Random());
+        Collections.shuffle(lines2, new Random(321));
 
         // instantiate GAP to check group order.
         GapInterface gap = new GapInterface();
@@ -124,11 +129,16 @@ public class PlanarStudyRepeated {
         PrintStream phase1Out = new PrintStream(root.getAbsolutePath() + "/" + conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt");
         int[] found = new int[repetitions + 1];
 
+        int p1_1_count = 0;
+        int p1_2_count = 0;
+
         // Nested loops over the two files with early termination support.
         phase1Loop: for (String l1 : lines1) {
+            p1_1_count++;
             int[][][] parsed1 = GroupExplorer.parseOperationsArr(l1);
             int[][] firstCandidate = parsed1[0]; // use the first generator set from file1.
             for (String l2 : lines2) {
+                p1_2_count++;
                 // Check for a key press to allow early termination of Phase 1 filtering.
                 try {
                     if (System.in.available() > 0) {
@@ -136,6 +146,8 @@ public class PlanarStudyRepeated {
                         while (System.in.available() > 0) {
                             System.in.read();
                         }
+                        System.out.println("p1_1_count: " + p1_1_count);
+                        System.out.println("p1_2_count: " + p1_2_count);
                         break phase1Loop;
                     }
                 } catch (IOException e) {
@@ -155,6 +167,14 @@ public class PlanarStudyRepeated {
                 if (requirePlanar && !checkPlanarity(combinedPair)) {
                     continue;
                 }
+
+                String size = null;
+                if (!allowSubgroups) {
+                    size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
+                    if (!size.equals(String.valueOf(order))) {
+                        continue;
+                    }
+                }
                 
                 // Check for isomorphic duplicates.
                 Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, directed);
@@ -170,7 +190,7 @@ public class PlanarStudyRepeated {
                 if (duplicate)
                     continue;
                 
-                String size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
+                if (size == null) size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
                 System.out.println("Found new "+(!requirePlanar ? "non-" : "")+"planar graph " + found[0] + " with order " + size);
                 
                 
