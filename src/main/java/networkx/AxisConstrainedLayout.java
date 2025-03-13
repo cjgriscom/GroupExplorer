@@ -229,21 +229,6 @@ public class AxisConstrainedLayout {
     }
 
     /**
-     * Builds a simple mapping: triangle index t -> {3 vertex IDs}.
-     * For example, if startVertex=1 then triangle 0=[1,2,3], triangle 1=[4,5,6], etc.
-     */
-    private static Map<Integer, int[]> buildTriangleToVertexMap(int startVertex, int nTriangles) {
-        Map<Integer, int[]> map = new HashMap<>();
-        int current = startVertex;
-        for (int t = 0; t < nTriangles; t++) {
-            int[] verts = new int[]{current, current + 1, current + 2};
-            map.put(t, verts);
-            current += 3;
-        }
-        return map;
-    }
-
-    /**
      * Computes the 3D position of a vertex for a given triangle.
      *
      * <p>
@@ -424,12 +409,12 @@ public class AxisConstrainedLayout {
         }
     }
 
-    public static Map<Integer, double[]> computeLayout(String generatorS, int iterations, long seed, double scale) {
-        Map<Integer, double[]> positions = computeLayoutN(generatorS, iterations, seed, scale, iterations);
+    public static Map<Integer, double[]> computeLayout(String generatorS, int iterations, long seed, double scale, double[] fitOut) {
+        Map<Integer, double[]> positions = computeLayoutN(generatorS, iterations, seed, scale, iterations, fitOut);
         return positions;
     }
 
-    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries) {
+    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries, double[] fitOut) {
 
         int[][][] generatorOrigNumbers = GroupExplorer.parseOperationsArr(generatorS);
         int[][][] generator = GroupExplorer.parseOperationsArr(GroupExplorer.renumberGeneratorNotation(generatorS));
@@ -520,6 +505,7 @@ public class AxisConstrainedLayout {
             nextKey++;
         }*/
 
+        fitOut[0] = result.fit;
         System.out.println("Fit: " + result.fit);
         System.out.println("Axis 1: " + Arrays.toString(result.axis1));
         System.out.println("Axis 2: " + Arrays.toString(result.axis2));
@@ -563,7 +549,8 @@ public class AxisConstrainedLayout {
         // The generator string should now reflect the polygon types;
         // for instance, group 1: lines [(1,2)(3,4)], group 2: squares [(2,5,6,7)(8,9,10,11)]
         String generatorS = "[(1,2)(3,4),(2,5,6,7)(8,9,10,11)]";
-        Map<Integer, double[]> result2 = computeLayout(generatorS, iterations, seed, 1);
+        double[] fit = new double[]{-1};
+        Map<Integer, double[]> result2 = computeLayout(generatorS, iterations, seed, 1, fit);
         for (Map.Entry<Integer, double[]> entry : result2.entrySet()) {
             System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
         }

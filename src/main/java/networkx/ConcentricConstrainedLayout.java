@@ -360,12 +360,12 @@ public class ConcentricConstrainedLayout {
     // Generator-notation wrappers and main()
     // ------------------------------------------------------------------------
 
-    public static Map<Integer, double[]> computeLayout(String generatorS, int iterations, long seed, double scale) {
-        Map<Integer, double[]> positions = computeLayoutN(generatorS, iterations, seed, scale, iterations);
+    public static Map<Integer, double[]> computeLayout(String generatorS, int iterations, long seed, double scale, double[] fitOut) {
+        Map<Integer, double[]> positions = computeLayoutN(generatorS, iterations, seed, scale, iterations, fitOut);
         return positions;
     }
 
-    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries) {
+    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries, double[] fitOut) {
 
         int[][][] generatorOrigNumbers = GroupExplorer.parseOperationsArr(generatorS);
         int[][][] generator = GroupExplorer.parseOperationsArr(GroupExplorer.renumberGeneratorNotation(generatorS));
@@ -456,6 +456,7 @@ public class ConcentricConstrainedLayout {
         }
 
         System.out.println("Fit: " + result.fit);
+        fitOut[0] = result.fit;
         System.out.println("Center 1: " + Arrays.toString(result.center1));
         System.out.println("Center 2: " + Arrays.toString(result.center2));
 
@@ -498,7 +499,7 @@ public class ConcentricConstrainedLayout {
         // For instance, generator string "[(1,2)(3,4),(2,5,6,7)(8,9,10,11)]" yields
         // group 1: lines and group 2: squares.
         String generatorS = "[(1,2)(3,4),(2,5,6,7)(8,9,10,11)]";
-        Map<Integer, double[]> result2 = computeLayout(generatorS, iterations, seed, 1);
+        Map<Integer, double[]> result2 = computeLayout(generatorS, iterations, seed, 1, new double[]{0});
         for (Map.Entry<Integer, double[]> entry : result2.entrySet()) {
             System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
         }

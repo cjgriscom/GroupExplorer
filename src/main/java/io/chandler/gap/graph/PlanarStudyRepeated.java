@@ -43,7 +43,7 @@ public class PlanarStudyRepeated {
         
         // We use two cycle descriptions for the candidate pairs.
         String[] conj = new String[] {
-            "triple 3-cycles", "quadruple 2-cycles"
+            "quadruple 2-cycles", "quadruple 2-cycles"
             // You can change these strings to use different cycle types.
         };
         // For phase 1, we use two different files (indices 0 and 1).

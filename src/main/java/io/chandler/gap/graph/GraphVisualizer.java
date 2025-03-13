@@ -13,6 +13,7 @@ import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleGraph;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
+import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Text;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -73,6 +74,7 @@ public class GraphVisualizer extends Application {
     private ComboBox<String> layoutChoiceBox;
 	private Label numSharedLinesLabel;
     private Button genusButton;
+    private Label fitLabel;
     // New checkbox to toggle the display of circles
     private CheckBox showCirclesCheckBox;
     // Remove the slider and add a trackball control for full 3D rotation.
@@ -152,6 +154,7 @@ public class GraphVisualizer extends Application {
 		thetaTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_THETA_FACTOR));
         numSharedLinesLabel = new Label("Shared Lines: 0");
         genusButton = new Button("Genus: ?");
+        fitLabel = new Label("");
         // Create a trackball control for full 3D rotation.
         trackballPane = new Pane();
         trackballPane.setPrefSize(50, 50);
@@ -205,7 +208,7 @@ public class GraphVisualizer extends Application {
 
 
         layoutChoiceBox = new ComboBox<>();
-        layoutChoiceBox.getItems().addAll("Python Spring", "Python Planar", "Java Spring", "Java 3D", "Java Networkx", "Axis Constrained", "Planar Puzzle");
+        layoutChoiceBox.getItems().addAll("Python Spring", "Python Planar", "Java Spring", "Java 3D", "Java Networkx", "Axis Constrained", "Axis Constrained Multi", "Planar Puzzle");
         layoutChoiceBox.setValue("Java Spring");  // default choice
         layoutChoiceBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
         // Create the "Show Circles" checkbox. When toggled, updateGraph() is called.
@@ -295,7 +298,7 @@ public class GraphVisualizer extends Application {
             });
         });
 
-        paginator.getChildren().addAll(removeDupButton, removeFoldedButton, filterShareButton, numSharedLinesLabel, genusButton);
+        paginator.getChildren().addAll(removeDupButton, removeFoldedButton, filterShareButton, numSharedLinesLabel, genusButton, fitLabel);
 
         root.setBottom(paginator);
 
@@ -444,34 +447,53 @@ public class GraphVisualizer extends Application {
         for (int g = 0; g < polys.length; g++) {
             Color fillColor = groupColors[g % groupColors.length];
             // Each set may consist of multiple polygons.
-            for (int[] polygon : polys[g]) {
+            for (int[] polygon : polys[g]) { 
                 javafx.scene.shape.Polygon shadedPoly = new javafx.scene.shape.Polygon();
-                // For each vertex in the polygon, add the computed coordinates.
-                for (int vertex : polygon) {
-                    double[] pos = positions.get(vertex);
-                    if (pos != null) {
-                        shadedPoly.getPoints().addAll(pos[0], pos[1]);
+                if (polygon.length == 2) {
+                    // If the polygon is a line (2 points), create a quadrilateral
+                    int a = polygon[0];
+                    int b = polygon[1];
+                    double[] sourcePos = positions.get(a);
+                    double[] targetPos = positions.get(b);
+
+                    // Calculate the direction vector of the line
+                    double dx = targetPos[0] - sourcePos[0];
+                    double dy = targetPos[1] - sourcePos[1];
+                    double length = Math.sqrt(dx * dx + dy * dy);
+
+                    // Normalize the direction vector
+                    double nx = dx / length;
+                    double ny = dy / length;
+
+                    // Calculate the perpendicular vector with a 4px margin
+                    double px = -ny * 4;
+                    double py = nx * 4;
+
+                    // Define the four corners of the quadrilateral
+                    double[] p1 = {sourcePos[0] + px, sourcePos[1] + py};
+                    double[] p2 = {sourcePos[0] - px, sourcePos[1] - py};
+                    double[] p3 = {targetPos[0] - px, targetPos[1] - py};
+                    double[] p4 = {targetPos[0] + px, targetPos[1] + py};
+
+                    shadedPoly.getPoints().addAll(
+                        p1[0], p1[1],
+                        p2[0], p2[1],
+                        p3[0], p3[1],
+                        p4[0], p4[1]
+                    );
+                } else {
+                    // Otherwise, draw the polygon as usual
+                    for (int vertex : polygon) {
+                        double[] pos = positions.get(vertex);
+                        if (pos != null) {
+                            shadedPoly.getPoints().addAll(pos[0], pos[1]);
+                        }
                     }
                 }
                 shadedPoly.setFill(fillColor);
                 shadedPoly.setStroke(null);
                 // Add the polygon to the pane first so it appears beneath nodes/edges.
                 pane.getChildren().add(shadedPoly);
-
-                // Save a wrapper that associates this polygon with its vertex IDs.
-                shadedPolygons.add(new ShadedPolygonWrapper(shadedPoly, polygon));
-
-                // Draw directed arrows for polygon edges if enabled.
-                if (showDirectionCheckBox.isSelected()) {
-                    for (int i = 0; i < polygon.length; i++) {
-                        int a = polygon[i];
-                        int b = polygon[(i + 1) % polygon.length];
-                        double[] sourcePos = positions.get(a);
-                        double[] targetPos = positions.get(b);
-                        DirectedArrow arrow = createDirectedArrow(pane, sourcePos, targetPos, a, b);
-                        directedArrows.add(arrow);
-                    }
-                }
             }
         }
 
@@ -578,8 +600,14 @@ public class GraphVisualizer extends Application {
                              + "_" + thetaTextField.getText() + "_" + normTextField.getText()
                              + "_" + layoutChoiceBox.getValue();
         if (cachedGraphKey == null || !cachedGraphKey.equals(newCacheKey)) {
-            cachedBasePositions = getCoordinates(currentLine, currentGraph);
+            double[] fitOut = new double[]{-1};
+            cachedBasePositions = getCoordinates(currentLine, currentGraph, fitOut);
             cachedGraphKey = newCacheKey;
+            if (fitOut[0] != -1) {
+                fitLabel.setText("Fit: " + String.format("%.5f", fitOut[0]));
+            } else {
+                fitLabel.setText("");
+            }
         }
         // Make a fresh copy of the cached base coordinates.
         positions = new HashMap<>();
@@ -654,7 +682,7 @@ public class GraphVisualizer extends Application {
      * @param graph The graph to layout.
      * @return A mapping from vertex to (x, y) coordinates scaled to the window size, or null if an error occurs.
      */
-    private Map<Integer, double[]> getCoordinates(String line, Graph<Integer, DefaultEdge> graph) {
+    private Map<Integer, double[]> getCoordinates(String line, Graph<Integer, DefaultEdge> graph, double[] fitOut) {
         String method = layoutChoiceBox.getValue();
         if ("Java Spring".equals(method)) {
             return getJavaSpringCoordinates(graph);
@@ -663,9 +691,11 @@ public class GraphVisualizer extends Application {
         } else if ("Java Networkx".equals(method)) {
             return getJavaNetworkxCoordinates(graph);
         } else if ("Axis Constrained".equals(method)) {
-            return getJavaAxisConstrainedCoordinates(line);
+            return getJavaAxisConstrainedCoordinates(line, false, fitOut);
+        } else if ("Axis Constrained Multi".equals(method)) {
+            return getJavaAxisConstrainedCoordinates(line, true, fitOut);
         } else if ("Planar Puzzle".equals(method)) {
-            return getJavaPlanarPuzzleCoordinates(line);
+            return getJavaPlanarPuzzleCoordinates(line, fitOut);
         } else {
             String algorithm = method.equals("Python Planar") ? "planar" : "spring";
             return getPythonCoordinates(graph, algorithm);
@@ -1057,15 +1087,20 @@ public class GraphVisualizer extends Application {
         return positions;
     }
 
-    private Map<Integer, double[]> getJavaAxisConstrainedCoordinates(String line) {
+    private Map<Integer, double[]> getJavaAxisConstrainedCoordinates(String line, boolean multi, double[] fit) {
         long seedVal = Long.parseLong(seedTextField.getText());
-        Map<Integer, double[]> positions = networkx.AxisConstrainedLayout.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight());
+        Map<Integer, double[]> positions;
+        if (multi) {
+            positions = networkx.AxisConstrainedLayoutMulti.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight(), fit);
+        } else {
+            positions = networkx.AxisConstrainedLayout.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight(), fit);
+        }
         return positions;
     }
 
-    private Map<Integer, double[]> getJavaPlanarPuzzleCoordinates(String line) {
+    private Map<Integer, double[]> getJavaPlanarPuzzleCoordinates(String line, double[] fit) {
         long seedVal = Long.parseLong(seedTextField.getText());
-        Map<Integer, double[]> positions = networkx.ConcentricConstrainedLayout.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight());
+        Map<Integer, double[]> positions = networkx.ConcentricConstrainedLayout.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight(), fit);
         return positions;
     }
 
