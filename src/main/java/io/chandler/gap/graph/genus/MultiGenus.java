@@ -16,7 +16,7 @@ import io.chandler.gap.GroupExplorer;
 
 public class MultiGenus {
     private static final boolean DEBUG = false;
-    private static final boolean USE_320 = true;
+    private static final boolean USE_320 = false;
 
     public static enum MultiGenusOption {
         LIMIT_TO_GENUS_1, // Useful to keep things quick

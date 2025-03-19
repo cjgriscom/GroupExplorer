@@ -1,10 +1,19 @@
-package networkx;
+package io.chandler.gap.graph.layoutalgos;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+import org.jgrapht.graph.DefaultEdge;
 
 import io.chandler.gap.GroupExplorer;
-
-import java.lang.Math;
+import networkx.Graph;
 
 /**
  * An N-group axis-constrained layout. 
@@ -24,7 +33,44 @@ import java.lang.Math;
  * The iterative approach adds up all edges' lengths in the merged graph (connectivity cost) 
  * and attempts small random tweaks (in parameters and axes) that reduce the cost.
  */
-public class AxisConstrainedLayoutMulti {
+public class AxisConstrainedLayoutMulti extends LayoutAlgo {
+
+    private Map<Integer, double[]> result;
+    private double fitOut = -1;
+    
+    @Override
+    public LayoutAlgoArg[] getArgs() {
+        return new LayoutAlgoArg[]{
+            LayoutAlgoArg.ITERS,
+            LayoutAlgoArg.SEED,
+            LayoutAlgoArg.SHOW_FITTED_NODES,
+            LayoutAlgoArg.TRIES,
+            LayoutAlgoArg.INITIAL_ITERS
+        };
+    }
+    @Override
+    public void performLayout(double boxSize, String generator, org.jgrapht.Graph<Integer, DefaultEdge> graph, EnumMap<LayoutAlgoArg, Double> args) {
+        double[] fitOut = new double[]{-1};
+        result = computeLayoutN(generator,
+                    args.get(LayoutAlgoArg.ITERS).intValue(),
+                    args.get(LayoutAlgoArg.SEED).longValue(),
+                    boxSize,
+                    args.get(LayoutAlgoArg.TRIES).intValue(),
+                    args.get(LayoutAlgoArg.INITIAL_ITERS).intValue(),
+                    !args.get(LayoutAlgoArg.SHOW_FITTED_NODES).equals(0.0),
+                    fitOut);
+        this.fitOut = fitOut[0];
+    }
+
+    @Override
+    public Map<Integer, double[]> getResult() {
+        return result;
+    }
+
+    @Override
+    public Double getFitOut() {
+        return fitOut;
+    }
 
     // =========================================
     // Constants / configuration
@@ -78,12 +124,7 @@ public class AxisConstrainedLayoutMulti {
     // Public entry point
     // =========================================
 
-    public static Map<Integer, double[]> computeLayout(String generatorS, int iterations, long seed, double scale, double[] fitOut) {
-        Map<Integer, double[]> positions = computeLayoutN(generatorS, iterations, seed, scale, iterations, fitOut);
-        return positions;
-    }
-
-    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries, double[] fitOut) {
+    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries, int initialIters, boolean showFittedNodes, double[] fitOut) {
         int[][][] generatorOrigNumbers = GroupExplorer.parseOperationsArr(generatorS);
         int[][][] generator = GroupExplorer.parseOperationsArr(GroupExplorer.renumberGeneratorNotation(generatorS));
         // Create a mapping of the original numbers to the new numbers.
@@ -119,45 +160,73 @@ public class AxisConstrainedLayoutMulti {
 
         // Build the connectivity graph.
         Graph g = new Graph();
-        TreeSet<Integer> alreadyAddedFromSrc = new TreeSet<>();
-        for (int i = 0; i < verticesPerPolygon[0]; i++) { // Populate first group indices
-            for (int j = 0; j < nPolygons[0]; j++) {
-                alreadyAddedFromSrc.add(generator[0][j][i]);
+
+        // Construct a new generator that's numbered sequentially
+        int itmp = 1;
+        int[][][] generatorSeq = new int[nGroups][][];
+        for (int i = 0; i < nGroups; i++) {
+            generatorSeq[i] = new int[nPolygons[i]][verticesPerPolygon[i]];
+            for (int j = 0; j < nPolygons[i]; j++) {
+                for (int k = 0; k < verticesPerPolygon[i]; k++) {
+                    generatorSeq[i][j][k] = itmp++;
+                }
             }
         }
+        System.out.println(Arrays.deepToString(generatorSeq));
+
         TreeSet<Integer> equivalentVertices = new TreeSet<>();
-        // For each group (starting from group 1), if a vertex in the generator refers to a vertex in an earlier group,
-        // add an edge from the new vertex (in the current group) to that earlier vertex.
-        for (int i = 1; i < nGroups; i++) {
-            for (int t = 0; t < nPolygons[i]; t++) {
-                int[] poly = generator[i][t];
-                for (int j = 0; j < verticesPerPolygon[i]; j++) {
-                    int idx = poly[j];
-                    if (alreadyAddedFromSrc.contains(idx)) {
-                        int polyGlobalId = globalOffsets[i] + t * verticesPerPolygon[i] + j;
-                        g.addEdge(polyGlobalId, idx);
+        
+        // Now loop through generator and generatorSeq, and add edges between equivalent vertices.
+
+        // This tracks transient mappings so the graph is fully connected
+        TreeMap<Integer, List<Integer>> alreadyAddedFromSrc = new TreeMap<>();
+        // I suppose this could be done after the thingy is built
+
+        // This hurts my head but I think it's correct.
+        TreeMap<Integer, Integer> idxToPolyGlobalId = new TreeMap<>();
+        for (int i = 0; i < nGroups; i++) {
+            for (int j = 0; j < nPolygons[i]; j++) {
+                for (int k = 0; k < verticesPerPolygon[i]; k++) {
+                    int idx = generator[i][j][k];
+                    int polyGlobalId = generatorSeq[i][j][k];
+                    
+                    if (alreadyAddedFromSrc.containsKey(idx)) { // Need an edge from
+                        int idxMapped = idxToPolyGlobalId.get(idx);
+                        g.addEdge(polyGlobalId, idxMapped);
+                        System.out.println("Adding edge " + polyGlobalId + " -> " + idxMapped);
+                        List<Integer> list = alreadyAddedFromSrc.get(idx);
+                        for (Integer other : list) {
+                            System.out.println("    " + polyGlobalId + " -> " + other);
+                            g.addEdge(polyGlobalId, other);
+                        }
+                        list.add(polyGlobalId);
                         equivalentVertices.add(polyGlobalId);
-                        System.out.println("Adding edge " + polyGlobalId + " -> " + idx);
                     } else {
-                        alreadyAddedFromSrc.add(idx);
+                        idxToPolyGlobalId.put(idx, polyGlobalId);
+                        alreadyAddedFromSrc.put(idx, new ArrayList<>());
                     }
                 }
             }
         }
 
-        System.out.println("Seed: " + seed + " iters: " + iterations);
+        System.out.println("Seed: " + seed + " iters: " + iterations + " initialIters: " + initialIters + " tries: " + tries);
 
         double bestFit = Double.MAX_VALUE;
         LayoutResult result = null;
+        Random savedRandom = null;
 
         Random random = new Random(seed);
         for (int i = 0; i < tries; i++) {
-            LayoutResult result0 = computeLayout(g, nGroups, nPolygons, verticesPerPolygon, iterations, random, 1.0);
+            Random tmp = cloneRandom(random);
+            LayoutResult result0 = computeLayout(g, nGroups, nPolygons, verticesPerPolygon, initialIters, random, 1.0);
             if (result0.fit < bestFit) {
                 bestFit = result0.fit;
                 result = result0;
+                savedRandom = tmp;
             }
         }
+        // Recompute the layout with the best fit.
+        if (initialIters != iterations) result = computeLayout(g, nGroups, nPolygons, verticesPerPolygon, iterations, savedRandom, 1.0);
         System.out.println("Final positions: ");
         for (Map.Entry<Integer, double[]> entry : result.positions.entrySet()) {
             System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
@@ -187,6 +256,15 @@ public class AxisConstrainedLayoutMulti {
             } else {
                 System.out.println("Skipping vertex " + i);
                 dupePositions.add(pos);
+            }
+        }
+
+
+        if (showFittedNodes) {
+            for (int i = 0; i < dupePositions.size(); i++) {
+                double[] pos = dupePositions.get(i);
+                positions.put(nextKey, new double[]{pos[0] * scale, pos[1] * scale, pos[2] * scale});
+                nextKey++;
             }
         }
 
@@ -467,19 +545,21 @@ public class AxisConstrainedLayoutMulti {
             pp.offset = origOffset;
         }
 
-        // Tweak scale
-        double origScale = pp.scale;
-        tweak = (random.nextDouble() - 0.5) * STEP_SIZE;
-        pp.scale += tweak;
-        if (pp.scale < EPS) pp.scale = EPS;
-        newCost = attemptRecomputeAndCost(
-                mergedGraph, axes, polyParams, polygonToVerticesMap,
-                scale, verticesPerPolygon, local2DGroups
-        );
-        if (newCost < baselineCost) {
-            baselineCost = newCost;
-        } else {
-            pp.scale = origScale;
+        // Tweak scale unless this is a fixed (anchor) polygon.
+        if (!(polyParams[0].length > 0 && pp == polyParams[0][0])) {
+            double origScale = pp.scale;
+            tweak = (random.nextDouble() - 0.5) * STEP_SIZE;
+            pp.scale += tweak;
+            if (pp.scale < EPS) pp.scale = EPS;
+            newCost = attemptRecomputeAndCost(
+                    mergedGraph, axes, polyParams, polygonToVerticesMap,
+                    scale, verticesPerPolygon, local2DGroups
+            );
+            if (newCost < baselineCost) {
+                baselineCost = newCost;
+            } else {
+                pp.scale = origScale;
+            }
         }
 
         // Tweak rotation
@@ -693,56 +773,4 @@ public class AxisConstrainedLayoutMulti {
         return cost;
     }
 
-    // =========================================
-    // Example usage / test
-    // =========================================
-
-    /**
-     * Example main: demonstrates layout of 3 groups. 
-     */
-    public static void main(String[] args) {
-        // Build a Graph with edges among the polygons' vertices 
-        // (here we just do a simple example with 3 groups).
-        Graph g = new Graph();
-
-        // Suppose group0 has 2 polygons, each with 3 vertices => 6 vertices total
-        // group1 has 1 polygon, each with 4 vertices => 4 vertices
-        // group2 has 2 polygons, each with 2 vertices => 4 vertices
-        int nGroups = 3;
-        int[] nPolygons = new int[]{2, 1, 2};
-        int[] verticesPerPolygon = new int[]{3, 4, 2};
-
-        // We'll define a trivial set of edges that merges some vertices 
-        // across these groups. The actual indexing in our code:
-        //   group0 => polygons 0..1 => 6 vertices => IDs [1..6]
-        //   group1 => polygons 0 => 4 vertices => IDs [7..10]
-        //   group2 => polygons 0..1 => 2*2=4 vertices => IDs [11..14]
-        // Let's say we merge vertex ID 3 with vertex ID 7, and vertex ID 6 with 11
-        g.addEdge(3, 7);
-        g.addEdge(6, 11);
-
-        // We'll do a random seed for reproducibility
-        long seed = 42L;
-        Random rand = new Random(seed);
-
-        LayoutResult result = computeLayout(g, nGroups, nPolygons, verticesPerPolygon, 1000, rand, 1.0);
-
-        // Print final cost
-        System.out.println("Final cost = " + result.fit);
-
-        // Print final axes
-        for (int i = 0; i < nGroups; i++) {
-            double[] ax = result.axes[i];
-            System.out.printf("Axis %d: (%.3f, %.3f, %.3f)\n", i, ax[0], ax[1], ax[2]);
-        }
-
-        // Print some positions
-        Map<Integer,double[]> posMap = result.positions;
-        List<Integer> sortedKeys = new ArrayList<>(posMap.keySet());
-        Collections.sort(sortedKeys);
-        for (Integer vid : sortedKeys) {
-            double[] p = posMap.get(vid);
-            System.out.printf("Vertex %d -> (%.3f, %.3f, %.3f)\n", vid, p[0], p[1], p[2]);
-        }
-    }
 } 

@@ -1,22 +1,66 @@
-package networkx;
+package io.chandler.gap.graph.layoutalgos;
 
-import java.util.*;
-import java.lang.Math;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+import java.util.TreeSet;
+
+import org.jgrapht.graph.DefaultEdge;
+
 import io.chandler.gap.GroupExplorer;
+import networkx.Graph;
 
 /**
  * ConcentricConstrainedLayout places two sets of polygons onto a 2D plane.
  * All group 1 polygons are rendered with their center at the origin (concentric),
- * while all group 2 polygons share a common (but adjustable) center, which is set
- * to (d, 0) where d is optimized so that the connectivity cost is minimized.
+ * and all group 2 polygons at [1, 0].
  *
- * In each group, each polygon has its own scale and in‐plane rotation (its offset
- * parameter is now ignored so that they remain concentric). The rest of the
- * iterative local search algorithm remains analogous to the AxisConstrainedLayout.
+ * In each group, each polygon has its own scale and in‐plane rotation. The rest of
+ * the iterative local search algorithm is analogous to AxisConstrainedLayout.
  */
-public class ConcentricConstrainedLayout {
+public class ConcentricConstrainedLayout extends LayoutAlgo {
 
-    private static final double EPS = 1e-6;
+    private Map<Integer, double[]> result;
+    private double fitOut = -1;
+    
+    @Override
+    public LayoutAlgoArg[] getArgs() {
+        return new LayoutAlgoArg[]{
+            LayoutAlgoArg.ITERS,
+            LayoutAlgoArg.SEED,
+            LayoutAlgoArg.SHOW_FITTED_NODES,
+            LayoutAlgoArg.TRIES,
+            LayoutAlgoArg.INITIAL_ITERS
+        };
+    }
+    @Override
+    public void performLayout(double boxSize, String generator, org.jgrapht.Graph<Integer, DefaultEdge> graph, EnumMap<LayoutAlgoArg, Double> args) {
+        double[] fitOut = new double[]{-1};
+        result = computeLayoutN(generator,
+                    args.get(LayoutAlgoArg.ITERS).intValue(),
+                    args.get(LayoutAlgoArg.SEED).longValue(),
+                    boxSize,
+                    args.get(LayoutAlgoArg.TRIES).intValue(),
+                    args.get(LayoutAlgoArg.INITIAL_ITERS).intValue(),
+                    !args.get(LayoutAlgoArg.SHOW_FITTED_NODES).equals(0.0),
+                    fitOut);
+        this.fitOut = fitOut[0];
+        norm2D(result, boxSize);
+    }
+
+    @Override
+    public Map<Integer, double[]> getResult() {
+        return result;
+    }
+
+    @Override
+    public Double getFitOut() {
+        return fitOut;
+    }
+
     private static final double THRESHOLD = 1e-5;
     private static final double STEP_SIZE = 0.05;
 
@@ -360,12 +404,7 @@ public class ConcentricConstrainedLayout {
     // Generator-notation wrappers and main()
     // ------------------------------------------------------------------------
 
-    public static Map<Integer, double[]> computeLayout(String generatorS, int iterations, long seed, double scale, double[] fitOut) {
-        Map<Integer, double[]> positions = computeLayoutN(generatorS, iterations, seed, scale, iterations, fitOut);
-        return positions;
-    }
-
-    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries, double[] fitOut) {
+    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries, int initialIters, boolean showFittedNodes, double[] fitOut) {
 
         int[][][] generatorOrigNumbers = GroupExplorer.parseOperationsArr(generatorS);
         int[][][] generator = GroupExplorer.parseOperationsArr(GroupExplorer.renumberGeneratorNotation(generatorS));
@@ -404,19 +443,24 @@ public class ConcentricConstrainedLayout {
             }
         }
 
-        System.out.println("Seed: " + seed + " iters: " + iterations);
+        System.out.println("Seed: " + seed + " iters: " + iterations + " initialIters: " + initialIters + " tries: " + tries);
 
         double bestFit = Double.MAX_VALUE;
         LayoutResult result = null;
+        Random savedRandom = null;
 
         Random random = new Random(seed);
         for (int i = 0; i < tries; i++) {
-            LayoutResult result0 = computeLayout(g, nPolygons1, verticesPerPolygon1, nPolygons2, verticesPerPolygon2, iterations, random, 1);
+            Random tmp = cloneRandom(random);
+            LayoutResult result0 = computeLayout(g, nPolygons1, verticesPerPolygon1, nPolygons2, verticesPerPolygon2, initialIters, random, 1);
             if (result0.fit < bestFit) {
                 bestFit = result0.fit;
                 result = result0;
+                savedRandom = tmp;
             }
         }
+        // Recompute the layout with the best fit.
+        if (initialIters != iterations) result = computeLayout(g, nPolygons1, verticesPerPolygon1, nPolygons2, verticesPerPolygon2, iterations, savedRandom, 1);
         System.out.println("Final positions: ");
         for (Map.Entry<Integer, double[]> entry : result.positions.entrySet()) {
             System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
@@ -449,11 +493,13 @@ public class ConcentricConstrainedLayout {
             }
         }
 
-        for (int i = 0; i < dupePositions.size(); i++) {
-            double[] pos = dupePositions.get(i);
-            positions.put(nextKey, new double[]{pos[0] * scale + scale/2, pos[1] * scale + scale/2});
-            nextKey++;
-        }
+		if (showFittedNodes) {
+			for (int i = 0; i < dupePositions.size(); i++) {
+				double[] pos = dupePositions.get(i);
+				positions.put(nextKey, new double[]{pos[0] * scale + scale/2, pos[1] * scale + scale/2});
+				nextKey++;
+			}
+		}
 
         System.out.println("Fit: " + result.fit);
         fitOut[0] = result.fit;
@@ -463,45 +509,4 @@ public class ConcentricConstrainedLayout {
         return positions;
     }
 
-    public static void main(String[] args) {
-        // Run the ConcentricConstrainedLayout algorithm with custom polygon types
-        int iterations = 1000;
-        long seed = 5111;
-
-        // For example, group 1 is lines (2 vertices) and group 2 is squares (4 vertices)
-        // (all lying in a 2D plane).
-        int nPolygons1 = 2;
-        int verticesPerPolygon1 = 2;
-        int nPolygons2 = 2;
-        int verticesPerPolygon2 = 4;
-
-        // Define connectivity (e.g. merge vertices).
-        // Vertices for group 1: line 0 → vertices (1,2), line 1 → vertices (3,4);
-        // For group 2: square 0 → vertices (5,6,7,8), square 1 → vertices (9,10,11,12)
-        Graph mergedVertices = new Graph();
-        mergedVertices.addEdge(2, 5);   // e.g. merge vertex 2 (from group1) with vertex 5 (from group2)
-        mergedVertices.addEdge(3, 7);   // merge vertex 3 with vertex 7
-        mergedVertices.addEdge(4, 10);  // merge vertex 4 with vertex 10
-
-        LayoutResult result = computeLayout(mergedVertices, nPolygons1, verticesPerPolygon1,
-                nPolygons2, verticesPerPolygon2, iterations, new Random(seed), 1);
-
-        // Print the final results.
-        System.out.println("Final Positions:");
-        for (Map.Entry<Integer, double[]> entry : result.positions.entrySet()) {
-            System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
-        }
-
-        System.out.println("Center 1: " + Arrays.toString(result.center1));
-        System.out.println("Center 2: " + Arrays.toString(result.center2));
-
-        // Also test using generator notation.
-        // For instance, generator string "[(1,2)(3,4),(2,5,6,7)(8,9,10,11)]" yields
-        // group 1: lines and group 2: squares.
-        String generatorS = "[(1,2)(3,4),(2,5,6,7)(8,9,10,11)]";
-        Map<Integer, double[]> result2 = computeLayout(generatorS, iterations, seed, 1, new double[]{0});
-        for (Map.Entry<Integer, double[]> entry : result2.entrySet()) {
-            System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
-        }
-    }
 } 

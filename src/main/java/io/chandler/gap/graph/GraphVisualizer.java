@@ -1,58 +1,58 @@
 package io.chandler.gap.graph;
 
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Scanner;
+
+import org.jgrapht.Graph;
+import org.jgrapht.alg.drawing.IndexedFRLayoutAlgorithm2D;
+import org.jgrapht.alg.isomorphism.VF2GraphIsomorphismInspector;
+import org.jgrapht.graph.DefaultEdge;
+import org.jgrapht.graph.SimpleGraph;
+
+import io.chandler.gap.GroupExplorer;
+import io.chandler.gap.graph.genus.MultiGenus;
+import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayout;
+import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayoutMulti;
+import io.chandler.gap.graph.layoutalgos.ConcentricConstrainedLayout;
+import io.chandler.gap.graph.layoutalgos.Java3D;
+import io.chandler.gap.graph.layoutalgos.JavaNetworkx;
+import io.chandler.gap.graph.layoutalgos.JavaSpring;
+import io.chandler.gap.graph.layoutalgos.LayoutAlgo;
+import io.chandler.gap.graph.layoutalgos.LayoutAlgoArg;
 import javafx.application.Application;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.geometry.Bounds;
+import javafx.scene.Node;
 import javafx.scene.Scene;
-import javafx.scene.layout.Pane;
-import javafx.scene.paint.Color;
-import javafx.stage.Stage;
-import org.jgrapht.Graph;
-import org.jgrapht.graph.DefaultEdge;
-import org.jgrapht.graph.SimpleGraph;
-import javafx.scene.shape.Circle;
-import javafx.scene.shape.Line;
-import javafx.scene.shape.Rectangle;
-import javafx.scene.text.Text;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.TextField;
+import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.control.CheckBox;
-import javafx.scene.control.TextField;
-import javafx.scene.control.ComboBox;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
+import javafx.scene.shape.Line;
+import javafx.scene.text.Text;
 import javafx.stage.FileChooser;
-import javafx.scene.control.TextInputDialog;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Random;
-import java.util.Scanner;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import org.json.JSONObject;
-import org.json.JSONArray;
-import org.jgrapht.alg.isomorphism.VF2GraphIsomorphismInspector;
-import org.jgrapht.alg.drawing.IndexedFRLayoutAlgorithm2D;
-import org.jgrapht.alg.drawing.model.Box2D;
-import org.jgrapht.alg.drawing.model.LayoutModel2D;
-import org.jgrapht.alg.drawing.model.MapLayoutModel2D;
-import org.jgrapht.alg.drawing.model.Point2D;
-
-import io.chandler.gap.GroupExplorer;
-import io.chandler.gap.alg.drawing.Box3D;
-import io.chandler.gap.alg.drawing.LayoutModel3D;
-import io.chandler.gap.alg.drawing.MapLayoutModel3D;
-import io.chandler.gap.alg.drawing.IndexedFRLayoutAlgorithm3D;
-import io.chandler.gap.alg.drawing.Point3D;
-import io.chandler.gap.graph.genus.MultiGenus;
+import javafx.stage.Stage;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import javafx.beans.binding.Bindings;
 
 public class GraphVisualizer extends Application {
 
@@ -70,13 +70,15 @@ public class GraphVisualizer extends Application {
     private Pane graphPane;
 
     // Add new instance variables for layout configuration:
-    private TextField seedTextField, itersTextField, thetaTextField, normTextField;
+    private TextField seedTextField, itersTextField, thetaTextField, normTextField, triesTextField, initialItersTextField;
+    private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel;
     private ComboBox<String> layoutChoiceBox;
 	private Label numSharedLinesLabel;
     private Button genusButton;
     private Label fitLabel;
     // New checkbox to toggle the display of circles
     private CheckBox showCirclesCheckBox;
+    private CheckBox showFittedNodesCheckBox;
     // Remove the slider and add a trackball control for full 3D rotation.
     private Pane trackballPane;
     // Rotation angles (in radians) around X and Y axes.
@@ -99,6 +101,28 @@ public class GraphVisualizer extends Application {
     // Add new instance variables for interactive arrow updates:
     private List<DirectedArrow> directedArrows = new ArrayList<>();
     private Map<Integer, Circle> currentVertexCircleMap = new HashMap<>();
+
+    private Map<String, LayoutAlgo> layoutAlgoMap = new LinkedHashMap<>();
+    {
+        layoutAlgoMap.put("Java Spring", new JavaSpring());
+        layoutAlgoMap.put("Java 3D", new Java3D());
+        layoutAlgoMap.put("Java Networkx", new JavaNetworkx());
+        layoutAlgoMap.put("Axis Constrained", new AxisConstrainedLayout());
+        layoutAlgoMap.put("Axis Constrained Multi", new AxisConstrainedLayoutMulti());
+        layoutAlgoMap.put("Planar Puzzle", new ConcentricConstrainedLayout());
+    }
+    private final String defaultLayout = "Java Networkx";
+
+    // Observable list to track required arguments for the current algorithm
+    private ObservableList<LayoutAlgoArg> requiredArgs = FXCollections.observableArrayList();
+
+    private void bindVisibility(LayoutAlgoArg arg, Node... node) {
+        for (Node n : node) {
+            n.visibleProperty().bind(Bindings.createBooleanBinding(
+                () -> requiredArgs.contains(arg), requiredArgs));
+            n.managedProperty().bind(n.visibleProperty());
+        }
+    }
 
     public static void main(String[] args) {
         if (args.length > 0) {
@@ -142,33 +166,44 @@ public class GraphVisualizer extends Application {
             graphPane.setScaleY(scale);
         });
 
-        // Create the paginator controls.
+        // Create paginator controls.
         Button prevButton = new Button("Previous");
         Button nextButton = new Button("Next");
         Label pageLabel = new Label("Graph 1 / " + graphLines.size());
-		
+
         // Create layout configuration controls.
         seedTextField = new TextField("0");
-		itersTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_ITERATIONS));
-		normTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_NORMALIZATION_FACTOR));
-		thetaTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_THETA_FACTOR));
+        itersTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_ITERATIONS));
+        triesTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_ITERATIONS));
+        initialItersTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_ITERATIONS));
+        normTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_NORMALIZATION_FACTOR));
+        thetaTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_THETA_FACTOR));
+        
+        seedLabel = new Label("Seed:");
+        itersLabel = new Label("Iters:");
+        triesLabel = new Label("Tries:");
+        initialItersLabel = new Label("Initial Iters:");
+        thetaLabel = new Label("Theta Factor:");
+        normLabel = new Label("Norm Factor:");
+
+        showFittedNodesCheckBox = new CheckBox("Show Fitted Nodes");
+        showFittedNodesCheckBox.setSelected(false);
+
         numSharedLinesLabel = new Label("Shared Lines: 0");
         genusButton = new Button("Genus: ?");
         fitLabel = new Label("");
+
         // Create a trackball control for full 3D rotation.
         trackballPane = new Pane();
         trackballPane.setPrefSize(50, 50);
         trackballPane.setStyle("-fx-background-color: lightgray; -fx-border-color: black;");
-        // When the user presses the mouse, record the starting position.
         trackballPane.setOnMousePressed(e -> {
             lastMouseX = e.getSceneX();
             lastMouseY = e.getSceneY();
         });
-        // When dragging, compute the deltas and update rotation angles.
         trackballPane.setOnMouseDragged(e -> {
             double deltaX = e.getSceneX() - lastMouseX;
             double deltaY = e.getSceneY() - lastMouseY;
-            // Adjust these factors to control sensitivity.
             rotationY += deltaX * 0.01;
             rotationX += deltaY * 0.01;
             lastMouseX = e.getSceneX();
@@ -176,13 +211,17 @@ public class GraphVisualizer extends Application {
             updateGraph(graphPane, pageLabel);
         });
                 
-		for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField}) {
-			// Set width
-			textField.setPrefWidth(50);
-			textField.setOnKeyReleased(value -> {
-				updateGraph(graphPane, pageLabel);
-			});
-		}
+        // Configure the text fields (set width and key listeners)
+        for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField, triesTextField, initialItersTextField}) {
+            textField.setPrefWidth(50);
+            textField.setOnKeyReleased(value -> {
+                updateGraph(graphPane, pageLabel);
+            });
+        }
+
+        showFittedNodesCheckBox.selectedProperty().addListener((obs, oldVal, newVal) -> {
+            updateGraph(graphPane, pageLabel);
+        });
 
         Button randomizeButton = new Button("Randomize");
         randomizeButton.setOnAction(e -> {
@@ -190,7 +229,6 @@ public class GraphVisualizer extends Application {
             updateGraph(graphPane, pageLabel);
         });
 
-        // Add Load button to select a new TXT file.
         Button loadButton = new Button("Load");
         loadButton.setOnAction(e -> {
             FileChooser fileChooser = new FileChooser();
@@ -206,22 +244,45 @@ public class GraphVisualizer extends Application {
             }
         });
 
-
+        // Create layoutChoiceBox and other related checkboxes.
         layoutChoiceBox = new ComboBox<>();
-        layoutChoiceBox.getItems().addAll("Python Spring", "Python Planar", "Java Spring", "Java 3D", "Java Networkx", "Axis Constrained", "Axis Constrained Multi", "Planar Puzzle");
-        layoutChoiceBox.setValue("Java Spring");  // default choice
-        layoutChoiceBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
-        // Create the "Show Circles" checkbox. When toggled, updateGraph() is called.
+        layoutChoiceBox.getItems().addAll(layoutAlgoMap.keySet());
+        layoutChoiceBox.setValue(defaultLayout);  // default choice
+        layoutChoiceBox.setOnAction(e -> {
+            updateArgsVisibility();
+            updateGraph(graphPane, pageLabel);
+        });
+
         showCirclesCheckBox = new CheckBox("Show Circles");
         showCirclesCheckBox.setSelected(true);
-        // Add the new checkbox for showing direction
+
         showDirectionCheckBox = new CheckBox("Show Direction");
         showDirectionCheckBox.setSelected(false); // Default to not showing direction
         showDirectionCheckBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
-        HBox layoutControls = new HBox(10, new Label("Layout:"), layoutChoiceBox, new Label("Seed:"), seedTextField, new Label("Iters:"), itersTextField, new Label("Theta Factor:"), thetaTextField, new Label("Norm Factor:"), normTextField, showCirclesCheckBox, showDirectionCheckBox, randomizeButton, loadButton, trackballPane);
-        layoutControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
-        root.setTop(layoutControls);
 
+        // Create a top-bar HBox for the remaining controls.
+        HBox topControls = new HBox(10, randomizeButton, loadButton, trackballPane);
+        topControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
+        root.setTop(topControls);
+
+        // Create the sidebar VBox for layout configuration controls.
+        VBox sidebar = new VBox(10,
+            new Label("Layout:"), layoutChoiceBox,
+            seedLabel, seedTextField,
+            triesLabel, triesTextField,
+            initialItersLabel, initialItersTextField,
+            itersLabel, itersTextField,
+            thetaLabel, thetaTextField,
+            normLabel, normTextField,
+            showCirclesCheckBox,
+            showDirectionCheckBox,
+            showFittedNodesCheckBox
+        );
+        sidebar.setPrefWidth(200);
+        sidebar.setStyle("-fx-padding: 10;");
+        root.setRight(sidebar);
+
+        // Create the paginator controls.
         HBox paginator = new HBox(10, prevButton, pageLabel, nextButton);
         paginator.setStyle("-fx-padding: 10; -fx-alignment: center;");
         
@@ -325,6 +386,7 @@ public class GraphVisualizer extends Application {
             @Override
             public void changed(ObservableValue<? extends Bounds> obs, Bounds oldBounds, Bounds newBounds) {
                 if (newBounds.getWidth() > 100 && newBounds.getHeight() > 100) {
+                    updateArgsVisibility();
                     updateGraph(graphPane, pageLabel);
                     updateGraphInfo(graphLines.get(currentGraphIndex));
                     graphPane.layoutBoundsProperty().removeListener(this);
@@ -333,6 +395,15 @@ public class GraphVisualizer extends Application {
         };
 
         graphPane.layoutBoundsProperty().addListener(initListener);
+
+        // Bind visibility to whether the requiredArgs contains the corresponding LayoutAlgoArg
+        bindVisibility(LayoutAlgoArg.SEED, seedLabel, seedTextField);
+        bindVisibility(LayoutAlgoArg.ITERS, itersLabel, itersTextField);
+        bindVisibility(LayoutAlgoArg.THETA, thetaLabel, thetaTextField);
+        bindVisibility(LayoutAlgoArg.NORM, normLabel, normTextField);
+        bindVisibility(LayoutAlgoArg.TRIES, triesLabel, triesTextField);
+        bindVisibility(LayoutAlgoArg.INITIAL_ITERS, initialItersLabel, initialItersTextField);
+        bindVisibility(LayoutAlgoArg.SHOW_FITTED_NODES, showFittedNodesCheckBox);
 
         Scene scene = new Scene(root, 1024, 768);
         primaryStage.setTitle("Planar Graph Visualizer");
@@ -465,9 +536,9 @@ public class GraphVisualizer extends Application {
                     double nx = dx / length;
                     double ny = dy / length;
 
-                    // Calculate the perpendicular vector with a 4px margin
-                    double px = -ny * 4;
-                    double py = nx * 4;
+                    // Calculate the perpendicular vector with a thin margin
+                    double px = -ny * pane.getWidth() / 200;
+                    double py = nx * pane.getWidth() / 200;
 
                     // Define the four corners of the quadrilateral
                     double[] p1 = {sourcePos[0] + px, sourcePos[1] + py};
@@ -494,6 +565,21 @@ public class GraphVisualizer extends Application {
                 shadedPoly.setStroke(null);
                 // Add the polygon to the pane first so it appears beneath nodes/edges.
                 pane.getChildren().add(shadedPoly);
+
+                // Save a wrapper that associates this polygon with its vertex IDs.
+                shadedPolygons.add(new ShadedPolygonWrapper(shadedPoly, polygon));
+
+                // Draw directed arrows for polygon edges if enabled.
+                if (showDirectionCheckBox.isSelected()) {
+                    for (int i = 0; i < polygon.length; i++) {
+                        int a = polygon[i];
+                        int b = polygon[(i + 1) % polygon.length];
+                        double[] sourcePos = positions.get(a);
+                        double[] targetPos = positions.get(b);
+                        DirectedArrow arrow = createDirectedArrow(pane, sourcePos, targetPos, a, b);
+                        directedArrows.add(arrow);
+                    }
+                }
             }
         }
 
@@ -598,13 +684,19 @@ public class GraphVisualizer extends Application {
         // Build a composite key based on the current line and all layout parameters.
         String newCacheKey = currentLine + "_" + seedTextField.getText() + "_" + itersTextField.getText() 
                              + "_" + thetaTextField.getText() + "_" + normTextField.getText()
-                             + "_" + layoutChoiceBox.getValue();
+                             + "_" + layoutChoiceBox.getValue() + "_" + triesTextField.getText()
+                             + "_" + initialItersTextField.getText() + "_" + showFittedNodesCheckBox.isSelected();
         if (cachedGraphKey == null || !cachedGraphKey.equals(newCacheKey)) {
-            double[] fitOut = new double[]{-1};
-            cachedBasePositions = getCoordinates(currentLine, currentGraph, fitOut);
+
+            String method = layoutChoiceBox.getValue();
+            LayoutAlgo algo = layoutAlgoMap.get(method);
+            algo.performLayout(Math.min(graphPane.getWidth(), graphPane.getHeight()), currentLine, currentGraph, getArgs(algo));
+            Double fit = algo.getFitOut();
+
+            cachedBasePositions = algo.getResult();
             cachedGraphKey = newCacheKey;
-            if (fitOut[0] != -1) {
-                fitLabel.setText("Fit: " + String.format("%.5f", fitOut[0]));
+            if (fit != null) {
+                fitLabel.setText("Fit: " + String.format("%.5f", fit.doubleValue()));
             } else {
                 fitLabel.setText("");
             }
@@ -675,88 +767,6 @@ public class GraphVisualizer extends Application {
 		}
 		return count;
 	}
-
-    /**
-     * New method that selects the layout method based on the dropdown.
-     *
-     * @param graph The graph to layout.
-     * @return A mapping from vertex to (x, y) coordinates scaled to the window size, or null if an error occurs.
-     */
-    private Map<Integer, double[]> getCoordinates(String line, Graph<Integer, DefaultEdge> graph, double[] fitOut) {
-        String method = layoutChoiceBox.getValue();
-        if ("Java Spring".equals(method)) {
-            return getJavaSpringCoordinates(graph);
-        } else if ("Java 3D".equals(method)) {
-            return getJava3DCoordinates(graph);
-        } else if ("Java Networkx".equals(method)) {
-            return getJavaNetworkxCoordinates(graph);
-        } else if ("Axis Constrained".equals(method)) {
-            return getJavaAxisConstrainedCoordinates(line, false, fitOut);
-        } else if ("Axis Constrained Multi".equals(method)) {
-            return getJavaAxisConstrainedCoordinates(line, true, fitOut);
-        } else if ("Planar Puzzle".equals(method)) {
-            return getJavaPlanarPuzzleCoordinates(line, fitOut);
-        } else {
-            String algorithm = method.equals("Python Planar") ? "planar" : "spring";
-            return getPythonCoordinates(graph, algorithm);
-        }
-    }
-
-    /**
-     * Refactor the original networkx method into this new helper for Python-based layouts.
-     *
-     * @param graph The graph to layout.
-     * @param algorithm The layout algorithm to use.
-     * @return A mapping from vertex to (x, y) coordinates scaled to the window size, or null if an error occurs.
-     */
-    private Map<Integer, double[]> getPythonCoordinates(Graph<Integer, DefaultEdge> graph, String algorithm) {
-        Map<Integer, double[]> positions = new HashMap<>();
-        StringBuilder edgeData = new StringBuilder();
-        for (DefaultEdge edge : graph.edgeSet()) {
-            int u = graph.getEdgeSource(edge);
-            int v = graph.getEdgeTarget(edge);
-            edgeData.append(u).append(",").append(v).append(";");
-        }
-        if (edgeData.length() > 0) {
-            edgeData.setLength(edgeData.length() - 1);
-        }
-        try {
-            String seedArg = seedTextField.getText();
-            if (seedArg.isEmpty()) {
-                seedArg = "42";
-            }
-            List<String> command = new ArrayList<>();
-            command.add("python3");
-            command.add("networkx_layout.py");
-            command.add(edgeData.toString());
-            command.add(algorithm);
-            command.add(seedArg);
-
-            ProcessBuilder pb = new ProcessBuilder(command);
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            StringBuilder output = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line);
-            }
-            process.waitFor();
-            String jsonString = output.toString();
-            JSONObject json = new JSONObject(jsonString);
-            for (String key : json.keySet()) {
-                JSONArray coords = json.getJSONArray(key);
-                double x = coords.getDouble(0) * graphPane.getWidth();
-                double y = coords.getDouble(1) * graphPane.getWidth();
-                double z = coords.getDouble(2) * graphPane.getWidth();
-                positions.put(Integer.parseInt(key), new double[]{x, y, z});
-            }
-            return positions;
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
-        }
-    }
 
     /**
      * Returns a color for a vertex based on its frequency.
@@ -908,200 +918,32 @@ public class GraphVisualizer extends Application {
 	    return false;
 	}
 
-    /**
-     * Uses the JGraphT IndexedFRLayoutAlgorithm2D (a variant of Fruchterman-Reingold) to compute positions.
-     */
-    private Map<Integer, double[]> getJavaSpringCoordinates(Graph<Integer, DefaultEdge> graph) {
-        // Create a layout model; here we use the same WIDTH/HEIGHT as defined.
-        LayoutModel2D<Integer> layoutModel = new MapLayoutModel2D<Integer>(
-            new Box2D(graphPane.getWidth()*2, graphPane.getHeight()*2));
-
-		int iterations;
-		double theta;
-		double normalizationFactor;
-		int seed;
-
-		try {
-			iterations = Integer.parseInt(itersTextField.getText());
-			theta = Double.parseDouble(thetaTextField.getText());
-			normalizationFactor = Double.parseDouble(normTextField.getText());
-			seed = Integer.parseInt(seedTextField.getText());
-		} catch (NumberFormatException e) {
-			e.printStackTrace();
-			return null;
-		}
-
-		if (iterations < 0) iterations = 1;
-		if (normalizationFactor < 0.01) normalizationFactor = 0.01;
-		if (theta < 0.01) theta = 0.01;
-		if (iterations > 10000) iterations = 10000;
-		if (normalizationFactor > 0.99) normalizationFactor = 0.99;
-		if (theta > 0.99) theta = 0.99;
-
-        // Create an instance of the JGraphT force-directed algorithm.
-        IndexedFRLayoutAlgorithm2D<Integer, DefaultEdge> algorithm = new IndexedFRLayoutAlgorithm2D<>(
-			iterations, theta, normalizationFactor, new Random(seed));
-        algorithm.layout(graph, layoutModel);
-
-        Map<Integer, double[]> positions = new HashMap<>();
-        for (Integer vertex : graph.vertexSet()) {
-            Point2D point = layoutModel.get(vertex);
-            positions.put(vertex, new double[]{ point.getX(), point.getY() });
+    public Double getArg(LayoutAlgoArg arg) {
+        switch (arg) {
+            case ITERS:
+                return (double)Integer.parseInt(itersTextField.getText());
+            case THETA:
+                return Double.parseDouble(thetaTextField.getText());
+            case NORM:
+                return Double.parseDouble(normTextField.getText());
+            case SEED:
+                return (double)Integer.parseInt(seedTextField.getText());
+            case SHOW_FITTED_NODES:
+                return (showFittedNodesCheckBox.isSelected() ? 1. : 0.);
+            case TRIES:
+                return (double)Integer.parseInt(triesTextField.getText());
+            case INITIAL_ITERS:
+                return (double)Integer.parseInt(initialItersTextField.getText());
         }
-
-		// Normalize positions to 0.1*WIDTH and 0.1*HEIGHT to 0.9*WIDTH and 0.9*HEIGHT
-		// Get min max x and y values
-		double minX = Double.MAX_VALUE, maxX = Double.MIN_VALUE;
-		double minY = Double.MAX_VALUE, maxY = Double.MIN_VALUE;
-		for (double[] position : positions.values()) {
-			minX = Math.min(minX, position[0]);
-			maxX = Math.max(maxX, position[0]);
-			minY = Math.min(minY, position[1]);
-			maxY = Math.max(maxY, position[1]);
-		}
-        double width = graphPane.getWidth();
-        double height = graphPane.getHeight();
-		// Normalize to 0.1*WIDTH and 0.1*HEIGHT to 0.9*WIDTH and 0.9*HEIGHT
-		for (double[] position : positions.values()) {
-			position[0] = (position[0] - minX) / (maxX - minX) * 0.8 * width + 0.1 * width;
-			position[1] = (position[1] - minY) / (maxY - minY) * 0.8 * height + 0.1 * height;
-		}
-        return positions;
+        return null;
     }
 
-    /**
-     * Uses the IndexedFRLayoutAlgorithm3D to compute 3D positions.
-     */
-    private Map<Integer, double[]> getJava3DCoordinates(Graph<Integer, DefaultEdge> graph) {
-        int iterations;
-        double theta;
-        double normalizationFactor;
-        int seed;
-        try {
-            iterations = Integer.parseInt(itersTextField.getText());
-            theta = Double.parseDouble(thetaTextField.getText());
-            normalizationFactor = Double.parseDouble(normTextField.getText());
-            seed = Integer.parseInt(seedTextField.getText());
-        } catch (NumberFormatException e) {
-            e.printStackTrace();
-            return null;
+    private EnumMap<LayoutAlgoArg, Double> getArgs(LayoutAlgo algo) {
+        EnumMap<LayoutAlgoArg, Double> args = new EnumMap<>(LayoutAlgoArg.class);
+        for (LayoutAlgoArg arg : algo.getArgs()) {
+            args.put(arg, getArg(arg));
         }
-        if (iterations < 0) iterations = 1;
-        if (normalizationFactor < 0.01) normalizationFactor = 0.01;
-        if (theta < 0.01) theta = 0.01;
-        if (iterations > 10000) iterations = 10000;
-        if (normalizationFactor > 0.99) normalizationFactor = 0.99;
-        if (theta > 0.99) theta = 0.99;
-        
-        // Create a 3D layout model with a cube volume.
-        double height = graphPane.getHeight();
-        Box3D box3d = new Box3D(0,0,0, height*5, height*5, height*5);
-        LayoutModel3D<Integer> layoutModel = new MapLayoutModel3D<>(box3d);
-        
-        // Create an instance of the new 3D algorithm.
-        IndexedFRLayoutAlgorithm3D<Integer, DefaultEdge> algorithm3D =
-            new IndexedFRLayoutAlgorithm3D<>(iterations, theta, normalizationFactor, new Random(seed));
-        algorithm3D.layout(graph, layoutModel);
-        
-        // Extract positions from the layout model.
-        Map<Integer, double[]> positions = new HashMap<>();
-        for (Integer vertex : graph.vertexSet()) {
-            Point3D point = layoutModel.get(vertex);
-            positions.put(vertex, new double[]{ point.getX(), point.getY(), point.getZ() });
-        }
-        
-        // Normalize positions for 2D rendering.
-        double minX = Double.MAX_VALUE, maxX = Double.MIN_VALUE;
-        double minY = Double.MAX_VALUE, maxY = Double.MIN_VALUE;
-        double minZ = Double.MAX_VALUE, maxZ = Double.MIN_VALUE;
-        for (double[] pos : positions.values()) {
-            minX = Math.min(minX, pos[0]);
-            maxX = Math.max(maxX, pos[0]);
-            minY = Math.min(minY, pos[1]);
-            maxY = Math.max(maxY, pos[1]);
-            minZ = Math.min(minZ, pos[2]);
-            maxZ = Math.max(maxZ, pos[2]);
-        }
-        double minDim = Math.min(graphPane.getWidth(), graphPane.getHeight());
-        for (double[] pos : positions.values()) {
-            if (maxX - minX > 0)
-                pos[0] = (pos[0] - minX) / (maxX - minX) * 0.8 * minDim + 0.1 * minDim;
-            else
-                pos[0] = 0.5 * minDim;
-            if (maxY - minY > 0)
-                pos[1] = (pos[1] - minY) / (maxY - minY) * 0.8 * minDim + 0.1 * minDim;
-            else
-                pos[1] = 0.5 * minDim;
-            if (maxZ - minZ > 0)
-                pos[2] = (pos[2] - minZ) / (maxZ - minZ) * 0.8 * minDim + 0.1 * minDim;
-            else
-                pos[2] = 0.5 * minDim;
-        }
-        return positions;
-    }
-
-    private Map<Integer, double[]> getJavaNetworkxCoordinates(Graph<Integer, DefaultEdge> graph) {
-        StringBuilder edgeData = new StringBuilder();
-        for (DefaultEdge edge : graph.edgeSet()) {
-            int u = graph.getEdgeSource(edge);
-            int v = graph.getEdgeTarget(edge);
-            edgeData.append(u).append(",").append(v).append(";");
-        }
-        if (edgeData.length() > 0) {
-            edgeData.setLength(edgeData.length() - 1);
-        }
-        String seedArg = seedTextField.getText();
-        if (seedArg.isEmpty()) {
-            seedArg = "42";
-        }
-        long seedVal = Long.parseLong(seedArg);
-        // Call the static computeLayout method from the NetworkxLayout class in the networkx package
-        Map<Integer, double[]> positions = networkx.NetworkxLayout.computeLayout(edgeData.toString(), Integer.parseInt(itersTextField.getText()), 3, seedVal);
-
-        double minX = Double.MAX_VALUE, maxX = Double.MIN_VALUE;
-        double minY = Double.MAX_VALUE, maxY = Double.MIN_VALUE;
-        double minZ = Double.MAX_VALUE, maxZ = Double.MIN_VALUE;
-        for (double[] pos : positions.values()) {
-            minX = Math.min(minX, pos[0]);
-            maxX = Math.max(maxX, pos[0]);
-            minY = Math.min(minY, pos[1]);
-            maxY = Math.max(maxY, pos[1]);
-            minZ = Math.min(minZ, pos[2]);
-            maxZ = Math.max(maxZ, pos[2]);
-        }
-        double minDim = Math.min(graphPane.getWidth(), graphPane.getHeight());
-        for (double[] pos : positions.values()) {
-            if (maxX - minX > 0)
-                pos[0] = (pos[0] - minX) / (maxX - minX) * 0.8 * minDim + 0.1 * minDim;
-            else
-                pos[0] = 0.5 * minDim;
-            if (maxY - minY > 0)
-                pos[1] = (pos[1] - minY) / (maxY - minY) * 0.8 * minDim + 0.1 * minDim;
-            else
-                pos[1] = 0.5 * minDim;
-            if (maxZ - minZ > 0)
-                pos[2] = (pos[2] - minZ) / (maxZ - minZ) * 0.8 * minDim + 0.1 * minDim;
-            else
-                pos[2] = 0.5 * minDim;
-        }
-        return positions;
-    }
-
-    private Map<Integer, double[]> getJavaAxisConstrainedCoordinates(String line, boolean multi, double[] fit) {
-        long seedVal = Long.parseLong(seedTextField.getText());
-        Map<Integer, double[]> positions;
-        if (multi) {
-            positions = networkx.AxisConstrainedLayoutMulti.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight(), fit);
-        } else {
-            positions = networkx.AxisConstrainedLayout.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight(), fit);
-        }
-        return positions;
-    }
-
-    private Map<Integer, double[]> getJavaPlanarPuzzleCoordinates(String line, double[] fit) {
-        long seedVal = Long.parseLong(seedTextField.getText());
-        Map<Integer, double[]> positions = networkx.ConcentricConstrainedLayout.computeLayout(line, Integer.parseInt(itersTextField.getText()), seedVal, this.graphPane.getHeight(), fit);
-        return positions;
+        return args;
     }
 
     private DirectedArrow createDirectedArrow(Pane pane, double[] sourcePos, double[] targetPos, int source, int target) {
@@ -1173,5 +1015,18 @@ public class GraphVisualizer extends Application {
             arrow2.setEndX(x2);
             arrow2.setEndY(y2);
         }
+    }
+
+    /**
+     * Updates the visibility of the argument controls (seed, iters, theta, norm, show fitted nodes)
+     * based on the currently selected layout algorithm's getArgs() values.
+     */
+    private void updateArgsVisibility() {
+        String method = layoutChoiceBox.getValue();
+        LayoutAlgo algo = layoutAlgoMap.get(method);
+        if (algo == null) return;
+
+        // Update the observable list with the required arguments
+        requiredArgs.setAll(algo.getArgs());
     }
 }
