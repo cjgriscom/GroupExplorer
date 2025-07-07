@@ -1,6 +1,8 @@
 package io.chandler.gap.morajai;
 
 import io.chandler.gap.morajai.MoraJaiBox.Color;
+import io.chandler.gap.util.TimeEstimator;
+
 import static io.chandler.gap.morajai.MoraJaiBox.Color.*;
 
 import java.io.PrintStream;
@@ -47,68 +49,49 @@ public class MJAnalysis {
 
 			// Loop through and mark each zero state
 
-			Queue<Integer> curStates = new ArrayDeque<>();
-			HashSet<Integer> nextStates = new HashSet<>();
-
 			int depth = 0;
 
 			System.out.println("Generate depth " + depth);
 
-			generateDepth0(box, depths, curStates);
+			int counter = generateDepth0(box, depths);
 
-			System.out.println("Depth " + depth + " has " + curStates.size() + " states");
-			out.println("Depth " + depth + " has " + curStates.size() + " states");
-			if (curStates.size() < 100) {
-				for (int state : curStates) {
-					out.println(stateToJson(state));
-				}
-			}
-
-			depth++;
-
-			// Loop through solved states and mark their children
-			while (!curStates.isEmpty()) {
+			while (counter > 0) {
+				System.out.println("Depth " + depth + " has " + counter + " states");
+				counter = 0;
+				depth++;
 				System.out.println("Generate depth " + depth);
-				while (!curStates.isEmpty()) {
-					int state = curStates.poll();
+				TimeEstimator te = new TimeEstimator(1000000000);
+				long lastUpdate = System.currentTimeMillis();
+				nextState: for (int state = 0; state < 1000000000; state++) {
+					if (depths[state] != UNREACHABLE) continue; // Already reached in minimum moves
+
 					box.initFromState(targetColors, state);
+					
 					for (int i = 0; i < 9; i++) {
 						box.pressTile(i);
 						int newState = box.getState();
-						if (depths[newState] == UNREACHABLE) {
-							depths[newState] = depth;
-							nextStates.add(newState);
+						if (depths[newState] == depth - 1) {
+							depths[state] = depth;
+							counter++;
+							continue nextState;
 						}
 						box.reset();
 					}
-				}
-				System.out.println("Depth " + depth + " has " + nextStates.size() + " states");
-				out.println("Depth " + depth + " has " + nextStates.size() + " states");
-				if (nextStates.size() < 100) {
-					for (int state : nextStates) {
-						out.println(stateToJson(state));
+					if (System.currentTimeMillis() - lastUpdate > 5000) {
+						te.checkProgressEstimate(state, counter);
+						lastUpdate = System.currentTimeMillis();
 					}
 				}
-				curStates.addAll(nextStates);
-				nextStates.clear();
-				depth++;
+
 			}
+
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 	}
 
-	private void generateDepth0_old(MoraJaiBox box, int[] depths, Queue<Integer> curStates) {
-		for (int i = 0; i < 1000000000; i++) {
-			box.initFromState(targetColors, i);
-			if (box.areInnerMatchingOuter()) {
-				depths[i] = 0;
-				curStates.add(i);
-			}
-		}
-	}
-
-	private void generateDepth0(MoraJaiBox box, int[] depths, Queue<Integer> curStates) {
+	private int generateDepth0(MoraJaiBox box, int[] depths) {
+		int counter = 0;
 		Color[] initColors = new Color[9];
 		initColors[0] = targetColors[0];
 		initColors[2] = targetColors[1];
@@ -126,9 +109,10 @@ public class MJAnalysis {
 			box.init(targetColors, initColors);
 			if (box.areInnerMatchingOuter()) {
 				depths[box.getState()] = 0;
-				curStates.add(box.getState());
+				counter++;
 			}
 		}
+		return counter;
 	}
 
 
