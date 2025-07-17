@@ -1,5 +1,7 @@
 package io.chandler.gap.morajai;
 
+import java.util.Arrays;
+
 public class MoraJaiBox {
 	// Constants for press results
 	public static final int PRESS_OK = 0;
@@ -26,21 +28,22 @@ public class MoraJaiBox {
 
 	// State variables
 	private boolean initialized = false;
-	private final Color[] targetColors = new Color[4];
+	private final int[] targetColors = new int[4];
 	private final boolean[] outerState = new boolean[4];
-	private final Color[] initTileColors = new Color[9];
-	private final Color[] tileColors = new Color[9];
+	private final int[] initTileColors = new int[9];
+	private final int[] tileColors = new int[9];
+	private final int[] scratchpad = new int[Math.max(8, Color.N_COLORS + 1)];
 
 	// Constructor
 	public MoraJaiBox() {
 		// Initialize arrays with default values
 		for (int i = 0; i < 4; i++) {
-			targetColors[i] = Color.C_GY;
+			targetColors[i] = Color.C_GY.ordinal();
 			outerState[i] = false;
 		}
 		for (int i = 0; i < 9; i++) {
-			initTileColors[i] = Color.C_GY;
-			tileColors[i] = Color.C_GY;
+			initTileColors[i] = Color.C_GY.ordinal();
+			tileColors[i] = Color.C_GY.ordinal();
 		}
 	}
 
@@ -49,8 +52,12 @@ public class MoraJaiBox {
 			throw new IllegalArgumentException("Invalid array lengths");
 		}
 		
-		System.arraycopy(targetColors, 0, this.targetColors, 0, 4);
-		System.arraycopy(tileColors, 0, this.initTileColors, 0, 9);
+		for (int i = 0; i < 4; i++) {
+			this.targetColors[i] = targetColors[i].ordinal();
+		}
+		for (int i = 0; i < 9; i++) {
+			this.initTileColors[i] = tileColors[i].ordinal();
+		}
 		reset();
 		initialized = true;
 	}
@@ -60,10 +67,12 @@ public class MoraJaiBox {
 			throw new IllegalArgumentException("Invalid array lengths");
 		}
 
-		System.arraycopy(targetColors, 0, this.targetColors, 0, 4);
+		for (int i = 0; i < 4; i++) {
+			this.targetColors[i] = targetColors[i].ordinal();
+		}
 
 		for (int i = 0; i < 9; i++) {
-			initTileColors[i] = COLOR_VALUES[(state % 10)];
+			initTileColors[i] = state % 10;
 			state /= 10;
 		}
 
@@ -75,7 +84,7 @@ public class MoraJaiBox {
 		int state = 0;
 		int multiplier = 1;
 		for (int i = 0; i < 9; i++) {
-			state += tileColors[i].ordinal() * multiplier;   // tile 0 → 10^0, tile 1 → 10^1, …
+			state += tileColors[i] * multiplier;   // tile 0 → 10^0, tile 1 → 10^1, …
 			multiplier *= 10;
 		}
 		return state;
@@ -107,7 +116,7 @@ public class MoraJaiBox {
 	}
 
 	private void swapTiles(int tile1, int tile2) {
-		Color temp = tileColors[tile1];
+		int temp = tileColors[tile1];
 		tileColors[tile1] = tileColors[tile2];
 		tileColors[tile2] = temp;
 	}
@@ -120,20 +129,20 @@ public class MoraJaiBox {
 		return tile + offsetX + offsetY * 3;
 	}
 
-	private Color getOffsetColor(int tile, int offsetX, int offsetY) {
+	private int getOffsetColor(int tile, int offsetX, int offsetY) {
 		int offsetTile = getOffsetTileIdx(tile, offsetX, offsetY);
-		if (offsetTile == -1) return null;
+		if (offsetTile == -1) return -1;
 		return tileColors[offsetTile];
 	}
 
 	public Color getTileColor(int tile) {
 		if (!initialized || tile >= 9) return Color.C_GY;
-		return tileColors[tile];
+		return COLOR_VALUES[tileColors[tile]];
 	}
 
 	public Color getOuterColor(int outer) {
 		if (!initialized || outer >= 4) return Color.C_GY;
-		return outerState[outer] ? targetColors[outer] : Color.C_GY;
+		return outerState[outer] ? COLOR_VALUES[targetColors[outer]] : Color.C_GY;
 	}
 
 	public boolean isSolved() {
@@ -152,9 +161,9 @@ public class MoraJaiBox {
 	private void subPressRed(int tile) {
 		// Turn all white tiles black, and all black tiles red
 		for (int i = 0; i < 9; i++) {
-			if (tileColors[i] == Color.C_WH) {
-				tileColors[i] = Color.C_BK;
-			} else if (tileColors[i] == Color.C_BK) {
+			if (tileColors[i] == Color.C_WH.ordinal()) {
+				tileColors[i] = Color.C_BK.ordinal();
+			} else if (tileColors[i] == Color.C_BK.ordinal()) {
 				tileColors[i] = tileColors[tile]; // C_RD, except use self to propagate blue behavior
 			}
 		}
@@ -179,24 +188,24 @@ public class MoraJaiBox {
 
 	private void subPressOrange(int tile) {
 		// Tile switches to the color of the majority of its neighbors
-		int[] colorCounts = new int[Color.N_COLORS + 1];
+		int[] colorCounts = scratchpad(); // new int[Color.N_COLORS + 1];
 
 		// Count colors of neighbors
-		countNeighborColor(colorCounts, getOffsetColor(tile, -1, 0));  // left
-		countNeighborColor(colorCounts, getOffsetColor(tile, 1, 0));   // right
-		countNeighborColor(colorCounts, getOffsetColor(tile, 0, -1));  // up
-		countNeighborColor(colorCounts, getOffsetColor(tile, 0, 1));   // down
+		colorCounts[getOffsetColor(tile, -1, 0) + 1]++;
+		colorCounts[getOffsetColor(tile, 1, 0) + 1]++;
+		colorCounts[getOffsetColor(tile, 0, -1) + 1]++;
+		colorCounts[getOffsetColor(tile, 0, 1) + 1]++;
 
 		// Find the maximum
 		int maxCount = 0;
-		Color maxColor = null;
+		int maxColor = -1;
 		int maxColorCount = 0;
 
-		for (Color color : Color.values()) {
-			int count = colorCounts[color.ordinal() + 1];
+		for (int i = 1; i < Color.N_COLORS + 1; i++) {
+			int count = colorCounts[i];
 			if (count > maxCount) {
 				maxCount = count;
-				maxColor = color;
+				maxColor = i - 1;
 				maxColorCount = 1;
 			} else if (count == maxCount) {
 				maxColorCount++;
@@ -208,33 +217,36 @@ public class MoraJaiBox {
 		}
 	}
 
-	private void countNeighborColor(int[] colorCounts, Color color) {
-		if (color != null) {
-			colorCounts[color.ordinal() + 1]++;
-		}
+	private int[] scratchpad() {
+		Arrays.fill(scratchpad, 0);
+		return scratchpad;
 	}
 
 	private void subPressPink(int tile) {
 		// Rotate clockwise all adjacent (inc. diagonal) tiles, skipping anything off edge
-		int[] offsetTiles = new int[8];
+		int[] offsetTiles = scratchpad(); // new int[8];
 		int totalTiles = 0;
 
-		// Collect valid offset tiles
-		int[][] offsets = {
-			{-1, 0}, {-1, 1}, {0, 1}, {1, 1},
-			{1, 0}, {1, -1}, {0, -1}, {-1, -1}
-		};
-
-		for (int[] offset : offsets) {
-			int offsetTile = getOffsetTileIdx(tile, offset[0], offset[1]);
-			if (offsetTile != -1) {
-				offsetTiles[totalTiles++] = offsetTile;
-			}
-		}
+		int offsetTile = getOffsetTileIdx(tile, -1, 0);
+		if (offsetTile != -1) offsetTiles[totalTiles++] = offsetTile;
+		offsetTile = getOffsetTileIdx(tile, -1, 1);
+		if (offsetTile != -1) offsetTiles[totalTiles++] = offsetTile;
+		offsetTile = getOffsetTileIdx(tile, 0, 1);
+		if (offsetTile != -1) offsetTiles[totalTiles++] = offsetTile;
+		offsetTile = getOffsetTileIdx(tile, 1, 1);
+		if (offsetTile != -1) offsetTiles[totalTiles++] = offsetTile;
+		offsetTile = getOffsetTileIdx(tile, 1, 0);
+		if (offsetTile != -1) offsetTiles[totalTiles++] = offsetTile;
+		offsetTile = getOffsetTileIdx(tile, 1, -1);
+		if (offsetTile != -1) offsetTiles[totalTiles++] = offsetTile;
+		offsetTile = getOffsetTileIdx(tile, 0, -1);
+		if (offsetTile != -1) offsetTiles[totalTiles++] = offsetTile;
+		offsetTile = getOffsetTileIdx(tile, -1, -1);
+		if (offsetTile != -1) offsetTiles[totalTiles++] = offsetTile;
 
 		if (totalTiles > 0) {
 			// Rotate the tiles
-			Color temp = tileColors[offsetTiles[0]];
+			int temp = tileColors[offsetTiles[0]];
 			for (int i = 0; i < totalTiles - 1; i++) {
 				tileColors[offsetTiles[i]] = tileColors[offsetTiles[i + 1]];
 			}
@@ -242,22 +254,22 @@ public class MoraJaiBox {
 		}
 	}
 
+	private static final int[][] WHITE_OFFSETS = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
 	private void subPressWhite(int tile) {
 		// Invert (grey -> white, white -> grey) adjacent grey tiles and self
-		int[][] offsets = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
-		Color selfColor = tileColors[tile]; // C_WH, except use self to propagate blue behavior
+		int selfColor = tileColors[tile]; // C_WH, except use self to propagate blue behavior
 
-		for (int[] offset : offsets) {
+		for (int[] offset : WHITE_OFFSETS) {
 			int offsetTile = getOffsetTileIdx(tile, offset[0], offset[1]);
 			if (offsetTile != -1) {
-				if (tileColors[offsetTile] == Color.C_GY) {
+				if (tileColors[offsetTile] == Color.C_GY.ordinal()) {
 					tileColors[offsetTile] = selfColor;
 				} else if (tileColors[offsetTile] == selfColor) {
-					tileColors[offsetTile] = Color.C_GY;
+					tileColors[offsetTile] = Color.C_GY.ordinal();
 				}
 			}
 		}
-		tileColors[tile] = Color.C_GY;
+		tileColors[tile] = Color.C_GY.ordinal();
 	}
 
 	private void subPressBlack(int tile) {
@@ -265,7 +277,7 @@ public class MoraJaiBox {
 		int tile0 = (tile / 3) * 3;
 		int tile1 = tile0 + 1;
 		int tile2 = tile0 + 2;
-		Color temp = tileColors[tile0];
+		int temp = tileColors[tile0];
 		tileColors[tile0] = tileColors[tile2];
 		tileColors[tile2] = tileColors[tile1];
 		tileColors[tile1] = temp;
@@ -273,10 +285,10 @@ public class MoraJaiBox {
 
 	private void subPressBlue(int tile) {
 		// Perform action of center tile
-		switch (tileColors[4]) {
+		switch (COLOR_VALUES[tileColors[4]]) {
 			case C_GY: subPressGray(tile); break;
 			case C_RD: subPressRed(tile); break;
-			case C_GN: subPressGreen(tile); break;
+			case C_GN: subPressGreen(tile); break; 
 			case C_BK: subPressBlack(tile); break;
 			case C_WH: subPressWhite(tile); break;
 			case C_PI: subPressPink(tile); break;
@@ -291,7 +303,7 @@ public class MoraJaiBox {
 		if (tile >= 9) return PRESS_OK;
 		if (isSolved()) return PRESS_COMPLETED;
 
-		switch (tileColors[tile]) {
+		switch (COLOR_VALUES[tileColors[tile]]) {
 			case C_GY: subPressGray(tile); break;
 			case C_RD: subPressRed(tile); break;
 			case C_GN: subPressGreen(tile); break;

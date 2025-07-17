@@ -8,12 +8,8 @@ import static io.chandler.gap.morajai.MoraJaiBox.Color.*;
 import java.io.PrintStream;
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Queue;
 import java.util.StringJoiner;
 
 public class MJAnalysisDirected {
