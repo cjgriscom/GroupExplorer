@@ -1,7 +1,6 @@
 package io.chandler.gap.morajai;
 
 import io.chandler.gap.morajai.MoraJaiBox.Color;
-import io.chandler.gap.util.TimeEstimator;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 
 import static io.chandler.gap.morajai.MoraJaiBox.Color.*;
@@ -15,12 +14,24 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.StringJoiner;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+
+import com.googlecode.lanterna.TerminalSize;
+import com.googlecode.lanterna.TextColor;
+import com.googlecode.lanterna.graphics.TextGraphics;
+import com.googlecode.lanterna.input.KeyStroke;
+import com.googlecode.lanterna.input.KeyType;
+import com.googlecode.lanterna.screen.Screen;
+import com.googlecode.lanterna.screen.TerminalScreen;
+import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
+import com.googlecode.lanterna.terminal.Terminal;
 
 public class MJAnalysis {
 
@@ -39,9 +50,12 @@ public class MJAnalysis {
 	private final Color[] targetColors;
 	private final ThreadLocal<MoraJaiBox> threadLocalBox = ThreadLocal.withInitial(MoraJaiBox::new);
 
+	private int threads = 17;
+
 	private static class MJAnalysisStats {
 		
 		final String filename;
+		final int idx;
 		boolean begun = false;
 		int initalPruned = 0;
 
@@ -53,8 +67,9 @@ public class MJAnalysis {
 		boolean complete = false;
 		
 
-		private MJAnalysisStats(String filename) {
+		private MJAnalysisStats(int idx, String filename) {
 			this.filename = filename;
+			this.idx = idx;
 		}
 	}
 
@@ -95,6 +110,11 @@ public class MJAnalysis {
 	public MJAnalysis(Color[] targetColors, boolean noBlue) {
 		this.targetColors = targetColors;
 		this.noBlue = noBlue;
+	}
+
+	public MJAnalysis setThreads(int threads) {
+		this.threads = threads;
+		return this;
 	}
 
 	public String stateToJson(int state) {
@@ -148,19 +168,17 @@ public class MJAnalysis {
 		}
 	}
 
-	public void fullDepthAnalysis(Consumer<MJAnalysisStats> statsUpdate) {
-
-		
+	public void fullDepthAnalysis(int idx, Consumer<MJAnalysisStats> statsUpdate) {
 
 		String filename = noBlue ? "noBlue" : "";
 		for (Color color : targetColors) {
 			if (noBlue && color == C_BU) return;
 			filename += "_" + color.name();
 		}
-		MJAnalysisStats stats = new MJAnalysisStats(filename);
+		MJAnalysisStats stats = new MJAnalysisStats(idx, filename);
 		statsUpdate.accept(stats);
 		
-		try (ExecutorService executor = Executors.newFixedThreadPool(17);  
+		try (ExecutorService executor = Executors.newFixedThreadPool(threads);  
 		     PrintStream out = new PrintStream(new File("morajai_depths/depths_v2_" + filename + ".txt"))) {
 
 			MoraJaiBox box = new MoraJaiBox();
@@ -170,6 +188,10 @@ public class MJAnalysis {
 			// Loop through and mark each zero state
 			int depth = 0;
 			int counter = generateDepth0(box, depths);
+			stats.begun = true;
+			stats.depth = 0;
+			stats.statesAtDepth = counter;
+			statsUpdate.accept(stats);
 
 			final boolean CHECK_FALSE_POSITIVES = false;
 
@@ -328,7 +350,6 @@ public class MJAnalysis {
 
 				prunedDead = atomicDeadStatesCount.get();
 				stats.initalPruned = prunedDead;
-				stats.begun = true;
 			}
 
 
@@ -407,13 +428,13 @@ public class MJAnalysis {
 
 							threadBox.initFromState(targetColors, state);
 							
-							boolean uniqueStateFound = false;
+							boolean pathsRemain = false;
 							for (int i = 0; i < 9; i++) {
 								threadBox.pressTile(i);
 								int newState = threadBox.getState();
 								
-								if (newState != state && !depths.isDead(newState)) {
-									uniqueStateFound = true;
+								if (depths.isUnreached(newState) && newState != state) {
+									pathsRemain = true;
 								}
 
 								if (depths.getDepth(newState) == currentDepth - 1) { // Found a path to the previous depth
@@ -424,7 +445,7 @@ public class MJAnalysis {
 								threadBox.reset();
 							}
 
-							if (!uniqueStateFound) {
+							if (!pathsRemain) {
 								// Dead
 								localDeadStates.add(state);
 							}
@@ -555,46 +576,137 @@ public class MJAnalysis {
 		return pool;
 	}
 
-	private static List<Integer> buildSeededPool(int seed, int startpoint) {
+	private static List<Integer> buildSeededPool(int seed) {
 		List<Integer> pool = new ArrayList<>();
 		for (int i = 0; i < 10000; i++) {
 			pool.add(i);
 		}
 		Collections.shuffle(pool, new Random(seed));
-		pool = pool.subList(startpoint, pool.size());
 		return pool;
 	}
 
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws IOException, InterruptedException {
 		//List<Integer> pool = buildPurpleAndYellowPool(4637);
-		List<Integer> pool = buildSeededPool(-1234, 0);
+		List<Integer> pool = buildSeededPool(-1234);
 		boolean noBlue = false;
 
-		int total = Color.values().length * Color.values().length * Color.values().length * Color.values().length;
+		int total = 10000;
+		int skipTo = 22;
 
-		for (int i = 0; i < pool.size(); i++) {
-			int idx = pool.get(i);
+		for (int i = 0; i < skipTo; i++) {
+			pool.remove(0);
+		}
+		
+		BlockingQueue<Integer> queue = new LinkedBlockingQueue<>(pool);
+	
+		int numThreads = 3;
+		int numInnerThreads = 6;
+		MJAnalysisStats[] stats = new MJAnalysisStats[numThreads];
+		int[] ids = new int[numThreads];
+		Arrays.fill(ids, -1);
+		Thread[] threads = new Thread[numThreads];
 
-			System.out.println(i + ": " + idx + "/" + (total-1));
+		for (int i = 0; i < numThreads; i++) {
+			int threadId = i;
+			stats[threadId] = new MJAnalysisStats(threadId, "-");
+			threads[threadId] = new Thread(() -> {
+				while (true) {
+					try {
+						
+						Integer idx = queue.poll();
+						if (idx == null) break;
+						ids[threadId] = total - queue.size() - 1;
 
-			MJAnalysis analysis = new MJAnalysis(new Color[] { Color.values()[idx/1000%10], Color.values()[idx/100%10], Color.values()[idx/10%10], Color.values()[idx%10] }, noBlue);
-			
-			analysis.fullDepthAnalysis((stats) -> {
-				if (!stats.begun) {
-					System.out.println("Filename : " + stats.filename);
-				} else {
-					if (stats.depth == 0) {
-						System.out.println("Initial pruned :	" + stats.initalPruned);
-					}
-					if (stats.complete) {
-						System.out.println("Complete");
-					} else {
-						System.out.println("Depth " + stats.depth + " has " + stats.statesAtDepth + " states (" + stats.unreached + " unreached, " + stats.dead + " dead)");
+						MJAnalysis analysis = new MJAnalysis(new Color[] { Color.values()[idx/1000%10], Color.values()[idx/100%10], Color.values()[idx/10%10], Color.values()[idx%10] }, noBlue);
+						analysis.setThreads(numInnerThreads);
+						analysis.fullDepthAnalysis(idx, (s) -> {
+							synchronized(stats) {
+								stats[threadId] = s;
+							}
+						});
+
+					} catch (Exception e) {
+						e.printStackTrace();
 					}
 				}
 			});
+			threads[threadId].start();
 		}
+
+		Terminal terminal = new DefaultTerminalFactory().createTerminal();
+		Screen screen = new TerminalScreen(terminal);
+		screen.startScreen();
+		screen.setCursorPosition(null);
+
+		try {
+			final String headerFormat = "%-5s %-6s %-30s %-12s %-8s %-10s %-12s %-12s";
+    		final String header = String.format(headerFormat, "#", "ID", "Filename", "Status", "Depth", "Size", "Unreached", "Dead");
+			
+			TerminalSize terminalSize = screen.getTerminalSize();
+			
+
+			while (true) {
+				KeyStroke keyStroke = screen.pollInput();
+				if (keyStroke != null && keyStroke.getKeyType() == KeyType.Character) {
+					if (keyStroke.getCharacter() == 'q') {
+						System.exit(1);
+						break;
+					}
+					if (keyStroke.getCharacter() == 'c') {
+						queue.clear();
+					}
+				}
+
+				TextGraphics tg = screen.newTextGraphics();
+				TerminalSize newSize = screen.doResizeIfNecessary();
+				if (newSize != null) {
+					terminalSize = newSize;
+					screen.clear();
+				}
+
+				tg.setBackgroundColor(TextColor.ANSI.BLUE);
+				tg.putString(0, 0, String.format("%-" + terminalSize.getColumns() + "s", header));
+				tg.setBackgroundColor(TextColor.ANSI.BLACK);
+
+				boolean allComplete = true;
+				for (int i = 0; i < numThreads; i++) {
+					if (threads[i].isAlive()) {
+						allComplete = false;
+					}
+					MJAnalysisStats s = stats[i];
+					String line;
+					if (!s.begun) {
+						line = String.format(headerFormat, ids[i] == -1 ? "-" : ids[i], s.idx, s.filename, "Waiting", "-", "-", "-", "-");
+					} else if (s.complete) {
+						line = String.format(headerFormat, ids[i] == -1 ? "-" : ids[i], s.idx, s.filename, "Complete", s.depth, s.statesAtDepth, s.unreached, s.dead);
+					} else {
+						line = String.format(headerFormat, ids[i] == -1 ? "-" : ids[i], s.idx, s.filename, "Running", s.depth, s.statesAtDepth, s.unreached, s.dead);
+					}
+					tg.putString(0, i + 1, String.format("%-" + terminalSize.getColumns() + "s", line));
+				}
+				
+				String footer = "Press 'q' to quit, 'c' to clear queue. ";
+				if (!queue.isEmpty()) {
+					footer += queue.size() + " items remaining.";
+				} else {
+					footer += "Queue empty, waiting for jobs to finish...";
+				}
+				tg.putString(0, terminalSize.getRows() - 1, String.format("%-" + terminalSize.getColumns() + "s", footer));
+
+				screen.refresh();
+				if (allComplete) break;
+				Thread.sleep(300);
+			}
+		} finally {
+			screen.stopScreen();
+			screen.close();
+		}
+
+		for (Thread thread : threads) {
+			thread.join();
+		}
+
 		return;
 	}
 }
