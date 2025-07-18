@@ -309,14 +309,18 @@ public class MJAnalysisGPU {
 					}
 					//System.out.println("Counted " + counter + " states");
 					
-					if (counter < 180) {
-						for (int i = 0; i < 1000000000; i++) {
-							if (isSet(next, i)) {
-								out.println(stateToJson(targetColors, i));
+					if (counter > 0) {
+						if (counter < 180) {
+							for (int i = 0; i < 1000000000; i+=64) {
+								long l = next[i/64];
+								if (l == 0) continue;
+								for (int j = 0; j < 64; j++) {
+									if (isSet(next, i + j)) {
+										out.println(stateToJson(targetColors, i + j));
+									}
+								}
 							}
 						}
-					}
-					if (counter > 0) {
 						for (int i = 0; i < reached.length; i++) {
 							reached[i] |= current[i];
 							current[i] = next[i];
