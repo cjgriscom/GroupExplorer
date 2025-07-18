@@ -23,7 +23,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import com.googlecode.lanterna.TerminalSize;
@@ -33,22 +32,12 @@ import com.googlecode.lanterna.input.KeyStroke;
 import com.googlecode.lanterna.input.KeyType;
 import com.googlecode.lanterna.screen.Screen;
 import com.googlecode.lanterna.screen.TerminalScreen;
+import com.googlecode.lanterna.screen.Screen.RefreshType;
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
 import com.googlecode.lanterna.terminal.Terminal;
 import org.apache.commons.cli.*;
 
 public class MJAnalysis {
-
-	private static final int blueOrd = C_BU.ordinal();
-	private static final int redOrd = C_RD.ordinal();
-	private static final int greenOrd = C_GN.ordinal();
-	private static final int yellowOrd = C_YE.ordinal();
-	private static final int purpleOrd = C_PU.ordinal();
-	private static final int orangeOrd = C_OR.ordinal();
-	private static final int pinkOrd = C_PI.ordinal();
-	private static final int blackOrd = C_BK.ordinal();
-	private static final int whiteOrd = C_WH.ordinal();
-	private static final int grayOrd = C_GY.ordinal();
 
 	private final boolean noBlue;
 	private final Color[] targetColors;
@@ -76,10 +65,6 @@ public class MJAnalysis {
 		public void setDepth(int state, int depth) {
 			if (depth > 250) throw new RuntimeException("Depth exceeds 250");
 			depths[state] = (byte)depth;
-		}
-
-		public boolean isDead(int state) {
-			return depths[state] == DEAD;
 		}
 
 		public boolean isUnreached(int state) {
@@ -113,50 +98,9 @@ public class MJAnalysis {
 		return "[" + joiner.toString() + "]";
 	}
 
-	private int countTarget(Color[] targetColors, Color color) {
-		int count = 0;
-		if (targetColors[0] == color) count++;
-		if (targetColors[1] == color) count++;
-		if (targetColors[2] == color) count++;
-		if (targetColors[3] == color) count++;
-		return count;
-	}
-
-	private static void fillCounts(int state, byte[] cnt) {
-		Arrays.fill(cnt, (byte)0);
-		for (int i = 0; i < 9; i++) {
-			cnt[state % 10]++;
-			state /= 10;
-		}
-	}
-
-	// Prune colors that don't have any weird interactions
-	private void basicColorPrune(Color targetColor, int colorOrd, int state, byte[] cnt, IntOpenHashSet states) {
-		int targetColorCount = 0;
-		if ((targetColorCount = countTarget(targetColors, targetColor)) != 0) {
-			int basics = cnt[colorOrd];
-			if (basics == 0) {
-				states.add(state);
-			} else if (basics < targetColorCount) {
-				// targetColorCount must be 2+
-				int oranges = cnt[orangeOrd];
-				int blues = cnt[blueOrd];
-				int whitesAndGreysMinus2 = Math.max(0, cnt[whiteOrd] + cnt[grayOrd] - 2);
-				if (basics < 2
-						|| oranges == 0
-						|| (oranges +
-							blues + whitesAndGreysMinus2 +
-							basics)
-							< targetColorCount) {
-					states.add(state);
-				}
-			}
-		}
-	}
-
 	public void fullDepthAnalysis(int idx, Consumer<MJAnalysisStats> statsUpdate) {
 
-		String filename = noBlue ? "noBlue" : "";
+		String filename = noBlue ? "_noBlue" : "";
 		for (Color color : targetColors) {
 			if (noBlue && color == C_BU) return;
 			filename += "_" + color.name();
@@ -165,7 +109,8 @@ public class MJAnalysis {
 		statsUpdate.accept(stats);
 		
 		try (ExecutorService executor = Executors.newFixedThreadPool(threads);  
-			 PrintStream out = new PrintStream(new File(storageDir.resolve("depths_v2_" + filename + ".txt").toString()))) {
+			 PrintStream out = new PrintStream(new File(storageDir.resolve("depths_v2_" + idx + filename + ".txt").toString()))) {
+			out.println("Starting analysis for " + idx + " " + filename + " with CPU - pruner: " + true);
 
 			MoraJaiBox box = new MoraJaiBox();
 			
@@ -177,168 +122,18 @@ public class MJAnalysis {
 			stats.begun = true;
 			stats.depth = 0;
 			stats.statesAtDepth = counter;
+			stats.pruning = true;
 			statsUpdate.accept(stats);
 
-			final boolean CHECK_FALSE_POSITIVES = false;
 
-			int prunedDead = 0;
-			{
-				// Process states in parallel chunks
-				int numChunks = 1000;
-				int chunkSize = 1000000000 / numChunks;
-
-				AtomicInteger atomicProgressCount = new AtomicInteger(0);
-				AtomicInteger atomicDeadStatesCount = new AtomicInteger(0);
-
-				for (int worker = 0; worker < numChunks; worker++) {
-					int chunkIndex = worker;
-					executor.submit(() -> {
-
-						int startState = chunkIndex * chunkSize;
-						int endState = Math.min(startState + chunkSize, 1000000000);
-
-						IntOpenHashSet states = new IntOpenHashSet();
-
-						int localProgressCount = 0;
-
-						byte[] cnt = new byte[10];
-
-						for (int state = startState; state < endState; state++) {
-							fillCounts(state, cnt);
-							localProgressCount++;
-							if (state % 1000 == 0) {
-								atomicProgressCount.addAndGet(localProgressCount); // Update progress estimate every 1000 states}
-								localProgressCount = 0;
-							}
-							int targetColorCount = 0;
-
-							if (noBlue && cnt[blueOrd] > 0) {
-								states.add(state);
-							}
-							boolean containsWhite = false;
-							if ((targetColorCount = countTarget(targetColors, C_WH)) != 0) {
-								containsWhite = true;
-								// Can't materialize white
-								if (cnt[whiteOrd] == 0) states.add(state);
-							}
-							if ((targetColorCount = countTarget(targetColors, C_GY)) != 0 || containsWhite) {
-								int greysAndWhites = cnt[grayOrd] + cnt[whiteOrd];
-								if (greysAndWhites == 0) {
-									states.add(state);
-								} else if (greysAndWhites < targetColorCount) {
-									// Orange and blue can both generate more white/gry
-									if (	cnt[orangeOrd] +
-											 cnt[blueOrd] +
-											 greysAndWhites
-												< targetColorCount) {
-										states.add(state);
-									}
-								}
-							}
-							basicColorPrune(C_GN, greenOrd, state, cnt, states);
-							basicColorPrune(C_YE, yellowOrd, state, cnt, states);
-							basicColorPrune(C_PU, purpleOrd, state, cnt, states);
-							basicColorPrune(C_PI, pinkOrd, state, cnt, states);
-
-							// Orange
-							if ((targetColorCount = countTarget(targetColors, C_OR)) != 0) {
-								int oranges = cnt[orangeOrd];
-								if (oranges == 0) {
-									states.add(state);
-								} else if (oranges == 1) {
-									if (targetColorCount != 1) states.add(state); 
-								} else if (oranges < targetColorCount) {
-									// Sum blue and grey and white
-									int bgw = cnt[grayOrd] + cnt[blueOrd] + cnt[whiteOrd];
-									// Simplified but good enough
-									if (oranges + bgw < targetColorCount) {
-										states.add(state);
-									}
-								}
-							}
-
-							int reds = cnt[redOrd];
-							// Red is maybe the most complicated, keep it simple for now
-							if ((targetColorCount = countTarget(targetColors, C_RD)) != 0) {
-								// Ensure at least one red
-								if (reds == 0) states.add(state);
-								else {
-									// There's at least one red
-									if (reds < targetColorCount) {
-										// Not enough red, for simplicity just sum all morphing combos
-										int orangeBluesBlack = cnt[orangeOrd] + cnt[blueOrd] + cnt[blackOrd];
-										int whitesAndGreys = cnt[whiteOrd] + cnt[grayOrd];
-										if (orangeBluesBlack + whitesAndGreys + reds < targetColorCount) {
-											states.add(state);
-										}
-									}
-								}
-							}
-
-							// Black
-							if ((targetColorCount = countTarget(targetColors, C_BK)) != 0) {
-								if (reds == 0) {
-									// No red so black is a basic color
-									basicColorPrune(C_BK, blackOrd, state, cnt, states);
-								} else {
-									// For simplicity just sum all morphing combos
-									int orangeBluesBlack = cnt[orangeOrd] + cnt[blueOrd] + cnt[blackOrd];
-									int whitesAndGreys = cnt[whiteOrd] + cnt[grayOrd];
-									if (orangeBluesBlack + whitesAndGreys < targetColorCount) {
-										states.add(state);
-									}
-								}
-							}
-
-							// Blue is also complicated
-							if ((targetColorCount = countTarget(targetColors, C_BU)) != 0) {
-								// Sum blue, orange, white, grey
-								int blue = cnt[blueOrd];
-								int whiteGrey = cnt[whiteOrd] + cnt[grayOrd];
-								int orange = cnt[orangeOrd];
-
-								if (reds == 0) {
-									if (blue + whiteGrey + orange < targetColorCount) {
-										states.add(state);
-									}
-								} else {
-									int black = cnt[blackOrd];
-									if (black + blue + whiteGrey + orange < targetColorCount) {
-										states.add(state);
-									}
-
-								}
-							}
-						}
-
-
-						atomicProgressCount.addAndGet(localProgressCount);
-
-						atomicDeadStatesCount.addAndGet(states.size());
-						synchronized (depths) {
-							for (int state : states) {
-								depths.markDead(state);
-							}
-						}
-						return null;
-					});
-				}
-
-				while (true) {
-					int completed = atomicProgressCount.get();
-					if (completed == 1000000000) break;
-					try {
-						Thread.sleep(500);
-					} catch (InterruptedException e) {
-						e.printStackTrace();
-					}
-				}
-
-				prunedDead = atomicDeadStatesCount.get();
-				stats.initalPruned = prunedDead;
-			}
-
-
+			int prunedDead = MJColorPrune.prune(executor, noBlue, targetColors, (state) -> {
+				depths.markDead(state);
+			});
+			stats.initalPruned = prunedDead;
+			stats.dead = prunedDead;
+			stats.pruning = false;
+			statsUpdate.accept(stats);
+			
 			Object monitor = new Object();
 			int counterAccum = 0;
 
@@ -401,17 +196,8 @@ public class MJAnalysis {
 							localProgressCount++;
 
 							// Already reached in minimum moves, or dead end
-							if (!depths.isUnreached(state) && (!CHECK_FALSE_POSITIVES || !depths.isDead(state))) continue;
+							if (!depths.isUnreached(state)) continue;
 							
-							/*if (state % 1000 == 0) {
-								synchronized (monitor) {
-									monitor_progressCount[0] += localProgressCount;
-									monitor_counter[0] += localCounter;
-								}
-								localProgressCount = 0;
-								localCounter = 0;
-							}*/
-
 							threadBox.initFromState(targetColors, state);
 							
 							boolean pathsRemain = false;
@@ -480,7 +266,7 @@ public class MJAnalysis {
 						ArrayList<Integer> states = future.get();
 						for (int state : states) {
 							depths.setDepth(state, currentDepth);
-							if (counter < 100) {
+							if (counter < 180) {
 								out.println(stateToJson(state));
 							} else if (firstResult) {
 								out.println(stateToJson(state));
@@ -496,6 +282,7 @@ public class MJAnalysis {
 			}
 
 			stats.complete = true;
+			out.println("Complete");
 			statsUpdate.accept(stats);
 
 		} catch (IOException e) {
@@ -583,6 +370,10 @@ public class MJAnalysis {
 		numGpuThreadsOption.setRequired(false);
 		options.addOption(numGpuThreadsOption);
 
+		Option gpuPrunerThreadsOption = new Option("G", "gpuPrunerThreads", true, "Enable GPU pruner with G CPUthreads");
+		gpuPrunerThreadsOption.setRequired(false);
+		options.addOption(gpuPrunerThreadsOption);
+
 		Option numCpuThreadsOption = new Option("c", "numCpuThreads", true, "Number of CPU threads");
 		numCpuThreadsOption.setRequired(false);
 		options.addOption(numCpuThreadsOption);
@@ -611,9 +402,16 @@ public class MJAnalysis {
 
 		int skipTo = Integer.parseInt(cmd.getOptionValue("skipTo", "0"));
 		int numGPUThreads = Integer.parseInt(cmd.getOptionValue("numGpuThreads", "3"));
+		int gpuPrunerThreads = Integer.parseInt(cmd.getOptionValue("gpuPrunerThreads", "0"));
 		int numCPUThreads = Integer.parseInt(cmd.getOptionValue("numCpuThreads", "2"));
 		int numInnerThreads = Integer.parseInt(cmd.getOptionValue("numCpuInnerThreads", "7"));
+		boolean noBlue = Boolean.parseBoolean(cmd.getOptionValue("noBlue", "false"));
 		Path storageDir = Paths.get(cmd.getOptionValue("storageDir", "morajai_depths"));
+
+		if (noBlue && gpuPrunerThreads == 0 && numGPUThreads > 0) {
+			System.err.println("GPU pruner is required for noBlue");
+			System.exit(1);
+		}
 
 		// Error if storage directory doesn't exist
 		if (!Files.exists(storageDir)) {
@@ -621,8 +419,8 @@ public class MJAnalysis {
 			System.exit(1);
 		}
 
-		boolean noBlue = false; // CURRENTLY NOT WORKING
-
+		ExecutorService pruneExecutor = (gpuPrunerThreads > 0) ? Executors.newWorkStealingPool(gpuPrunerThreads) : null;
+		
 		int numThreads = numCPUThreads + numGPUThreads;
 
 		int total = 10000;
@@ -655,6 +453,7 @@ public class MJAnalysis {
 
 						if (threadId < numGPUThreads) {
 							MJAnalysisGPU analysis = new MJAnalysisGPU(storageDir, noBlue);
+							if (pruneExecutor != null) analysis.enablePrune(pruneExecutor);
 							analysis.fullDepthAnalysis(targetColors, idx, (s) -> {
 								synchronized(stats) {
 									stats[threadId] = s;
@@ -689,6 +488,7 @@ public class MJAnalysis {
 			
 			TerminalSize terminalSize = screen.getTerminalSize();
 			
+			long lastCompleteRefresh = System.currentTimeMillis();
 
 			while (true) {
 				KeyStroke keyStroke = screen.pollInput();
@@ -725,7 +525,8 @@ public class MJAnalysis {
 					} else if (s.complete) {
 						line = String.format(headerFormat, ids[i] == -1 ? "-" : ids[i], s.idx, s.filename, "Complete", s.depth, s.statesAtDepth, s.unreached, s.dead);
 					} else {
-						line = String.format(headerFormat, ids[i] == -1 ? "-" : ids[i], s.idx, s.filename, "Running", s.depth, s.statesAtDepth, s.unreached, s.dead);
+						String runStatus = s.pruning ? "Pruning" : "Running";
+						line = String.format(headerFormat, ids[i] == -1 ? "-" : ids[i], s.idx, s.filename, runStatus, s.depth, s.statesAtDepth, s.unreached, s.dead);
 					}
 					tg.putString(0, i + 1, String.format("%-" + terminalSize.getColumns() + "s", line));
 				}
@@ -738,7 +539,12 @@ public class MJAnalysis {
 				}
 				tg.putString(0, terminalSize.getRows() - 1, String.format("%-" + terminalSize.getColumns() + "s", footer));
 
-				screen.refresh();
+				if (System.currentTimeMillis() - lastCompleteRefresh > 30_000) {
+					screen.refresh(RefreshType.COMPLETE);
+					lastCompleteRefresh = System.currentTimeMillis();
+				} else {
+					screen.refresh();
+				}
 				if (allComplete) break;
 				Thread.sleep(300);
 			}
@@ -747,6 +553,7 @@ public class MJAnalysis {
 			screen.close();
 		}
 
+		if (pruneExecutor != null) pruneExecutor.shutdown();
 		for (Thread thread : threads) {
 			thread.join();
 		}

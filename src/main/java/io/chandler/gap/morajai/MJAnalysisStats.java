@@ -6,6 +6,7 @@ public class MJAnalysisStats {
 	final int idx;
 	boolean begun = false;
 	int initalPruned = 0;
+	boolean pruning = false;
 
 	int unreached = 0;
 	int depth = 0;

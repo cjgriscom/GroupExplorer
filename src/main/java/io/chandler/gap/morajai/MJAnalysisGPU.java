@@ -75,6 +75,12 @@ public class MJAnalysisGPU {
 
 	private static final AtomicBoolean haltForCalculations = new AtomicBoolean(false);
 	private static final AtomicInteger workGroupSize = new AtomicInteger(0);
+
+	private ExecutorService pruneExecutor = null;
+	public void enablePrune(ExecutorService pruneExecutor) {
+		this.pruneExecutor = pruneExecutor;
+	}
+
 	public void fullDepthAnalysis(Color[] targetColors, int idx, Consumer<MJAnalysisStats> statsUpdate) {
 		boolean probeBestTime = false;
 		synchronized (initMonitor) {
@@ -94,7 +100,7 @@ public class MJAnalysisGPU {
 			}
 		}
 
-		String filename = noBlue ? "noBlue" : "";
+		String filename = noBlue ? "_noBlue" : "";
 		for (Color color : targetColors) {
 			if (noBlue && color == C_BU) return;
 			filename += "_" + color.name();
@@ -145,7 +151,8 @@ public class MJAnalysisGPU {
 			CL.clBuildProgram(program, 0, null, null, null, null);
 			kernel = CL.clCreateKernel(program, "mj_solve", null);
 
-			try (PrintStream out = new PrintStream(new File(storageDir.resolve("depths_v2_" + filename + ".txt").toString()))) {
+			try (PrintStream out = new PrintStream(new File(storageDir.resolve("depths_v2_" + idx + filename + ".txt").toString()))) {
+				out.println("Starting analysis for " + idx + " " + filename + " with GPU - pruner: " + (pruneExecutor != null));
 				long[] reached = new long[1000000000 / 64];
 				long[] current = new long[1000000000 / 64];
 				long[] next = new long[1000000000 / 64];
@@ -154,6 +161,19 @@ public class MJAnalysisGPU {
 				stats.statesAtDepth = counter;
 				stats.begun = true;
 				statsUpdate.accept(stats);
+
+				if (pruneExecutor != null) {
+					stats.pruning = true;
+					statsUpdate.accept(stats);
+					int prunedDead = MJColorPrune.prune(pruneExecutor, noBlue, targetColors, (state) -> {
+						set(reached, state);
+					});
+					stats.initalPruned = prunedDead;
+					stats.dead = prunedDead;
+					stats.pruning = false;
+					statsUpdate.accept(stats);
+				}
+
 				int counterAccum = 0;
 				int depth = 0;
 
@@ -166,7 +186,7 @@ public class MJAnalysisGPU {
 
 				while (counter > 0) {
 					counterAccum += counter;
-					stats.unreached = 1_000_000_000 - counterAccum;
+					stats.unreached = 1_000_000_000 - counterAccum - stats.dead;
 					stats.depth = depth;
 					stats.statesAtDepth = counter;
 					statsUpdate.accept(stats);
@@ -289,7 +309,7 @@ public class MJAnalysisGPU {
 					}
 					//System.out.println("Counted " + counter + " states");
 					
-					if (counter < 100) {
+					if (counter < 180) {
 						for (int i = 0; i < 1000000000; i++) {
 							if (isSet(next, i)) {
 								out.println(stateToJson(targetColors, i));
@@ -305,6 +325,7 @@ public class MJAnalysisGPU {
 					}
 				}
 				stats.complete = true;
+				out.println("Complete");
 				statsUpdate.accept(stats);
 			} catch (IOException e) {
 				e.printStackTrace();
@@ -358,14 +379,22 @@ public class MJAnalysisGPU {
 		long startTime = System.currentTimeMillis();
 
 		ExecutorService executor = Executors.newFixedThreadPool(3);
+		ExecutorService pruneExecutor = Executors.newWorkStealingPool(16);
 
-		for (int i = 0; i <1; i++) {
-		executor.submit(() -> {
-			MJAnalysisGPU analysis = new MJAnalysisGPU(Paths.get("morajai_gpu_depths"), false);
-			analysis.fullDepthAnalysis(new Color[] {C_PI, C_PI, C_PI, C_PI}, 5555, (stats) -> {
-				System.out.println(stats.filename + " " + stats.depth + " " + stats.statesAtDepth + " " + stats.unreached);
+		for (int i = 0; i <3; i++) {
+			final int idx = i;
+			executor.submit(() -> {
+				try {
+					MJAnalysisGPU analysis = new MJAnalysisGPU(Paths.get("morajai_gpu_depths"), false);
+					if (idx > 0) analysis.enablePrune(pruneExecutor);
+					analysis.fullDepthAnalysis(new Color[] {C_PI, C_PI, C_PI, C_PI}, 5555, (stats) -> {
+						System.out.println(stats.filename + " " + stats.depth + " " + stats.statesAtDepth + " " + stats.unreached);
+					});
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
 			});
-		});
+			Thread.sleep(100);
 		}
 
 		executor.shutdown();
