@@ -8,10 +8,17 @@ import java.io.InputStream;
 import java.io.PrintStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.Queue;
 import java.util.StringJoiner;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import org.jocl.CL;
@@ -30,6 +37,8 @@ import org.jocl.cl_queue_properties;
 import io.chandler.gap.morajai.MoraJaiBox.Color;
 
 public class MJAnalysisGPU {
+
+	private static boolean QUIET = true;
 
 	private final boolean noBlue;
 	private final Path storageDir;
@@ -59,7 +68,31 @@ public class MJAnalysisGPU {
 		return (depths[idx] & (1L << (state & 63))) != 0;
 	}
 
+	private static final Object initMonitor = new Object();
+	private static boolean initInitiated = false;
+
+	private static final HashMap<Integer, ArrayList<Long>> workGroupTimes = new HashMap<>();
+
+	private static final AtomicBoolean haltForCalculations = new AtomicBoolean(false);
+	private static final AtomicInteger workGroupSize = new AtomicInteger(0);
 	public void fullDepthAnalysis(Color[] targetColors, int idx, Consumer<MJAnalysisStats> statsUpdate) {
+		boolean probeBestTime = false;
+		synchronized (initMonitor) {
+			if (!initInitiated) {
+				initInitiated = true;
+				probeBestTime = true;
+				haltForCalculations.set(true);
+			}
+		}
+
+		while (!probeBestTime && haltForCalculations.get()) {
+			try {
+				synchronized (initMonitor) {
+					initMonitor.wait(1000);
+				}
+			} catch (InterruptedException e) {
+			}
+		}
 
 		String filename = noBlue ? "noBlue" : "";
 		for (Color color : targetColors) {
@@ -96,10 +129,6 @@ public class MJAnalysisGPU {
 			CL.clGetDeviceIDs(platform, deviceType, numDevices, devices, null);
 			cl_device_id device = devices[deviceIndex];
 
-			// Query and print device information
-			long[] maxWorkGroupSize = new long[1];
-			CL.clGetDeviceInfo(device, CL.CL_DEVICE_MAX_WORK_GROUP_SIZE, Sizeof.size_t, Pointer.to(maxWorkGroupSize), null);
-			//System.out.println("Max work group size for device: " + maxWorkGroupSize[0]);
 			
 			context = CL.clCreateContext(
 				contextProperties, 1, new cl_device_id[]{device}, 
@@ -145,23 +174,112 @@ public class MJAnalysisGPU {
 					out.println("Depth " + depth + " has " + counter + " states");
 					counter = 0;
 					depth++;
+
+					int workGroupSize = MJAnalysisGPU.workGroupSize.get();
+
+					Queue<Integer> workGroupSizes = new LinkedList<>();
 					
-					// Update device buffers
-					CL.clEnqueueWriteBuffer(commandQueue, memObjects[0], CL.CL_TRUE, 0, reached.length * Sizeof.cl_long, Pointer.to(reached), 0, null, null);
-					CL.clEnqueueWriteBuffer(commandQueue, memObjects[1], CL.CL_TRUE, 0, current.length * Sizeof.cl_long, Pointer.to(current), 0, null, null);
-					CL.clEnqueueFillBuffer(commandQueue, memObjects[2], Pointer.to(new byte[]{0}), 1, 0, next.length * Sizeof.cl_long, 0, null, null);
-					
-					// Execute kernel
-					int gpuChunkSize = 1_000_000_000;
-					for (int i = 0; i < 1_000_000_000; i += gpuChunkSize) {
-						CL.clSetKernelArg(kernel, 3, Sizeof.cl_int, Pointer.to(new int[]{i}));
-						long global_work_size[] = new long[]{gpuChunkSize};
-						long local_work_size[] = new long[]{maxWorkGroupSize[0]};
-						CL.clEnqueueNDRangeKernel(commandQueue, kernel, 1, null, global_work_size, local_work_size, 0, null, null);
+					if (probeBestTime) {
+						// Query and print device information
+						long[] maxWorkGroupSize = new long[1];
+						CL.clGetDeviceInfo(device, CL.CL_DEVICE_MAX_WORK_GROUP_SIZE, Sizeof.size_t, Pointer.to(maxWorkGroupSize), null);
+						if (!QUIET) System.out.println("Max work group size for device: " + maxWorkGroupSize[0]);
+						for (int i = (int)maxWorkGroupSize[0]; i >= 64; i /= 2) {
+							workGroupSizes.add(i);
+						}
+						probeBestTime = true;
+					} else {
+						workGroupSizes.add(workGroupSize);
 					}
+
+					long[] nextClone = null;
+
+					while (!workGroupSizes.isEmpty()) {
+						int WGS = workGroupSizes.poll();
+
+						if (probeBestTime) {
+							nextClone = next.clone();
+						}
+
+						boolean success = false;
+						long time = System.currentTimeMillis();
 					
-					// Read back results
-					CL.clEnqueueReadBuffer(commandQueue, memObjects[2], CL.CL_TRUE, 0, next.length * Sizeof.cl_long, Pointer.to(next), 0, null, null);
+						try {
+							// Update device buffers
+							CL.clEnqueueWriteBuffer(commandQueue, memObjects[0], CL.CL_TRUE, 0, reached.length * Sizeof.cl_long, Pointer.to(reached), 0, null, null);
+							CL.clEnqueueWriteBuffer(commandQueue, memObjects[1], CL.CL_TRUE, 0, current.length * Sizeof.cl_long, Pointer.to(current), 0, null, null);
+							CL.clEnqueueFillBuffer(commandQueue, memObjects[2], Pointer.to(new byte[]{0}), 1, 0, next.length * Sizeof.cl_long, 0, null, null);
+							
+
+							// Execute kernel
+							int gpuChunkSize = 1_000_000_000;
+							for (int i = 0; i < 1_000_000_000; i += gpuChunkSize) {
+								CL.clSetKernelArg(kernel, 3, Sizeof.cl_int, Pointer.to(new int[]{i}));
+								long global_work_size[] = new long[]{gpuChunkSize};
+								long local_work_size[] = new long[]{WGS};
+								CL.clEnqueueNDRangeKernel(commandQueue, kernel, 1, null, global_work_size, local_work_size, 0, null, null);
+							}
+							
+							// Read back results
+							CL.clEnqueueReadBuffer(commandQueue, memObjects[2], CL.CL_TRUE, 0, next.length * Sizeof.cl_long, Pointer.to(next), 0, null, null);
+
+							success = true;
+						} catch (RuntimeException e) {
+							if (!QUIET) System.out.println("Error: " + e.getMessage() + " with WGS: " + WGS);
+							if (!probeBestTime) {
+								throw e;
+							}
+						}
+
+						time = System.currentTimeMillis() - time;
+
+						if (success && probeBestTime) {
+							if (!QUIET) System.out.println("Time: " + time + " with WGS: " + WGS);
+							ArrayList<Long> times = workGroupTimes.get(WGS);
+							if (times == null) {
+								times = new ArrayList<>();
+								workGroupTimes.put(WGS, times);
+							}
+							times.add(time);
+							if (times.size() < 3) {
+								// Add another to queue
+								workGroupSizes.add(WGS);
+							}
+							next = nextClone;
+							nextClone = null;
+							
+							// Resolve results
+							long minTime = Integer.MAX_VALUE;
+							int minWGS = 0;
+							if (workGroupSizes.isEmpty()) {
+								for (Map.Entry<Integer, ArrayList<Long>> entry : workGroupTimes.entrySet()) {
+									times = entry.getValue();
+									if (times == null || times.isEmpty()) continue;
+									// average
+									long avg = 0;
+									for (long t : times) avg += t / times.size();
+									if (avg < minTime) {
+										minTime = avg;
+										minWGS = entry.getKey();
+									}
+								}
+
+								if (minWGS == 0) throw new RuntimeException("No best WGS found");
+								
+								if (!QUIET) System.out.println("Best time: " + minTime + " with WGS: " + minWGS);
+								// That was the last test - revert back to normal operation
+								workGroupSize = minWGS;
+								MJAnalysisGPU.workGroupSize.set(minWGS);
+								probeBestTime = false;
+								workGroupSizes.add(minWGS); // Setup actual processing
+								synchronized (initMonitor) {
+									haltForCalculations.set(false);
+									initMonitor.notifyAll();
+								}
+							}
+						}
+					}
+
 					
 					// Count 'set' bits in next array
 					for (int i = 0; i < 1000000000; i++) {
@@ -235,11 +353,13 @@ public class MJAnalysisGPU {
 	}
 
 	public static void main(String[] args) throws InterruptedException {
+
+		QUIET = false;
 		long startTime = System.currentTimeMillis();
 
 		ExecutorService executor = Executors.newFixedThreadPool(3);
 
-		for (int i = 0; i <3; i++) {
+		for (int i = 0; i <1; i++) {
 		executor.submit(() -> {
 			MJAnalysisGPU analysis = new MJAnalysisGPU(Paths.get("morajai_gpu_depths"), false);
 			analysis.fullDepthAnalysis(new Color[] {C_PI, C_PI, C_PI, C_PI}, 5555, (stats) -> {
