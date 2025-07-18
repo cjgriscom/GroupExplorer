@@ -52,26 +52,6 @@ public class MJAnalysis {
 
 	private int threads = 17;
 
-	private static class MJAnalysisStats {
-		
-		final String filename;
-		final int idx;
-		boolean begun = false;
-		int initalPruned = 0;
-
-		int unreached = 0;
-		int depth = 0;
-		int dead = 0;
-		int statesAtDepth = 0;
-
-		boolean complete = false;
-		
-
-		private MJAnalysisStats(int idx, String filename) {
-			this.filename = filename;
-			this.idx = idx;
-		}
-	}
 
 	private static class DepthTracker {
 		private final byte[] depths;
@@ -592,7 +572,7 @@ public class MJAnalysis {
 		boolean noBlue = false;
 
 		int total = 10000;
-		int skipTo = 22;
+		int skipTo = 41;
 
 		for (int i = 0; i < skipTo; i++) {
 			pool.remove(0);
