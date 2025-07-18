@@ -163,7 +163,7 @@ public class MJAnalysis {
 		statsUpdate.accept(stats);
 		
 		try (ExecutorService executor = Executors.newFixedThreadPool(threads);  
-		     PrintStream out = new PrintStream(new File("morajai_depths/depths_v2_" + filename + ".txt"))) {
+			 PrintStream out = new PrintStream(new File(storageDir.resolve("depths_v2_" + filename + ".txt").toString()))) {
 
 			MoraJaiBox box = new MoraJaiBox();
 			
