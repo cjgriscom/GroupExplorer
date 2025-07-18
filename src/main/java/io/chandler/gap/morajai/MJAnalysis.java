@@ -6,6 +6,7 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import static io.chandler.gap.morajai.MoraJaiBox.Color.*;
 
 import java.io.PrintStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.io.File;
@@ -34,6 +35,7 @@ import com.googlecode.lanterna.screen.Screen;
 import com.googlecode.lanterna.screen.TerminalScreen;
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
 import com.googlecode.lanterna.terminal.Terminal;
+import org.apache.commons.cli.*;
 
 public class MJAnalysis {
 
@@ -571,24 +573,68 @@ public class MJAnalysis {
 
 
 	public static void main(String[] args) throws IOException, InterruptedException {
-		Path storageDir = Paths.get("morajai_depths");
-		//List<Integer> pool = buildPurpleAndYellowPool(4637);
-		List<Integer> pool = buildSeededPool(-1234);
-		boolean noBlue = false;
+		Options options = new Options();
+
+		Option skipToOption = new Option("s", "skipTo", true, "Skip to index");
+		skipToOption.setRequired(false);
+		options.addOption(skipToOption);
+
+		Option numGpuThreadsOption = new Option("g", "numGpuThreads", true, "Number of GPU threads");
+		numGpuThreadsOption.setRequired(false);
+		options.addOption(numGpuThreadsOption);
+
+		Option numCpuThreadsOption = new Option("c", "numCpuThreads", true, "Number of CPU threads");
+		numCpuThreadsOption.setRequired(false);
+		options.addOption(numCpuThreadsOption);
+
+		Option numCpuInnerThreadsOption = new Option("i", "numCpuInnerThreads", true, "Number of CPU inner threads");
+		numCpuInnerThreadsOption.setRequired(false);
+		options.addOption(numCpuInnerThreadsOption);
+
+		Option storageDirOption = new Option("d", "storageDir", true, "Storage directory");
+		storageDirOption.setRequired(false);
+		options.addOption(storageDirOption);
+
+		CommandLineParser parser = new DefaultParser();
+		HelpFormatter formatter = new HelpFormatter();
+		CommandLine cmd;
+
+		try {
+			cmd = parser.parse(options, args);
+		} catch (ParseException e) {
+			System.out.println(e.getMessage());
+			formatter.printHelp("MJAnalysis", options);
+
+			System.exit(1);
+			return;
+		}
+
+		int skipTo = Integer.parseInt(cmd.getOptionValue("skipTo", "0"));
+		int numGPUThreads = Integer.parseInt(cmd.getOptionValue("numGpuThreads", "3"));
+		int numCPUThreads = Integer.parseInt(cmd.getOptionValue("numCpuThreads", "2"));
+		int numInnerThreads = Integer.parseInt(cmd.getOptionValue("numCpuInnerThreads", "7"));
+		Path storageDir = Paths.get(cmd.getOptionValue("storageDir", "morajai_depths"));
+
+		// Error if storage directory doesn't exist
+		if (!Files.exists(storageDir)) {
+			System.err.println("Storage directory does not exist: " + storageDir);
+			System.exit(1);
+		}
+
+		boolean noBlue = false; // CURRENTLY NOT WORKING
+
+		int numThreads = numCPUThreads + numGPUThreads;
 
 		int total = 10000;
-		int skipTo = 42;
+
+		List<Integer> pool = buildSeededPool(-1234);
 
 		for (int i = 0; i < skipTo; i++) {
 			pool.remove(0);
 		}
 		
 		BlockingQueue<Integer> queue = new LinkedBlockingQueue<>(pool);
-	
-		int numGPUThreads = 3;
 		
-		int numThreads = 2 + numGPUThreads;
-		int numInnerThreads = 7;
 		MJAnalysisStats[] stats = new MJAnalysisStats[numThreads];
 		int[] ids = new int[numThreads];
 		Arrays.fill(ids, -1);
