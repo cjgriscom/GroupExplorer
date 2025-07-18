@@ -11,14 +11,14 @@ void initFromState(int state, int* tileColors) {
     }
 }
 
-int getState(int* tileColors) {
-    int state = 0;
-    int multiplier = 1;
-    for (int i = 0; i < 9; i++) {
-        state += tileColors[i] * multiplier;
-        multiplier *= 10;
+inline int getState(int* tileColors) {
+    // Horner's method – fewer multiplies than the original loop
+    int s = 0;
+#pragma unroll
+    for (int i = 8; i >= 0; --i) {
+        s = mad24(s, 10, tileColors[i]); // s = s*10 + digit
     }
-    return state;
+    return s;
 }
 
 void swapTiles(int* tileColors, int tile1, int tile2) {
@@ -41,7 +41,7 @@ int getOffsetColor(int* tileColors, int tile, int offsetX, int offsetY) {
     return tileColors[offsetTile];
 }
 
-void pressTile(int tile, int* tileColors) {
+inline void pressTile(int tile, int* tileColors) {
     int tileColor = tileColors[tile];
 
     /* BLUE tiles adopt the centre-tile’s colour when pressed */
@@ -81,6 +81,7 @@ void pressTile(int tile, int* tileColors) {
 
         /* ──────────────────────────  WHITE  ───────────────────────── */
         case C_WH:
+#pragma unroll 4
             for (int i = 0; i < 4; i++) {           /* N,S,E,W neighbours */
                 int ox = (i == 0) ? -1 : (i == 1) ?  1 : 0;
                 int oy = (i == 2) ? -1 : (i == 3) ?  1 : 0;
@@ -145,11 +146,11 @@ void pressTile(int tile, int* tileColors) {
 
             int max = 0, bestColor = -1, bestCount = 0;
             for (int i = 1; i < N_COLORS + 1; i++) {
-                if (counts[i] > max) {                /* new leader */
+                if (counts[i] > max) {
                     max       = counts[i];
                     bestColor = i - 1;
                     bestCount = 1;
-                } else if (counts[i] == max) {        /* tie */
+                } else if (counts[i] == max) {
                     bestCount++;
                 }
             }

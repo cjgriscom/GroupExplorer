@@ -6,6 +6,8 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import static io.chandler.gap.morajai.MoraJaiBox.Color.*;
 
 import java.io.PrintStream;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -52,6 +54,7 @@ public class MJAnalysis {
 
 	private int threads = 17;
 
+	private final Path storageDir;
 
 	private static class DepthTracker {
 		private final byte[] depths;
@@ -87,9 +90,10 @@ public class MJAnalysis {
 		
 	}
 
-	public MJAnalysis(Color[] targetColors, boolean noBlue) {
+	public MJAnalysis(Path storageDir, Color[] targetColors, boolean noBlue) {
 		this.targetColors = targetColors;
 		this.noBlue = noBlue;
+		this.storageDir = storageDir;
 	}
 
 	public MJAnalysis setThreads(int threads) {
@@ -567,12 +571,13 @@ public class MJAnalysis {
 
 
 	public static void main(String[] args) throws IOException, InterruptedException {
+		Path storageDir = Paths.get("morajai_depths");
 		//List<Integer> pool = buildPurpleAndYellowPool(4637);
 		List<Integer> pool = buildSeededPool(-1234);
 		boolean noBlue = false;
 
 		int total = 10000;
-		int skipTo = 41;
+		int skipTo = 42;
 
 		for (int i = 0; i < skipTo; i++) {
 			pool.remove(0);
@@ -580,8 +585,10 @@ public class MJAnalysis {
 		
 		BlockingQueue<Integer> queue = new LinkedBlockingQueue<>(pool);
 	
-		int numThreads = 3;
-		int numInnerThreads = 6;
+		int numGPUThreads = 3;
+		
+		int numThreads = 2 + numGPUThreads;
+		int numInnerThreads = 7;
 		MJAnalysisStats[] stats = new MJAnalysisStats[numThreads];
 		int[] ids = new int[numThreads];
 		Arrays.fill(ids, -1);
@@ -598,13 +605,24 @@ public class MJAnalysis {
 						if (idx == null) break;
 						ids[threadId] = total - queue.size() - 1;
 
-						MJAnalysis analysis = new MJAnalysis(new Color[] { Color.values()[idx/1000%10], Color.values()[idx/100%10], Color.values()[idx/10%10], Color.values()[idx%10] }, noBlue);
-						analysis.setThreads(numInnerThreads);
-						analysis.fullDepthAnalysis(idx, (s) -> {
-							synchronized(stats) {
-								stats[threadId] = s;
-							}
-						});
+						Color[] targetColors = new Color[] { Color.values()[idx/1000%10], Color.values()[idx/100%10], Color.values()[idx/10%10], Color.values()[idx%10] };
+
+						if (threadId < numGPUThreads) {
+							MJAnalysisGPU analysis = new MJAnalysisGPU(storageDir, noBlue);
+							analysis.fullDepthAnalysis(targetColors, idx, (s) -> {
+								synchronized(stats) {
+									stats[threadId] = s;
+								}
+							});
+						} else {
+							MJAnalysis analysis = new MJAnalysis(storageDir, targetColors, noBlue);
+							analysis.setThreads(numInnerThreads);
+							analysis.fullDepthAnalysis(idx, (s) -> {
+								synchronized(stats) {
+									stats[threadId] = s;
+								}
+							});
+						}
 
 					} catch (Exception e) {
 						e.printStackTrace();
