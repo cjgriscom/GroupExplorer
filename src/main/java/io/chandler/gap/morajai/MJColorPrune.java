@@ -3,12 +3,12 @@ package io.chandler.gap.morajai;
 import static io.chandler.gap.morajai.MoraJaiBox.Color.*;
 
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import io.chandler.gap.morajai.MoraJaiBox.Color;
-import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 
 public class MJColorPrune {
 
@@ -41,7 +41,7 @@ public class MJColorPrune {
 				int startState = chunkIndex * chunkSize;
 				int endState = Math.min(startState + chunkSize, 1000000000);
 
-				IntOpenHashSet states = new IntOpenHashSet();
+				BitSet states = new BitSet();
 
 				int localProgressCount = 0;
 
@@ -50,53 +50,49 @@ public class MJColorPrune {
 				for (int state = startState; state < endState; state++) {
 					fillCounts(state, cnt);
 					localProgressCount++;
-					if (state % 1000 == 0) {
-						atomicProgressCount.addAndGet(localProgressCount); // Update progress estimate every 1000 states}
-						localProgressCount = 0;
-					}
 					int targetColorCount = 0;
 
 					if (noBlue && cnt[blueOrd] > 0) {
-						states.add(state);
+						states.set(state-startState);
 					}
 					boolean containsWhite = false;
 					if ((targetColorCount = countTarget(targetColors, C_WH)) != 0) {
 						containsWhite = true;
 						// Can't materialize white
-						if (cnt[whiteOrd] == 0) states.add(state);
+						if (cnt[whiteOrd] == 0) states.set(state-startState);
 					}
 					if ((targetColorCount = countTarget(targetColors, C_GY)) != 0 || containsWhite) {
 						int greysAndWhites = cnt[grayOrd] + cnt[whiteOrd];
 						if (greysAndWhites == 0) {
-							states.add(state);
+							states.set(state-startState);
 						} else if (greysAndWhites < targetColorCount) {
 							// Orange and blue can both generate more white/gry
 							if (	cnt[orangeOrd] +
 										cnt[blueOrd] +
 										greysAndWhites
 										< targetColorCount) {
-								states.add(state);
+								states.set(state-startState);
 							}
 						}
 					}
-					basicColorPrune(targetColors, C_GN, greenOrd, state, cnt, states);
-					basicColorPrune(targetColors, C_YE, yellowOrd, state, cnt, states);
-					basicColorPrune(targetColors, C_PU, purpleOrd, state, cnt, states);
-					basicColorPrune(targetColors, C_PI, pinkOrd, state, cnt, states);
+					if (basicColorPrune(targetColors, C_GN, greenOrd, cnt)) states.set(state-startState);
+					if (basicColorPrune(targetColors, C_YE, yellowOrd, cnt)) states.set(state-startState);
+					if (basicColorPrune(targetColors, C_PU, purpleOrd, cnt)) states.set(state-startState);
+					if (basicColorPrune(targetColors, C_PI, pinkOrd, cnt)) states.set(state-startState);
 
 					// Orange
 					if ((targetColorCount = countTarget(targetColors, C_OR)) != 0) {
 						int oranges = cnt[orangeOrd];
 						if (oranges == 0) {
-							states.add(state);
+							states.set(state-startState);
 						} else if (oranges == 1) {
-							if (targetColorCount != 1) states.add(state); 
+							if (targetColorCount != 1) states.set(state-startState); 
 						} else if (oranges < targetColorCount) {
 							// Sum blue and grey and white
 							int bgw = cnt[grayOrd] + cnt[blueOrd] + cnt[whiteOrd];
 							// Simplified but good enough
 							if (oranges + bgw < targetColorCount) {
-								states.add(state);
+								states.set(state-startState);
 							}
 						}
 					}
@@ -105,7 +101,7 @@ public class MJColorPrune {
 					// Red is maybe the most complicated, keep it simple for now
 					if ((targetColorCount = countTarget(targetColors, C_RD)) != 0) {
 						// Ensure at least one red
-						if (reds == 0) states.add(state);
+						if (reds == 0) states.set(state-startState);
 						else {
 							// There's at least one red
 							if (reds < targetColorCount) {
@@ -113,7 +109,7 @@ public class MJColorPrune {
 								int orangeBluesBlack = cnt[orangeOrd] + cnt[blueOrd] + cnt[blackOrd];
 								int whitesAndGreys = cnt[whiteOrd] + cnt[grayOrd];
 								if (orangeBluesBlack + whitesAndGreys + reds < targetColorCount) {
-									states.add(state);
+									states.set(state-startState);
 								}
 							}
 						}
@@ -123,13 +119,15 @@ public class MJColorPrune {
 					if ((targetColorCount = countTarget(targetColors, C_BK)) != 0) {
 						if (reds == 0) {
 							// No red so black is a basic color
-							basicColorPrune(targetColors, C_BK, blackOrd, state, cnt, states);
+							if (basicColorPrune(targetColors, C_BK, blackOrd, cnt)) {
+								states.set(state-startState);
+							}
 						} else {
 							// For simplicity just sum all morphing combos
 							int orangeBluesBlack = cnt[orangeOrd] + cnt[blueOrd] + cnt[blackOrd];
 							int whitesAndGreys = cnt[whiteOrd] + cnt[grayOrd];
 							if (orangeBluesBlack + whitesAndGreys < targetColorCount) {
-								states.add(state);
+								states.set(state-startState);
 							}
 						}
 					}
@@ -143,12 +141,12 @@ public class MJColorPrune {
 
 						if (reds == 0) {
 							if (blue + whiteGrey + orange < targetColorCount) {
-								states.add(state);
+								states.set(state-startState);
 							}
 						} else {
 							int black = cnt[blackOrd];
 							if (black + blue + whiteGrey + orange < targetColorCount) {
-								states.add(state);
+								states.set(state-startState);
 							}
 
 						}
@@ -158,12 +156,15 @@ public class MJColorPrune {
 
 				atomicProgressCount.addAndGet(localProgressCount);
 
-				atomicDeadStatesCount.addAndGet(states.size());
+				int countSetBits = 0;
 				synchronized (markDead) {
-					for (int state : states) {
-						markDead.accept(state);
+					// Iterate over all set bits
+					for (int i = states.nextSetBit(0); i >= 0; i = states.nextSetBit(i+1)) {
+						markDead.accept(i + startState);
+						countSetBits++;
 					}
 				}
+				atomicDeadStatesCount.addAndGet(countSetBits);
 			});
 		}
 
@@ -201,12 +202,12 @@ public class MJColorPrune {
 	}
 
 	// Prune colors that don't have any weird interactions
-	private static void basicColorPrune(Color[] targetColors, Color targetColor, int colorOrd, int state, byte[] cnt, IntOpenHashSet states) {
+	private static boolean basicColorPrune(Color[] targetColors, Color targetColor, int colorOrd, byte[] cnt) {
 		int targetColorCount = 0;
 		if ((targetColorCount = countTarget(targetColors, targetColor)) != 0) {
 			int basics = cnt[colorOrd];
 			if (basics == 0) {
-				states.add(state);
+				return true;
 			} else if (basics < targetColorCount) {
 				// targetColorCount must be 2+
 				int oranges = cnt[orangeOrd];
@@ -218,10 +219,11 @@ public class MJColorPrune {
 							blues + whitesAndGreysMinus2 +
 							basics)
 							< targetColorCount) {
-					states.add(state);
+					return true;
 				}
 			}
 		}
+		return false;
 	}
 
 }
