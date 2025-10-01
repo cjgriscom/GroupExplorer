@@ -1,8 +1,20 @@
 package io.chandler.gap;
 
+import java.util.HashSet;
+import java.util.Set;
+
 public class GFGenerator {
 
+	private static final byte[][] IDENTITY_8 = makeIdentity(8);
+
 	public static byte[][] identity(int length) {
+		if (length == 8) {
+			return cloneMatrix(IDENTITY_8);
+		}
+		return makeIdentity(length);
+	}
+
+	private static byte[][] makeIdentity(int length) {
 		byte[][] result = new byte[length][length];
 		for (int i = 0; i < length; i++) {
 			result[i][i] = 1;
@@ -10,105 +22,172 @@ public class GFGenerator {
 		return result;
 	}
 
+	private static byte[][] cloneMatrix(byte[][] matrix) {
+		byte[][] copy = new byte[matrix.length][matrix[0].length];
+		for (int i = 0; i < matrix.length; i++) {
+			System.arraycopy(matrix[i], 0, copy[i], 0, matrix[i].length);
+		}
+		return copy;
+	}
+
 	public static class GF2_8x8_Cache {
-		// the 8x8 matrix
+		private static final int SIZE = 8;
+		private static final long IDENTITY_VALUE = computeIdentityValue();
+		private static final int LENGTH_MASK = 0xFF;
+		private static final int BITFIELD_MASK = 0xFFFFFF00;
+		private static final int BITFIELD_SHIFT = 8;
+
+		// the 8x8 matrix encoded as a bitset
 		public final long value;
 
 		// This is used to later recover the sequences of generator moves
 		public final int bitstring; // lsb byte is length, next 3 bytes are the bitstring
 
-		private GF2_8x8_Cache(byte[][] matrix, int bitstring) {
-			// Convert matrix to long
+		private GF2_8x8_Cache(long value, int bitstring) {
+			this.value = value;
 			this.bitstring = bitstring;
+		}
 
+		private GF2_8x8_Cache(byte[][] matrix, int bitstring) {
+			validateMatrix(matrix);
+			this.value = encode(matrix);
+			this.bitstring = bitstring;
+		}
+
+		public static GF2_8x8_Cache identity() {
+			return new GF2_8x8_Cache(IDENTITY_VALUE, 0);
+		}
+
+		public static GF2_8x8_Cache fromMatrix(byte[][] matrix) {
+			return new GF2_8x8_Cache(matrix, 0);
+		}
+
+		static int size() {
+			return SIZE;
+		}
+
+		static long identityValue() {
+			return IDENTITY_VALUE;
+		}
+
+		static boolean isIdentity(long encodedMatrix) {
+			return encodedMatrix == IDENTITY_VALUE;
+		}
+
+		static long encode(byte[][] matrix) {
+			validateMatrix(matrix);
 			long v = 0L;
-			for (int i = 0; i < 8; i++) {
-				for (int j = 0; j < 8; j++) {
-					if ((matrix[i][j] & ~1) != 0) {
-						throw new IllegalArgumentException("Matrix entries must be 0/1");
-					}
-					v |= ((long) matrix[i][j] & 0x1L) << (i * 8 + j);
+			for (int i = 0; i < SIZE; i++) {
+				for (int j = 0; j < SIZE; j++) {
+					v |= ((long) matrix[i][j] & 0x1L) << (i * SIZE + j);
 				}
 			}
-			this.value = v;
+			return v;
+		}
+
+		private static void validateMatrix(byte[][] matrix) {
+			if (matrix == null || matrix.length != SIZE) {
+				throw new IllegalArgumentException("Matrix must be " + SIZE + "x" + SIZE);
+			}
+			for (int i = 0; i < SIZE; i++) {
+				if (matrix[i] == null || matrix[i].length != SIZE) {
+					throw new IllegalArgumentException("Matrix must be " + SIZE + "x" + SIZE);
+				}
+				for (int j = 0; j < SIZE; j++) {
+					int entry = matrix[i][j];
+					if ((entry & ~1) != 0) {
+						throw new IllegalArgumentException("Matrix entries must be 0/1");
+					}
+				}
+			}
+		}
+
+		private static long computeIdentityValue() {
+			return encode(makeIdentity(SIZE));
 		}
 
 		public int getOrder() {
-			// Order is determined by multiplying the matrix by itself until it equals the identity matrix
-			byte[][] matrix = toMatrix();
-			int MAXIMUM = 255;
-			for (int i = 0; i < MAXIMUM; i++) {
-				if (isIdentity()) {
-					return i + 1;
-				}
-				matrix = multiply(matrix, matrix, 2);
+			if (isIdentity()) {
+				return 1;
 			}
-			return -1;
+			byte[][] original = toMatrix();
+			byte[][] power = GFGenerator.identity(SIZE);
+			int order = 0;
+			Set<Long> seen = new HashSet<>();
+			while (true) {
+				power = multiply(power, original, 2);
+				order++;
+				long encoded = encode(power);
+				if (isIdentity(encoded)) {
+					return order;
+				}
+				if (!seen.add(encoded)) {
+					throw new IllegalStateException("Failed to compute order; cycle detected without reaching identity.");
+				}
+			}
 		}
 
 		public boolean isIdentity() {
-			byte[][] matrix = toMatrix();
-			for (int i = 0; i < 8; i++) {
-				for (int j = 0; j < 8; j++) {
-					if (matrix[i][j] != (i == j ? 1 : 0)) {
-						return false;
-					}
-				}
-			}
-			return true;
+			return isIdentity(value);
 		}
 
+		@Override
 		public boolean equals(Object o) {
-			if (o instanceof GF2_8x8_Cache) {
-				GF2_8x8_Cache other = (GF2_8x8_Cache) o;
-				return value == other.value;
+			if (this == o) {
+				return true;
 			}
-			return false;
+			if (!(o instanceof GF2_8x8_Cache)) {
+				return false;
+			}
+			GF2_8x8_Cache other = (GF2_8x8_Cache) o;
+			return value == other.value;
 		}
 
+		@Override
 		public int hashCode() {
 			return (int) (value ^ (value >>> 32));
 		}
 
-		public GF2_8x8_Cache identityCache() {
-			return new GF2_8x8_Cache(identity(8), 0);
-		}
-
 		public GF2_8x8_Cache copyAndUpdate(boolean bit, byte[][] newMatrix) {
-			// Shift this cache's bitstring, then construct a new cache with the new matrix
-			int newBitstring = (bitstring & 0xFFFFFF00) << 1;
-			if (bit) {
-				newBitstring |= 1;
+			int length = bitstring & LENGTH_MASK;
+			if (length == LENGTH_MASK) {
+				throw new IllegalStateException("Bitstring length overflow");
 			}
-			int size = bitstring & 0xFF;
-			if (size >= 255) throw new IllegalArgumentException("Bitstring size is too large");
-			newBitstring |= ((size + 1) & 0xFF);
+			int generatorBits = generatorBits();
+			if (bit) {
+				generatorBits |= (1 << length);
+			}
+			int newBitstring = ((generatorBits << BITFIELD_SHIFT) & BITFIELD_MASK) | ((length + 1) & LENGTH_MASK);
 			return new GF2_8x8_Cache(newMatrix, newBitstring);
-		}
+	}
 
 		public byte[][] toMatrix() {
-			byte[][] result = new byte[8][8];
-			for (int i = 0; i < 8; i++) {
-				for (int j = 0; j < 8; j++) {
-					result[i][j] = (byte) ((value >> (i * 8 + j)) & 0x1L);
+			byte[][] result = new byte[SIZE][SIZE];
+			for (int i = 0; i < SIZE; i++) {
+				for (int j = 0; j < SIZE; j++) {
+					result[i][j] = (byte) ((value >> (i * SIZE + j)) & 0x1L);
 				}
 			}
 			return result;
 		}
 
 		public int bitstringLength() {
-			return bitstring & 0xFF;
+			return bitstring & LENGTH_MASK;
 		}
 
 		public byte[] toBitstring() {
-			byte[] out = new byte[bitstring & 0xFF];
-			for (int i = 0; i < out.length; i++) {
-				out[i] = (byte) ((bitstring >> (i * 8)) & 0xFF);
+			int length = bitstringLength();
+			int generatorBits = generatorBits();
+			byte[] out = new byte[length];
+			for (int i = 0; i < length; i++) {
+				out[i] = (byte) (((generatorBits >> i) & 1) != 0 ? 1 : 0);
 			}
 			return out;
 		}
-		
-		
+
+		public int generatorBits() {
+			return (bitstring & BITFIELD_MASK) >>> BITFIELD_SHIFT;
+		}
 	}
 
 	public static void main(String[] args) {
