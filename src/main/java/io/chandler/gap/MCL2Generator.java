@@ -18,59 +18,55 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 
 import io.chandler.gap.GroupExplorer.MemorySettings;
-import io.chandler.gap.cache.M24StateCache;
+import io.chandler.gap.cache.LongStateCache;
 import io.chandler.gap.cache.State;
 import net.jpountz.lz4.LZ4BlockInputStream;
 import net.jpountz.lz4.LZ4BlockOutputStream;
 
-public class M24Generator {
-    static final File m24States = new File("m24.gap.lz4");
-    static final File outDir = new File("m24.gap.states");
-    static final File categoryListings = outDir.toPath().resolve("dir.txt").toFile();
+public class MCL2Generator {
+	static final File mcl2States = new File("mcl_2.gap.lz4");
+	static final File outDir = new File("mcl_2.gap.states");
 	public static void main(String[] args) throws Exception {
-       // Files.createDirectories(outDir.toPath());
-		//GenerateM24(m24States);
-		//categorizeM24States(m24States, outDir);
+		//Files.createDirectories(outDir.toPath());
+		//GenerateMCL2(mcl2States);
+		//categorizeMCL2States(mcl2States, outDir);
 
-        List<int[][]> cycles = loadM24CategoryStates("quadruple 6-cycles");
+        String[] types = new String[] {
+            "120p 2-cycles",
+            "132p 2-cycles",
+            "90p 3-cycles",
+            "87p 3-cycles"
+        };
 
+        for (String type : types) {
+            List<int[][]> cycles = loadMCL2CategoryStates(type);
 
-        // Save these cycles to a file
-        File cyclesFile = new File("PlanarStudyMulti/m24/quadruple 6-cycles.txt");
-        try (PrintWriter writer = new PrintWriter(cyclesFile)) {
-            for (int[][] cycle : cycles) {
-                writer.println(GroupExplorer.cyclesToNotation(cycle));
+            // Save these cycles to a file
+            File cyclesFile = new File("PlanarStudyMulti/mcl_2/"+type+".txt");
+            try (PrintWriter writer = new PrintWriter(cyclesFile)) {
+                for (int[][] cycle : cycles) {
+                    writer.println(GroupExplorer.cyclesToNotation(cycle));
+                }
             }
+            
+            System.out.println(cycles.size());
         }
-        
-        System.out.println(cycles.size());
 
 	}
 
-    public static List<int[][]> loadM24CategoryStates(String category) throws Exception {
-        HashMap<String, Integer> categoryToSize = new HashMap<>();
-        Scanner inC = new Scanner(categoryListings);
-        while (inC.hasNextLine()) {
-            String line = inC.nextLine();
-            if (line.contains(category)) {
-                String[] parts = line.split(": ");
-                String size = parts[0];
-                String name = parts[1];
-                categoryToSize.put(name, Integer.parseInt(size));
-            }
-        }
-        inC.close();
+    public static List<int[][]> loadMCL2CategoryStates(String category) throws Exception {
 
-        File src = new File(outDir, category + ".m24.bytes.lz4");
-        int size = categoryToSize.get(category);
-        System.out.println(size);
+        File src = new File(outDir, category + ".mcl_2.bytes.lz4");
         List<int[][]> cycles = new ArrayList<>();
 
         try (InputStream in = new LZ4BlockInputStream(new FileInputStream(src))) {
-            for (int i = 0; i < size; i++) {
-                int[] state = new int[24];
-                for (int j = 0; j < 24; j++) {
-                    state[j] = in.read() & 0xff;
+
+            done: while (true) {
+                int[] state = new int[275];
+                for (int j = 0; j < 275; j++) {
+                    int b = in.read();
+                    if (b < 0) break done;
+                    state[j] = (b & 0xff) | ((in.read() & 0xff) << 8);
                 }
                 cycles.add(GroupExplorer.stateToCycles(state));
             }
@@ -79,11 +75,11 @@ public class M24Generator {
         return cycles;
     }
 
-    public static void categorizeM24States(File in, File outDir) throws Exception {
+    public static void categorizeMCL2States(File in, File outDir) throws Exception {
         HashMap<String, OutputStream> cycleDescriptionToFile = new HashMap<>();
-        exploreM24(in, (state, desc) -> {
+        exploreMCL2(in, (state, desc) -> {
             if (!cycleDescriptionToFile.containsKey(desc)) {
-                File file = new File(outDir, desc + ".m24.bytes.lz4");
+                File file = new File(outDir, desc + ".mcl_2.bytes.lz4");
                 try {
                     cycleDescriptionToFile.put(desc, new DataOutputStream(new LZ4BlockOutputStream(
                         new FileOutputStream(file), 32*1024*1024)));
@@ -94,7 +90,7 @@ public class M24Generator {
 
             OutputStream dos = cycleDescriptionToFile.get(desc);
             try {
-                for (int i : state) dos.write(i);
+                for (int i : state) {dos.write(i & 0xff); dos.write((i >> 8) & 0xff);}
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -109,7 +105,7 @@ public class M24Generator {
         }
     }
 
-	public static void exploreM24(File file,
+	public static void exploreMCL2(File file,
 			BiConsumer<int[], String> peekCyclesAndDescriptions) throws Exception {
 
 		HashMap<String, Integer> cycleDescriptions = new HashMap<>();
@@ -117,33 +113,39 @@ public class M24Generator {
         
 		int progress0 = 0;
 		
+        int counted = 0;
 		try (DataInputStream dis = new DataInputStream(new LZ4BlockInputStream(new FileInputStream(file)))) {
 			elements = dis.readInt();
 			order = dis.readInt();
 			System.out.println("Elements: " + elements);
 			System.out.println("Order: " + order);
 			for (int i = 0; i < order - 1; i++) {
-				int[] state = new int[elements];
-				for (int j = 0; j < elements; j++) {
-					state[j] = dis.readInt();
-				}
-				
-                String cycleDescription = GroupExplorer.describeState(elements, state);
-                if (peekCyclesAndDescriptions != null) peekCyclesAndDescriptions.accept(state, cycleDescription);
-                cycleDescriptions.merge(cycleDescription, 1, Integer::sum);
+                try {
+                    int[] state = new int[elements];
+                    for (int j = 0; j < elements; j++) {
+                        state[j] = dis.readInt();
+                    }
+                    
+                    String cycleDescription = GroupExplorer.describeState(elements, state);
+                    if (peekCyclesAndDescriptions != null) peekCyclesAndDescriptions.accept(state, cycleDescription);
+                    cycleDescriptions.merge(cycleDescription, 1, Integer::sum);
 
-				int progress = (int)((long)i*100 / order);
-				if (progress != progress0 && progress % 5 == 0) {
-					System.out.println("Loading, " + progress + "%");
-					progress0 = progress;
-				}
-			}
+                    int progress = (int)((long)i*100 / order);
+                    if (progress != progress0 && progress % 5 == 0) {
+                        System.out.println("Loading, " + progress + "%");
+                        progress0 = progress;
+                    }
+                    counted++;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    break;
+                }
+            }
 		}
-
 
         
         System.out.println("Elements: " + elements);
-        System.out.println("Total group permutations: " + order);
+        System.out.println("Total included permutations: " + counted);
 
         // Print sorted cycle descriptions
         System.out.println("Cycle structure frequencies:");
@@ -167,12 +169,12 @@ public class M24Generator {
 	 * @param file
 	 * @throws Exception
 	 */
-    public static void GenerateM24(File file) throws Exception {
-        Set<State> set = new M24StateCache();
-        int elements = 24;
-        int order = 244823040;
+    public static void GenerateMCL2(File file) throws Exception {
+        Set<State> set = new LongStateCache(7, 275);
+        int elements = 275;
+        int order = 898128000*2;
         GroupExplorer group = new GroupExplorer(
-            Generators.m24, MemorySettings.DEFAULT, set);
+            Generators.mcl_2, MemorySettings.DEFAULT, set);
 
         int[] totalStates = new int[]{0};
 
@@ -199,6 +201,4 @@ public class M24Generator {
         }
     }
 
-
-   
 }

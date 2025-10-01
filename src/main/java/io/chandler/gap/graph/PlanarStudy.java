@@ -25,6 +25,10 @@ import io.chandler.gap.GroupExplorer.MemorySettings;
 
 import org.jgrapht.alg.isomorphism.VF2GraphIsomorphismInspector;
 
+
+	// PlanarStudy has a problem
+	// In a deep cut puzzle you can select the same line twice and still have a proper conscruction
+	// But the duplicate polygon check blocks it
 public class PlanarStudy {
 
 

@@ -18,36 +18,43 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 
 import io.chandler.gap.GroupExplorer.MemorySettings;
-import io.chandler.gap.cache.M24StateCache;
+import io.chandler.gap.cache.LongStateCache;
 import io.chandler.gap.cache.State;
 import net.jpountz.lz4.LZ4BlockInputStream;
 import net.jpountz.lz4.LZ4BlockOutputStream;
 
-public class M24Generator {
-    static final File m24States = new File("m24.gap.lz4");
-    static final File outDir = new File("m24.gap.states");
-    static final File categoryListings = outDir.toPath().resolve("dir.txt").toFile();
+public class HS2Generator {
+	static final File hs2States = new File("hs_176.gap.lz4");
+	static final File outDir = new File("hs_176.gap.states");
+	static final File categoryListings = outDir.toPath().resolve("dir.txt").toFile();
 	public static void main(String[] args) throws Exception {
-       // Files.createDirectories(outDir.toPath());
-		//GenerateM24(m24States);
-		//categorizeM24States(m24States, outDir);
+		//Files.createDirectories(outDir.toPath());
+		//GenerateHS2(hs2States);
+		//categorizeHS2States(hs2States, outDir);
 
-        List<int[][]> cycles = loadM24CategoryStates("quadruple 6-cycles");
+        String[] types = new String[] {
+            "80p 2-cycles",
+            "82p 2-cycles",
+            "57p 3-cycles"
+        };
 
+        for (String type : types) {
+            List<int[][]> cycles = loadHS2CategoryStates(type);
 
-        // Save these cycles to a file
-        File cyclesFile = new File("PlanarStudyMulti/m24/quadruple 6-cycles.txt");
-        try (PrintWriter writer = new PrintWriter(cyclesFile)) {
-            for (int[][] cycle : cycles) {
-                writer.println(GroupExplorer.cyclesToNotation(cycle));
+            // Save these cycles to a file
+            File cyclesFile = new File("PlanarStudyMulti/hs_176/"+type+".txt");
+            try (PrintWriter writer = new PrintWriter(cyclesFile)) {
+                for (int[][] cycle : cycles) {
+                    writer.println(GroupExplorer.cyclesToNotation(cycle));
+                }
             }
+            
+            System.out.println(cycles.size());
         }
-        
-        System.out.println(cycles.size());
 
 	}
 
-    public static List<int[][]> loadM24CategoryStates(String category) throws Exception {
+    public static List<int[][]> loadHS2CategoryStates(String category) throws Exception {
         HashMap<String, Integer> categoryToSize = new HashMap<>();
         Scanner inC = new Scanner(categoryListings);
         while (inC.hasNextLine()) {
@@ -61,15 +68,15 @@ public class M24Generator {
         }
         inC.close();
 
-        File src = new File(outDir, category + ".m24.bytes.lz4");
+        File src = new File(outDir, category + ".hs_176.bytes.lz4");
         int size = categoryToSize.get(category);
         System.out.println(size);
         List<int[][]> cycles = new ArrayList<>();
 
         try (InputStream in = new LZ4BlockInputStream(new FileInputStream(src))) {
             for (int i = 0; i < size; i++) {
-                int[] state = new int[24];
-                for (int j = 0; j < 24; j++) {
+                int[] state = new int[176];
+                for (int j = 0; j < 176; j++) {
                     state[j] = in.read() & 0xff;
                 }
                 cycles.add(GroupExplorer.stateToCycles(state));
@@ -79,11 +86,11 @@ public class M24Generator {
         return cycles;
     }
 
-    public static void categorizeM24States(File in, File outDir) throws Exception {
+    public static void categorizeHS2States(File in, File outDir) throws Exception {
         HashMap<String, OutputStream> cycleDescriptionToFile = new HashMap<>();
-        exploreM24(in, (state, desc) -> {
+        exploreHS2(in, (state, desc) -> {
             if (!cycleDescriptionToFile.containsKey(desc)) {
-                File file = new File(outDir, desc + ".m24.bytes.lz4");
+                File file = new File(outDir, desc + ".hs_176.bytes.lz4");
                 try {
                     cycleDescriptionToFile.put(desc, new DataOutputStream(new LZ4BlockOutputStream(
                         new FileOutputStream(file), 32*1024*1024)));
@@ -109,7 +116,7 @@ public class M24Generator {
         }
     }
 
-	public static void exploreM24(File file,
+	public static void exploreHS2(File file,
 			BiConsumer<int[], String> peekCyclesAndDescriptions) throws Exception {
 
 		HashMap<String, Integer> cycleDescriptions = new HashMap<>();
@@ -140,7 +147,6 @@ public class M24Generator {
 			}
 		}
 
-
         
         System.out.println("Elements: " + elements);
         System.out.println("Total group permutations: " + order);
@@ -167,12 +173,12 @@ public class M24Generator {
 	 * @param file
 	 * @throws Exception
 	 */
-    public static void GenerateM24(File file) throws Exception {
-        Set<State> set = new M24StateCache();
-        int elements = 24;
-        int order = 244823040;
+    public static void GenerateHS2(File file) throws Exception {
+        Set<State> set = new LongStateCache(18, 176);
+        int elements = 176;
+        int order = 88704000/2;
         GroupExplorer group = new GroupExplorer(
-            Generators.m24, MemorySettings.DEFAULT, set);
+            Generators.hs_176, MemorySettings.DEFAULT, set);
 
         int[] totalStates = new int[]{0};
 
@@ -199,6 +205,4 @@ public class M24Generator {
         }
     }
 
-
-   
 }

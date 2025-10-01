@@ -31,9 +31,9 @@ import io.chandler.gap.render.SnubDodecahedron;
 public class FullSelectionSearch {
 	public static void main(String[] args) throws Exception{
         //runRhombicDodecahedralSearch();
-		//runDodecahedralSearch();
+		runDodecahedralSearch();
         //runRhombicTriacontahedralSearch();
-		runPentagonalIcositrahedralSearch();
+		//runPentagonalIcositrahedralSearch();
         //runPentagonalHexecontahedralSearch();
 	}
 

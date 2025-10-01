@@ -80,6 +80,13 @@
             <version>${javafx.version}</version>
             <classifier>${javafx.platform}</classifier>
         </dependency>
+        <dependency>
+            <groupId>fi.tkk.tcs</groupId>
+            <artifactId>jbliss</artifactId>
+            <version>0.50beta2</version>
+            <scope>system</scope>
+            <systemPath>/home/cjgriscom/Programming/GroupExplorer/lib/jbliss.jar</systemPath>
+        </dependency>
     </dependencies>
 
     <build>
