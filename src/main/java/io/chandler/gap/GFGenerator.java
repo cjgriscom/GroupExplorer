@@ -33,33 +33,33 @@ public class GFGenerator {
 	public static class GF2_8x8_Cache {
 		private static final int SIZE = 8;
 		private static final long IDENTITY_VALUE = computeIdentityValue();
-		private static final int LENGTH_MASK = 0xFF;
-		private static final int BITFIELD_MASK = 0xFFFFFF00;
-		private static final int BITFIELD_SHIFT = 8;
 
 		// the 8x8 matrix encoded as a bitset
 		public final long value;
 
-		// This is used to later recover the sequences of generator moves
-		public final int bitstring; // lsb byte is length, next 3 bytes are the bitstring
+		// Sequence of generator choices as packed bits (LSB-first) of arbitrary length
+		public final byte[] bitPath;
+		public final int bitLength;
 
-		private GF2_8x8_Cache(long value, int bitstring) {
+		private GF2_8x8_Cache(long value, byte[] bitPath, int bitLength) {
 			this.value = value;
-			this.bitstring = bitstring;
+			this.bitPath = bitPath;
+			this.bitLength = bitLength;
 		}
 
-		private GF2_8x8_Cache(byte[][] matrix, int bitstring) {
+		private GF2_8x8_Cache(byte[][] matrix, byte[] bitPath, int bitLength) {
 			validateMatrix(matrix);
 			this.value = encode(matrix);
-			this.bitstring = bitstring;
+			this.bitPath = bitPath;
+			this.bitLength = bitLength;
 		}
 
 		public static GF2_8x8_Cache identity() {
-			return new GF2_8x8_Cache(IDENTITY_VALUE, 0);
+			return new GF2_8x8_Cache(IDENTITY_VALUE, new byte[0], 0);
 		}
 
 		public static GF2_8x8_Cache fromMatrix(byte[][] matrix) {
-			return new GF2_8x8_Cache(matrix, 0);
+			return new GF2_8x8_Cache(matrix, new byte[]{}, 0);
 		}
 
 		static int size() {
@@ -85,6 +85,28 @@ public class GFGenerator {
 			return v;
 		}
 
+		public static GF2_8x8_Cache fromEncoded(long value) {
+			return new GF2_8x8_Cache(value, new byte[0], 0);
+		}
+
+		public static long multiplyEncoded(long a, long b) {
+			// Treat each row as a byte. Row i of result is XOR of rows k of B where bit k in row i of A is 1.
+			long result = 0L;
+			for (int i = 0; i < SIZE; i++) {
+				int aRow = (int) ((a >>> (i * SIZE)) & 0xFFL);
+				int outRow = 0;
+				int mask = aRow;
+				while (mask != 0) {
+					int k = Integer.numberOfTrailingZeros(mask);
+					mask &= mask - 1;
+					int bRowK = (int) ((b >>> (k * SIZE)) & 0xFFL);
+					outRow ^= bRowK;
+				}
+				result |= ((long) (outRow & 0xFF)) << (i * SIZE);
+			}
+			return result;
+		}
+
 		private static void validateMatrix(byte[][] matrix) {
 			if (matrix == null || matrix.length != SIZE) {
 				throw new IllegalArgumentException("Matrix must be " + SIZE + "x" + SIZE);
@@ -107,21 +129,27 @@ public class GFGenerator {
 		}
 
 		public int getOrder() {
+			return getOrder(Integer.MAX_VALUE);
+		}
+
+		public int getOrder(int maxOrder) {
 			if (isIdentity()) {
 				return 1;
 			}
-			byte[][] original = toMatrix();
-			byte[][] power = GFGenerator.identity(SIZE);
+			long original = value;
+			long power = IDENTITY_VALUE;
 			int order = 0;
 			Set<Long> seen = new HashSet<>();
 			while (true) {
-				power = multiply(power, original, 2);
+				power = multiplyEncoded(power, original);
 				order++;
-				long encoded = encode(power);
-				if (isIdentity(encoded)) {
+				if (order > maxOrder) {
+					return -1;
+				}
+				if (isIdentity(power)) {
 					return order;
 				}
-				if (!seen.add(encoded)) {
+				if (!seen.add(power)) {
 					throw new IllegalStateException("Failed to compute order; cycle detected without reaching identity.");
 				}
 			}
@@ -149,17 +177,28 @@ public class GFGenerator {
 		}
 
 		public GF2_8x8_Cache copyAndUpdate(boolean bit, byte[][] newMatrix) {
-			int length = bitstring & LENGTH_MASK;
-			if (length == LENGTH_MASK) {
-				throw new IllegalStateException("Bitstring length overflow");
+			return copyAndUpdateEncoded(bit, encode(newMatrix));
+		}
+
+		public GF2_8x8_Cache copyAndUpdateEncoded(boolean bit, long newValue) {
+			byte[] newPath;
+			int newLength = bitLength + 1;
+			int oldBytes = (bitLength + 7) >> 3;
+			int newBytes = (newLength + 7) >> 3;
+			if (newBytes == oldBytes) {
+				newPath = new byte[oldBytes];
+				System.arraycopy(bitPath, 0, newPath, 0, oldBytes);
+			} else {
+				newPath = new byte[newBytes];
+				System.arraycopy(bitPath, 0, newPath, 0, oldBytes);
 			}
-			int generatorBits = generatorBits();
 			if (bit) {
-				generatorBits |= (1 << length);
+				int byteIndex = bitLength >> 3;
+				int bitOffset = bitLength & 7;
+				newPath[byteIndex] = (byte) (newPath[byteIndex] | (1 << bitOffset));
 			}
-			int newBitstring = ((generatorBits << BITFIELD_SHIFT) & BITFIELD_MASK) | ((length + 1) & LENGTH_MASK);
-			return new GF2_8x8_Cache(newMatrix, newBitstring);
-	}
+			return new GF2_8x8_Cache(newValue, newPath, newLength);
+		}
 
 		public byte[][] toMatrix() {
 			byte[][] result = new byte[SIZE][SIZE];
@@ -171,22 +210,30 @@ public class GFGenerator {
 			return result;
 		}
 
-		public int bitstringLength() {
-			return bitstring & LENGTH_MASK;
-		}
+		public int bitstringLength() { return bitLength; }
 
 		public byte[] toBitstring() {
-			int length = bitstringLength();
-			int generatorBits = generatorBits();
+			return toBitstring(0, bitstringLength());
+		}
+
+		public byte[] toBitstring(int off, int length) {
 			byte[] out = new byte[length];
-			for (int i = 0; i < length; i++) {
-				out[i] = (byte) (((generatorBits >> i) & 1) != 0 ? 1 : 0);
+			for (int i = off; i < off + length; i++) {
+				int byteIndex = i >> 3;
+				int bitOffset = i & 7;
+				out[i] = (byte) (((bitPath[byteIndex] >> bitOffset) & 1) != 0 ? 1 : 0);
 			}
 			return out;
 		}
 
-		public int generatorBits() {
-			return (bitstring & BITFIELD_MASK) >>> BITFIELD_SHIFT;
+		public boolean[] operations() {
+			boolean[] out = new boolean[bitLength];
+			for (int i = 0; i < bitLength; i++) {
+				int byteIndex = i >> 3;
+				int bitOffset = i & 7;
+				out[i] = ((bitPath[byteIndex] >> bitOffset) & 1) != 0;
+			}
+			return out;
 		}
 	}
 

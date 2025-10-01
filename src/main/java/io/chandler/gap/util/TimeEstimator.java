@@ -10,7 +10,11 @@ public class TimeEstimator {
 	}
 
 
-    public synchronized void checkProgressEstimate(int currentIteration, int results) {
+    public synchronized void checkProgressEstimate(long currentIteration, int results) {
+        checkProgressEstimate(currentIteration, (long) results);
+    }
+
+    public synchronized void checkProgressEstimate(long currentIteration, Long results) {
         
         long currentTime = System.currentTimeMillis();
         long elapsedTime = currentTime - startTime;
@@ -22,7 +26,7 @@ public class TimeEstimator {
             (remainingTime % 3600000) / 60000,
             (remainingTime % 60000) / 1000);
         
-        System.out.println(currentIteration + " / " + totalCombinations + " -> " + results +
+        System.out.println(currentIteration + " / " + totalCombinations + (results != null ? " -> " + results : "") +
             " | Estimated time remaining: " + remainingTimeStr);
 
     }
