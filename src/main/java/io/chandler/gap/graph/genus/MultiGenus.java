@@ -39,6 +39,11 @@ public class MultiGenus {
 	public static List<Integer> computeGenusFromGenerators(List<int[][][]> generators, MultiGenusOption... options) {
 		List<int[][]> adjLists = new ArrayList<>();
 		for (int[][][] generator : generators) {
+            try {
+                generator = GroupExplorer.renumberGenerators_fast(generator);
+            } catch (Exception e) {
+                generator = GroupExplorer.renumberGenerators(GroupExplorer.parseOperationsArr(GroupExplorer.generatorsToString(generator)));
+            }
             TreeMap<Integer, Set<Integer>> adjList = new TreeMap<>();
             int maxVertex = 0;
             // Build adjList from the triangles in the icosian generator

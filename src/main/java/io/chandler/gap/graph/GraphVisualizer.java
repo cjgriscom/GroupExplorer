@@ -23,6 +23,7 @@ import io.chandler.gap.graph.genus.MultiGenus;
 import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayout;
 import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayoutMulti;
 import io.chandler.gap.graph.layoutalgos.ConcentricConstrainedLayout;
+import io.chandler.gap.graph.layoutalgos.GridLayout;
 import io.chandler.gap.graph.layoutalgos.Java3D;
 import io.chandler.gap.graph.layoutalgos.JavaNetworkx;
 import io.chandler.gap.graph.layoutalgos.JavaSpring;
@@ -70,8 +71,8 @@ public class GraphVisualizer extends Application {
     private Pane graphPane;
 
     // Add new instance variables for layout configuration:
-    private TextField seedTextField, itersTextField, thetaTextField, normTextField, triesTextField, initialItersTextField;
-    private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel;
+    private TextField seedTextField, itersTextField, thetaTextField, normTextField, triesTextField, initialItersTextField, repulsionFactorTextField;
+    private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel, repulsionFactorLabel;
     private ComboBox<String> layoutChoiceBox;
 	private Label numSharedLinesLabel;
     private Button genusButton;
@@ -110,6 +111,7 @@ public class GraphVisualizer extends Application {
         layoutAlgoMap.put("Axis Constrained", new AxisConstrainedLayout());
         layoutAlgoMap.put("Axis Constrained Multi", new AxisConstrainedLayoutMulti());
         layoutAlgoMap.put("Planar Puzzle", new ConcentricConstrainedLayout());
+        layoutAlgoMap.put("Grid Solver", new GridLayout());
     }
     private final String defaultLayout = "Java Networkx";
 
@@ -178,6 +180,7 @@ public class GraphVisualizer extends Application {
         initialItersTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_ITERATIONS));
         normTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_NORMALIZATION_FACTOR));
         thetaTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_THETA_FACTOR));
+        repulsionFactorTextField = new TextField(String.valueOf(0.));
         
         seedLabel = new Label("Seed:");
         itersLabel = new Label("Iters:");
@@ -185,6 +188,7 @@ public class GraphVisualizer extends Application {
         initialItersLabel = new Label("Initial Iters:");
         thetaLabel = new Label("Theta Factor:");
         normLabel = new Label("Norm Factor:");
+        repulsionFactorLabel = new Label("Repulsion Factor:");
 
         showFittedNodesCheckBox = new CheckBox("Show Fitted Nodes");
         showFittedNodesCheckBox.setSelected(false);
@@ -212,7 +216,7 @@ public class GraphVisualizer extends Application {
         });
                 
         // Configure the text fields (set width and key listeners)
-        for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField, triesTextField, initialItersTextField}) {
+        for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField, triesTextField, initialItersTextField, repulsionFactorTextField}) {
             textField.setPrefWidth(50);
             textField.setOnKeyReleased(value -> {
                 updateGraph(graphPane, pageLabel);
@@ -274,6 +278,7 @@ public class GraphVisualizer extends Application {
             itersLabel, itersTextField,
             thetaLabel, thetaTextField,
             normLabel, normTextField,
+            repulsionFactorLabel, repulsionFactorTextField,
             showCirclesCheckBox,
             showDirectionCheckBox,
             showFittedNodesCheckBox
@@ -403,6 +408,7 @@ public class GraphVisualizer extends Application {
         bindVisibility(LayoutAlgoArg.NORM, normLabel, normTextField);
         bindVisibility(LayoutAlgoArg.TRIES, triesLabel, triesTextField);
         bindVisibility(LayoutAlgoArg.INITIAL_ITERS, initialItersLabel, initialItersTextField);
+        bindVisibility(LayoutAlgoArg.REPULSION_FACTOR, repulsionFactorLabel, repulsionFactorTextField);
         bindVisibility(LayoutAlgoArg.SHOW_FITTED_NODES, showFittedNodesCheckBox);
 
         Scene scene = new Scene(root, 1024, 768);
@@ -446,6 +452,7 @@ public class GraphVisualizer extends Application {
      * @return List of input lines.
      */
     private List<String> readGraphLinesFromFile(String filePath) {
+        System.out.println("Reading file: " + filePath);
         List<String> lines = new ArrayList<>();
         try (Scanner scanner = new Scanner(new File(filePath))) {
             while (scanner.hasNextLine()) {
@@ -485,7 +492,9 @@ public class GraphVisualizer extends Application {
                     int min = Math.min(a, b);
                     int max = Math.max(a, b);
                     String key = min + "-" + max;
-                    edgeFrequencyMap.put(key, edgeFrequencyMap.getOrDefault(key, 0) + 1);
+                    if (polygon.length > 2 || i == 0) { // Avoid miscounting edges in 2-cycles.
+                        edgeFrequencyMap.put(key, edgeFrequencyMap.getOrDefault(key, 0) + 1);
+                    }
                     graph.addEdge(a, b);
                 }
             }
@@ -508,7 +517,8 @@ public class GraphVisualizer extends Application {
             Color.RED.deriveColor(0, 1, 1, 0.2),
             Color.BLUE.deriveColor(0, 1, 1, 0.2),
             Color.GREEN.deriveColor(0, 1, 1, 0.2),
-            Color.ORANGE.deriveColor(0, 1, 1, 0.2)
+            Color.ORANGE.deriveColor(0, 1, 1, 0.2),
+            Color.PURPLE.deriveColor(0, 1, 1, 0.2)
         };
 
         // Create a list to hold references to the shaded polygons.
@@ -679,13 +689,15 @@ public class GraphVisualizer extends Application {
      */
     private void updateGraph(Pane graphPane, Label pageLabel) {
         String currentLine = graphLines.get(currentGraphIndex);
+        System.out.println("currentLine: " + currentLine);
         Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(currentLine);
         Map<Integer, double[]> positions;
         // Build a composite key based on the current line and all layout parameters.
         String newCacheKey = currentLine + "_" + seedTextField.getText() + "_" + itersTextField.getText() 
                              + "_" + thetaTextField.getText() + "_" + normTextField.getText()
                              + "_" + layoutChoiceBox.getValue() + "_" + triesTextField.getText()
-                             + "_" + initialItersTextField.getText() + "_" + showFittedNodesCheckBox.isSelected();
+                             + "_" + initialItersTextField.getText() + "_" + showFittedNodesCheckBox.isSelected()
+                             + "_" + repulsionFactorTextField.getText();
         if (cachedGraphKey == null || !cachedGraphKey.equals(newCacheKey)) {
 
             String method = layoutChoiceBox.getValue();
@@ -934,6 +946,8 @@ public class GraphVisualizer extends Application {
                 return (double)Integer.parseInt(triesTextField.getText());
             case INITIAL_ITERS:
                 return (double)Integer.parseInt(initialItersTextField.getText());
+            case REPULSION_FACTOR:
+                return Double.parseDouble(repulsionFactorTextField.getText());
         }
         return null;
     }

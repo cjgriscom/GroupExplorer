@@ -310,6 +310,10 @@ public class GroupExplorer implements AbstractGroupProperties {
     int lastSize = 0;
     int iteration = 0;
 
+    public int getIteration() {
+        return iteration;
+    }
+
     public void initIterativeExploration() {
         stateMapIncomplete.add(State.of(elements.clone(), nElements, mem));
 

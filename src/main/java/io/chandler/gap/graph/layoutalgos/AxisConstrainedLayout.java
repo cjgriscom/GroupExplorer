@@ -29,12 +29,14 @@ public class AxisConstrainedLayout extends LayoutAlgo {
             LayoutAlgoArg.SEED,
             LayoutAlgoArg.SHOW_FITTED_NODES,
             LayoutAlgoArg.TRIES,
-            LayoutAlgoArg.INITIAL_ITERS
+            LayoutAlgoArg.INITIAL_ITERS,
+            LayoutAlgoArg.REPULSION_FACTOR
         };
     }
     @Override
     public void performLayout(double boxSize, String generator, org.jgrapht.Graph<Integer, DefaultEdge> graph, EnumMap<LayoutAlgoArg, Double> args) {
         double[] fitOut = new double[]{-1};
+        double repulsionFactor = args.get(LayoutAlgoArg.REPULSION_FACTOR);
         result = computeLayoutN(generator,
                     args.get(LayoutAlgoArg.ITERS).intValue(),
                     args.get(LayoutAlgoArg.SEED).longValue(),
@@ -42,7 +44,8 @@ public class AxisConstrainedLayout extends LayoutAlgo {
                     args.get(LayoutAlgoArg.TRIES).intValue(),
                     args.get(LayoutAlgoArg.INITIAL_ITERS).intValue(),
                     !args.get(LayoutAlgoArg.SHOW_FITTED_NODES).equals(0.0),
-                    fitOut);
+                    fitOut,
+                    repulsionFactor);
         this.fitOut = fitOut[0];
     }
 
@@ -57,7 +60,7 @@ public class AxisConstrainedLayout extends LayoutAlgo {
     }
 
     private static final double EPS = 1e-6;
-    private static final double THRESHOLD = 1e-5;
+    private static final double THRESHOLD = 1e-7;
     private static final double STEP_SIZE = 0.05;
 
     /**
@@ -115,7 +118,8 @@ public class AxisConstrainedLayout extends LayoutAlgo {
             int nPolygons2, int verticesPerPolygon2,
             int iterations,
             Random random,
-            double scale // global scale factor
+            double scale, // global scale factor
+            double repulsionFactor // <--- new parameter
     ) {
 
         // --------------------------------------------------------------------
@@ -165,6 +169,7 @@ public class AxisConstrainedLayout extends LayoutAlgo {
         // 2) Main iterative loop.
         // --------------------------------------------------------------------
         double costAfter = 0;
+        double axisFit = 0;
         for (int iter = 0; iter < iterations; iter++) {
 
             // (a) Compute vertex positions from the current parameters.
@@ -187,13 +192,13 @@ public class AxisConstrainedLayout extends LayoutAlgo {
             }
 
             // (b) Compute connectivity cost.
-            double costBefore = computeConnectivityCost(mergedVertices, vertexPositions);
+            double costBefore = computeConnectivityCost(mergedVertices, vertexPositions) + computeRepulsionCost(vertexPositions, repulsionFactor);
 
             // (c) Perform local parameter search.
             localParameterSearchRestricted(random, axis1, e0, e1, axis2AngleHolder,
                     polyParams1, polyParams2, mergedVertices,
                     polygonToVerticesMap1, polygonToVerticesMap2, scale,
-                    verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+                    verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
 
             // Recompute vertex positions after the local changes.
             for (int t = 0; t < nPolygons1; t++) {
@@ -208,7 +213,8 @@ public class AxisConstrainedLayout extends LayoutAlgo {
                     vertexPositions.put(vIDs[i], computePolygonVertexPositionOnAxis(currentAxis2, polyParams2[t], i, scale, local2DGroup2));
                 }
             }
-            costAfter = computeConnectivityCost(mergedVertices, vertexPositions);
+            axisFit = computeConnectivityCost(mergedVertices, vertexPositions);
+            costAfter = axisFit + computeRepulsionCost(vertexPositions, repulsionFactor);
 
             // (d) Exit early if the cost did not improve substantially.
             if (Math.abs(costBefore - costAfter) < THRESHOLD) {
@@ -236,7 +242,7 @@ public class AxisConstrainedLayout extends LayoutAlgo {
         normalize(axis1);
         normalize(axis2);
 
-        return new LayoutResult(vertexPositions, axis1, axis2, costAfter);
+        return new LayoutResult(vertexPositions, axis1, axis2, axisFit);
     }
 
     // ------------------------------------------------------------------------
@@ -350,6 +356,29 @@ public class AxisConstrainedLayout extends LayoutAlgo {
     }
 
     /**
+     * Computes an inverse-square repulsion cost between vertices
+     */
+    private static double computeRepulsionCost(Map<Integer, double[]> positions, double repulsionFactor) {
+        if (repulsionFactor <= 0) return 0;
+        double cost = 0.0;
+        List<double[]> posList = new ArrayList<>(positions.values());
+        for (int i = 0; i < posList.size(); i++) {
+            double[] p1 = posList.get(i);
+            for (int j = i + 1; j < posList.size(); j++) {
+                double[] p2 = posList.get(j);
+                double dx = p1[0] - p2[0];
+                double dy = p1[1] - p2[1];
+                double dz = p1[2] - p2[2];
+                double dSquared = dx * dx + dy * dy + dz * dz;
+                // Inverse-square law for repulsion
+                cost += repulsionFactor / dSquared;
+                
+            }
+        }
+        return cost;
+    }
+
+    /**
      * Rebuilds vertex positions from the current axes and polygon parameters,
      * then computes and returns the connectivity cost.
      */
@@ -365,8 +394,8 @@ public class AxisConstrainedLayout extends LayoutAlgo {
             int verticesPerPolygon1,
             double[][] local2DGroup1,
             int verticesPerPolygon2,
-            double[][] local2DGroup2
-    ) {
+            double[][] local2DGroup2,
+            double repulsionFactor) {
         Map<Integer, double[]> positions = new HashMap<>();
         // Group 1 polygons.
         for (int t = 0; t < polyParams1.length; t++) {
@@ -384,7 +413,9 @@ public class AxisConstrainedLayout extends LayoutAlgo {
                 positions.put(vIDs[i], pos);
             }
         }
-        return computeConnectivityCost(g, positions);
+        double connectivityCost = computeConnectivityCost(g, positions);
+        double repulsionCost = repulsionFactor > 0 ? computeRepulsionCost(positions, repulsionFactor) : 0;
+        return connectivityCost + repulsionCost;
     }
 
     /**
@@ -404,25 +435,24 @@ public class AxisConstrainedLayout extends LayoutAlgo {
             int verticesPerPolygon1,
             double[][] local2DGroup1,
             int verticesPerPolygon2,
-            double[][] local2DGroup2
-    ) {
-        // Compute baseline cost using current parameters.
+            double[][] local2DGroup2,
+            double repulsionFactor) {
         double baselineCost = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
-                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
-
+                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
+    
         // Tweak offset.
         double origOffset = pp.offset;
         double tweak = (random.nextDouble() - 0.5) * STEP_SIZE;
         pp.offset += tweak;
         double costNew = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
-                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
         if (costNew < baselineCost) {
             baselineCost = costNew;
         } else {
             pp.offset = origOffset; // revert
         }
-
-        // Tweak scale unless this is a fixed (anchor) polygon.
+    
+        // Tweak scale (if not the anchor polygon).
         if (!(polyParams1.length > 0 && pp == polyParams1[0])) {
             double origScale = pp.scale;
             tweak = (random.nextDouble() - 0.5) * STEP_SIZE;
@@ -430,26 +460,26 @@ public class AxisConstrainedLayout extends LayoutAlgo {
             if (pp.scale < EPS)
                 pp.scale = EPS;
             costNew = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
-                    axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+                    axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
             if (costNew < baselineCost) {
                 baselineCost = costNew;
             } else {
                 pp.scale = origScale;
             }
         }
-
+    
         // Tweak rotation.
         double origRotation = pp.rotation;
         tweak = (random.nextDouble() - 0.5) * STEP_SIZE * 2;
         pp.rotation += tweak;
         costNew = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
-                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+                axis1, axis2, polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
         if (!(costNew < baselineCost)) {
             pp.rotation = origRotation;
         }
     }
 
-    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries, int initialIters, boolean showFittedNodes, double[] fitOut) {
+    public static Map<Integer, double[]> computeLayoutN(String generatorS, int iterations, long seed, double scale, int tries, int initialIters, boolean showFittedNodes, double[] fitOut, double repulsionFactor) {
         int[][][] generatorOrigNumbers = GroupExplorer.parseOperationsArr(generatorS);
         int[][][] generator = GroupExplorer.parseOperationsArr(GroupExplorer.renumberGeneratorNotation(generatorS));
         // Create a mapping of the original numbers to the new numbers
@@ -497,15 +527,15 @@ public class AxisConstrainedLayout extends LayoutAlgo {
         Random random = new Random(seed);
         for (int i = 0; i < tries; i++) {
             Random tmp = cloneRandom(random);
-            LayoutResult result0 = computeLayout(g, nPolygons1, verticesPerPolygon1, nPolygons2, verticesPerPolygon2, initialIters, random, 1);
+            LayoutResult result0 = computeLayout(g, nPolygons1, verticesPerPolygon1, nPolygons2, verticesPerPolygon2, initialIters, random, 1, repulsionFactor);
             if (result0.fit < bestFit) {
                 bestFit = result0.fit;
                 result = result0;
                 savedRandom = tmp;
             }
         }
-        // Recompute the layout with the best fit.
-        if (initialIters != iterations) result = computeLayout(g, nPolygons1, verticesPerPolygon1, nPolygons2, verticesPerPolygon2, iterations, savedRandom, 1);
+        if (initialIters != iterations)
+            result = computeLayout(g, nPolygons1, verticesPerPolygon1, nPolygons2, verticesPerPolygon2, iterations, savedRandom, 1, repulsionFactor);
         System.out.println("Final positions: ");
         for (Map.Entry<Integer, double[]> entry : result.positions.entrySet()) {
             System.out.println("Vertex " + entry.getKey() + ": " + Arrays.toString(entry.getValue()));
@@ -576,20 +606,19 @@ public class AxisConstrainedLayout extends LayoutAlgo {
                                               int verticesPerPolygon1,
                                               double[][] local2DGroup1,
                                               int verticesPerPolygon2,
-                                              double[][] local2DGroup2) {
+                                              double[][] local2DGroup2,
+                                              double repulsionFactor) {
         double originalAngle = axis2AngleHolder[0];
         double[] currentAxis2 = computeAxis2FromAngle(originalAngle, e0, e1);
         double baselineCost = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2,
-                                                      scale, fixedAxis1, currentAxis2,
-                                                      polyParams1, polyParams2,
-                                                      verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+                                                      scale, fixedAxis1, currentAxis2, polyParams1, polyParams2,
+                                                      verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
         double tweak = (random.nextDouble() - 0.5) * STEP_SIZE;
         axis2AngleHolder[0] = originalAngle + tweak;
         double[] newAxis2 = computeAxis2FromAngle(axis2AngleHolder[0], e0, e1);
         double newCost = attemptRecomputeAndCost(g, polygonToVerticesMap1, polygonToVerticesMap2,
-                                                 scale, fixedAxis1, newAxis2,
-                                                 polyParams1, polyParams2,
-                                                 verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+                                                 scale, fixedAxis1, newAxis2, polyParams1, polyParams2,
+                                                 verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
         if (newCost >= baselineCost) {
             axis2AngleHolder[0] = originalAngle;
         }
@@ -609,22 +638,21 @@ public class AxisConstrainedLayout extends LayoutAlgo {
                                                          int verticesPerPolygon1,
                                                          double[][] local2DGroup1,
                                                          int verticesPerPolygon2,
-                                                         double[][] local2DGroup2) {
-        // Do not tweak fixedAxis1
-        smallRandomTweakAxis2(random, axis2AngleHolder, e0, e1, g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
-                               fixedAxis1, polyParams1, polyParams2,
-                               verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+                                                         double[][] local2DGroup2,
+                                                         double repulsionFactor) {
+        smallRandomTweakAxis2(random, axis2AngleHolder, e0, e1, g,
+                polygonToVerticesMap1, polygonToVerticesMap2, scale, fixedAxis1,
+                polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1,
+                verticesPerPolygon2, local2DGroup2, repulsionFactor);
         for (PolygonParams pp : polyParams1) {
-            smallRandomTweakPolygon(pp, random, g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
-                                      fixedAxis1, computeAxis2FromAngle(axis2AngleHolder[0], e0, e1),
-                                      polyParams1, polyParams2,
-                                      verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+            smallRandomTweakPolygon(pp, random, g, polygonToVerticesMap1, polygonToVerticesMap2,
+                    scale, fixedAxis1, computeAxis2FromAngle(axis2AngleHolder[0], e0, e1),
+                    polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
         }
         for (PolygonParams pp : polyParams2) {
-            smallRandomTweakPolygon(pp, random, g, polygonToVerticesMap1, polygonToVerticesMap2, scale,
-                                      fixedAxis1, computeAxis2FromAngle(axis2AngleHolder[0], e0, e1),
-                                      polyParams1, polyParams2,
-                                      verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2);
+            smallRandomTweakPolygon(pp, random, g, polygonToVerticesMap1, polygonToVerticesMap2,
+                    scale, fixedAxis1, computeAxis2FromAngle(axis2AngleHolder[0], e0, e1),
+                    polyParams1, polyParams2, verticesPerPolygon1, local2DGroup1, verticesPerPolygon2, local2DGroup2, repulsionFactor);
         }
     }
 

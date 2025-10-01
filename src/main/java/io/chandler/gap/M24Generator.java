@@ -32,11 +32,11 @@ public class M24Generator {
 		//GenerateM24(m24States);
 		//categorizeM24States(m24States, outDir);
 
-        List<int[][]> cycles = loadM24CategoryStates("6p 4-cycles");
+        List<int[][]> cycles = loadM24CategoryStates("quadruple 6-cycles");
 
 
         // Save these cycles to a file
-        File cyclesFile = new File("PlanarStudy/m24/6p 4-cycles.txt");
+        File cyclesFile = new File("PlanarStudyMulti/m24/quadruple 6-cycles.txt");
         try (PrintWriter writer = new PrintWriter(cyclesFile)) {
             for (int[][] cycle : cycles) {
                 writer.println(GroupExplorer.cyclesToNotation(cycle));

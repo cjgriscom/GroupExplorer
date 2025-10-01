@@ -11,5 +11,6 @@ public enum LayoutAlgoArg {
 	SEED,
 	THETA,
 	NORM,
-	SHOW_FITTED_NODES
+	SHOW_FITTED_NODES,
+	REPULSION_FACTOR,
 }
