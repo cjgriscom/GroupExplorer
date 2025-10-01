@@ -57,7 +57,7 @@ public class PlanarStudyRepeated {
         boolean allowSubgroups = true;
         boolean requirePlanar = true;
         boolean discardOverGenus1 = true;
-        int enforceLoopMultiples = 3;
+        int enforceLoopMultiples = 1;
         // In this experiment we want to generate files and then filter in two stages.
         boolean generate = true;
         int repetitions = 4; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
@@ -77,8 +77,8 @@ public class PlanarStudyRepeated {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.sp_6_2;
-        String groupName = "sp_6_2";
+        String generator = Generators.o8m2_2;
+        String groupName = "o8m2_2";
         System.out.println(groupName);
         File root = new File("PlanarStudyMulti/" + groupName);
         root.mkdirs();
@@ -88,6 +88,7 @@ public class PlanarStudyRepeated {
         // --------------------------------------------------------
         if (generate &&
                       !groupName.startsWith("u4_3_") &&
+                      !groupName.startsWith("o8m2") &&
                       !generator.equals(Generators.m24) &&
                       !generator.equals(Generators.hs) &&
                       !generator.equals(Generators.hs_2) &&
@@ -202,8 +203,8 @@ public class PlanarStudyRepeated {
                         while (System.in.available() > 0) {
                             System.in.read();
                         }
-                        System.out.println("p1_1_count: " + p1_1_count);
-                        System.out.println("p1_2_count: " + p1_2_count);
+                        System.out.println("p1_1_count: " + p1_1_count + " / " + lines1.size());
+                        System.out.println("p1_2_count: " + p1_2_count + " / " + lines2.size());
                         break phase1Loop;
                     }
                 } catch (IOException e) {

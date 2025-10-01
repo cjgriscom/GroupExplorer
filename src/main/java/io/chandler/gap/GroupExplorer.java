@@ -166,22 +166,46 @@ public class GroupExplorer implements AbstractGroupProperties {
         }
     }
 
+    public void initFromState(int[] state) {
+        elements = state.clone();
+    }
+
     public void applyOperation(int index) {
+        applyOperation(index, true);
+    }
+
+    public void applyOperation(int index, boolean addToMap) {
         int[][] operation = parsedOperations.get(index);
         for (int[] cycle : operation) {
-            for (int i = 0; i < cycle.length - 1; i++) {
-                int current = cycle[i];
-                int next = cycle[i + 1];
-                int temp = elements[current - 1];
-                elements[current - 1] = elements[next - 1];
-                elements[next - 1] = temp;
+            final int len = cycle.length;
+            if (len <= 1) {
+                continue;
+            } else if (len == 2) {
+                final int a = cycle[0] - 1, b = cycle[1] - 1;
+                final int tmp = elements[a]; elements[a] = elements[b]; elements[b] = tmp;
+            } else if (len == 3) {
+                final int a = cycle[0] - 1, b = cycle[1] - 1, c = cycle[2] - 1;
+                final int tmp = elements[a]; elements[a] = elements[b]; elements[b] = elements[c]; elements[c] = tmp;
+            } else {
+                final int firstIdx = cycle[0] - 1;
+                final int firstVal = elements[firstIdx];
+                for (int i = 0; i < len - 1; i++) {
+                    final int dst = cycle[i]     - 1;
+                    final int src = cycle[i + 1] - 1;
+                    elements[dst] = elements[src];
+                }
+                elements[cycle[len - 1] - 1] = firstVal;
             }
         }
-        stateMap.add(State.of(elements.clone(), nElements, mem));
+        if (addToMap) stateMap.add(State.of(elements.clone(), nElements, mem));
     }
 
     public int[] copyCurrentState() {
         return elements.clone();
+    }
+
+    public int[] peekState() {
+        return elements;
     }
 
     public static void serializeState(DataOutputStream dos, int[] state) throws IOException {
@@ -223,6 +247,50 @@ public class GroupExplorer implements AbstractGroupProperties {
     }
 
     public static int[][] stateToCycles(int[] state) {
+        int n = state.length;
+        boolean[] visited = new boolean[n];
+        int[][] cycles = new int[n][]; // Upper bound on number of cycles
+        int cycleCount = 0;
+
+        // Reusable buffer that grows as needed to avoid allocating n-sized arrays per cycle
+        int[] tmp = new int[Math.min(n, 32)];
+
+        for (int i = 0; i < n; i++) {
+            if (visited[i]) continue;
+
+            // Skip trivial 1-cycles early
+            if (state[i] == i + 1) {
+                visited[i] = true;
+                continue;
+            }
+
+            int current = i;
+            int size = 0;
+            do {
+                visited[current] = true;
+                if (size == tmp.length) {
+                    int newCap = Math.min(n, tmp.length << 1);
+                    int[] grown = new int[newCap];
+                    System.arraycopy(tmp, 0, grown, 0, size);
+                    tmp = grown;
+                }
+                tmp[size++] = current + 1; // store 1-based element id
+                current = state[current] - 1;
+            } while (current != i);
+
+            if (size > 1) {
+                int[] cycleArr = new int[size];
+                System.arraycopy(tmp, 0, cycleArr, 0, size);
+                cycles[cycleCount++] = cycleArr;
+            }
+        }
+
+        return Arrays.copyOf(cycles, cycleCount);
+    }
+
+
+    // Renamed original method for testing
+    private static int[][] stateToCyclesOriginal(int[] state) {
         boolean[] visited = new boolean[state.length];
         int[][] cycles = new int[state.length][];  // Pre-allocate max possible size
         int cycleCount = 0;
@@ -248,34 +316,6 @@ public class GroupExplorer implements AbstractGroupProperties {
         }
         
         return Arrays.copyOf(cycles, cycleCount);
-    }
-
-
-    // Renamed original method for testing
-    private static int[][] stateToCyclesOriginal(int[] state) {
-        boolean[] visited = new boolean[state.length];
-        List<List<Integer>> cyclesList = new ArrayList<>();
-
-        for (int i = 0; i < state.length; i++) {
-            if (!visited[i]) {
-                int current = i;
-                List<Integer> cycle = new ArrayList<>();
-                
-                do {
-                    visited[current] = true;
-                    cycle.add(current + 1);
-                    current = state[current] - 1;
-                } while (current != i);
-
-                if (cycle.size() > 1) {
-                    cyclesList.add(cycle);
-                }
-            }
-        }
-
-        return cyclesList.stream()
-                .map(cycle -> cycle.stream().mapToInt(Integer::intValue).toArray())
-                .toArray(int[][]::new);
     }
 
     public static String cyclesToNotation(int[][] cycles) {
@@ -549,8 +589,13 @@ public class GroupExplorer implements AbstractGroupProperties {
         return description.toString();
     }
 
+
     public static String describeState(int nElements, int[] state) {
         int[][] cycles = stateToCycles(state);
+        return describeCycles(nElements, cycles);
+    }
+
+    public static String describeCycles(int nElements, int[][] cycles) {
         int[] nCycles = new int[nElements + 1];
         
         for (int[] cycle : cycles) {

@@ -53,7 +53,7 @@ public class CycleInverter {
      * @param array the array to copy
      * @return a deep copy of the array
      */
-    private static int[][][] deepCopy(int[][][] array) {
+    public static int[][][] deepCopy(int[][][] array) {
         int[][][] copy = new int[array.length][][];
         for (int i = 0; i < array.length; i++) {
             copy[i] = new int[array[i].length][];
