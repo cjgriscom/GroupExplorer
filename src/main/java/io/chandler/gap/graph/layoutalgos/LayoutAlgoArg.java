@@ -13,4 +13,8 @@ public enum LayoutAlgoArg {
 	NORM,
 	SHOW_FITTED_NODES,
 	REPULSION_FACTOR,
+	W,
+	H,
+	SOLUTION,
+	ALL_SOLUTIONS,
 }

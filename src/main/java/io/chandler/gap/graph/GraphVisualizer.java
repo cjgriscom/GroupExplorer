@@ -71,8 +71,9 @@ public class GraphVisualizer extends Application {
     private Pane graphPane;
 
     // Add new instance variables for layout configuration:
-    private TextField seedTextField, itersTextField, thetaTextField, normTextField, triesTextField, initialItersTextField, repulsionFactorTextField;
-    private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel, repulsionFactorLabel;
+    private TextField seedTextField, itersTextField, thetaTextField, normTextField, triesTextField, initialItersTextField, repulsionFactorTextField, wTextField, hTextField, solutionTextField;
+    private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel, repulsionFactorLabel, wLabel, hLabel, solutionLabel;
+    private Button solutionPrevButton, solutionNextButton;
     private ComboBox<String> layoutChoiceBox;
 	private Label numSharedLinesLabel;
     private Button genusButton;
@@ -80,6 +81,7 @@ public class GraphVisualizer extends Application {
     // New checkbox to toggle the display of circles
     private CheckBox showCirclesCheckBox;
     private CheckBox showFittedNodesCheckBox;
+    private CheckBox allSolutionsCheckBox;
     // Remove the slider and add a trackball control for full 3D rotation.
     private Pane trackballPane;
     // Rotation angles (in radians) around X and Y axes.
@@ -102,6 +104,11 @@ public class GraphVisualizer extends Application {
     // Add new instance variables for interactive arrow updates:
     private List<DirectedArrow> directedArrows = new ArrayList<>();
     private Map<Integer, Circle> currentVertexCircleMap = new HashMap<>();
+
+    // New: Suppress render control
+    private CheckBox suppressRenderCheckBox;
+    private boolean suppressRender = false;
+    private boolean renderQueued = false;
 
     private Map<String, LayoutAlgo> layoutAlgoMap = new LinkedHashMap<>();
     {
@@ -130,7 +137,8 @@ public class GraphVisualizer extends Application {
         if (args.length > 0) {
             launch(args);
         } else {
-            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudyMulti/eliac/dual 4-cycles-triple 2-cycles-filtered.txt" });
+            //launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudyMulti/eliac/dual 4-cycles-triple 2-cycles-filtered.txt" });
+            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudyMulti/u4_2_2/l2-2-cycles-2-cycles-2-cycles_R2-filtered.txt" });
         }
     }
 
@@ -181,6 +189,9 @@ public class GraphVisualizer extends Application {
         normTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_NORMALIZATION_FACTOR));
         thetaTextField = new TextField(String.valueOf(IndexedFRLayoutAlgorithm2D.DEFAULT_THETA_FACTOR));
         repulsionFactorTextField = new TextField(String.valueOf(0.));
+        wTextField = new TextField("20");
+        hTextField = new TextField("20");
+        solutionTextField = new TextField("0");
         
         seedLabel = new Label("Seed:");
         itersLabel = new Label("Iters:");
@@ -189,6 +200,9 @@ public class GraphVisualizer extends Application {
         thetaLabel = new Label("Theta Factor:");
         normLabel = new Label("Norm Factor:");
         repulsionFactorLabel = new Label("Repulsion Factor:");
+        wLabel = new Label("Grid Width:");
+        hLabel = new Label("Grid Height:");
+        solutionLabel = new Label("Solution:");
 
         showFittedNodesCheckBox = new CheckBox("Show Fitted Nodes");
         showFittedNodesCheckBox.setSelected(false);
@@ -215,8 +229,26 @@ public class GraphVisualizer extends Application {
             updateGraph(graphPane, pageLabel);
         });
                 
+        // Create solution navigation buttons
+        solutionPrevButton = new Button("<");
+        solutionNextButton = new Button(">");
+        solutionPrevButton.setOnAction(e -> {
+            int current = Integer.parseInt(solutionTextField.getText());
+            if (current > 0) {
+                solutionTextField.setText(String.valueOf(current - 1));
+                updateGraph(graphPane, pageLabel);
+            }
+        });
+        solutionNextButton.setOnAction(e -> {
+            int current = Integer.parseInt(solutionTextField.getText());
+            solutionTextField.setText(String.valueOf(current + 1));
+            updateGraph(graphPane, pageLabel);
+        });
+        solutionPrevButton.setPrefWidth(30);
+        solutionNextButton.setPrefWidth(30);
+
         // Configure the text fields (set width and key listeners)
-        for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField, triesTextField, initialItersTextField, repulsionFactorTextField}) {
+        for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField, triesTextField, initialItersTextField, repulsionFactorTextField, wTextField, hTextField, solutionTextField}) {
             textField.setPrefWidth(50);
             textField.setOnKeyReleased(value -> {
                 updateGraph(graphPane, pageLabel);
@@ -264,10 +296,31 @@ public class GraphVisualizer extends Application {
         showDirectionCheckBox.setSelected(false); // Default to not showing direction
         showDirectionCheckBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
 
+        // All solutions checkbox (for algorithms that support it)
+        allSolutionsCheckBox = new CheckBox("All Solutions");
+        allSolutionsCheckBox.setSelected(false);
+        allSolutionsCheckBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
+
+        // Suppress render checkbox
+        suppressRenderCheckBox = new CheckBox("Suppress Render");
+        suppressRenderCheckBox.setSelected(false);
+        suppressRenderCheckBox.setOnAction(e -> {
+            suppressRender = suppressRenderCheckBox.isSelected();
+            if (!suppressRender && renderQueued) {
+                renderQueued = false;
+                updateGraph(graphPane, pageLabel);
+                updateGraphInfo(graphLines.get(currentGraphIndex));
+            }
+        });
+
         // Create a top-bar HBox for the remaining controls.
         HBox topControls = new HBox(10, randomizeButton, loadButton, trackballPane);
         topControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
         root.setTop(topControls);
+
+        // Create HBox for solution navigation
+        HBox solutionBox = new HBox(5, solutionPrevButton, solutionTextField, solutionNextButton);
+        solutionBox.setStyle("-fx-alignment: center-left;");
 
         // Create the sidebar VBox for layout configuration controls.
         VBox sidebar = new VBox(10,
@@ -279,9 +332,14 @@ public class GraphVisualizer extends Application {
             thetaLabel, thetaTextField,
             normLabel, normTextField,
             repulsionFactorLabel, repulsionFactorTextField,
+            wLabel, wTextField,
+            hLabel, hTextField,
+            solutionLabel, solutionBox,
             showCirclesCheckBox,
             showDirectionCheckBox,
-            showFittedNodesCheckBox
+            showFittedNodesCheckBox,
+            allSolutionsCheckBox,
+            suppressRenderCheckBox
         );
         sidebar.setPrefWidth(200);
         sidebar.setStyle("-fx-padding: 10;");
@@ -410,6 +468,10 @@ public class GraphVisualizer extends Application {
         bindVisibility(LayoutAlgoArg.INITIAL_ITERS, initialItersLabel, initialItersTextField);
         bindVisibility(LayoutAlgoArg.REPULSION_FACTOR, repulsionFactorLabel, repulsionFactorTextField);
         bindVisibility(LayoutAlgoArg.SHOW_FITTED_NODES, showFittedNodesCheckBox);
+        bindVisibility(LayoutAlgoArg.W, wLabel, wTextField);
+        bindVisibility(LayoutAlgoArg.H, hLabel, hTextField);
+        bindVisibility(LayoutAlgoArg.SOLUTION, solutionLabel, solutionBox);
+        bindVisibility(LayoutAlgoArg.ALL_SOLUTIONS, allSolutionsCheckBox);
 
         Scene scene = new Scene(root, 1024, 768);
         primaryStage.setTitle("Planar Graph Visualizer");
@@ -688,8 +750,11 @@ public class GraphVisualizer extends Application {
      * @param pageLabel The Label showing the current page.
      */
     private void updateGraph(Pane graphPane, Label pageLabel) {
+        if (suppressRender) {
+            renderQueued = true;
+            return;
+        }
         String currentLine = graphLines.get(currentGraphIndex);
-        System.out.println("currentLine: " + currentLine);
         Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(currentLine);
         Map<Integer, double[]> positions;
         // Build a composite key based on the current line and all layout parameters.
@@ -697,7 +762,9 @@ public class GraphVisualizer extends Application {
                              + "_" + thetaTextField.getText() + "_" + normTextField.getText()
                              + "_" + layoutChoiceBox.getValue() + "_" + triesTextField.getText()
                              + "_" + initialItersTextField.getText() + "_" + showFittedNodesCheckBox.isSelected()
-                             + "_" + repulsionFactorTextField.getText();
+                             + "_" + repulsionFactorTextField.getText() + "_" + wTextField.getText()
+                             + "_" + hTextField.getText() + "_" + solutionTextField.getText()
+                             + "_" + allSolutionsCheckBox.isSelected();
         if (cachedGraphKey == null || !cachedGraphKey.equals(newCacheKey)) {
 
             String method = layoutChoiceBox.getValue();
@@ -948,6 +1015,14 @@ public class GraphVisualizer extends Application {
                 return (double)Integer.parseInt(initialItersTextField.getText());
             case REPULSION_FACTOR:
                 return Double.parseDouble(repulsionFactorTextField.getText());
+            case W:
+                return (double)Integer.parseInt(wTextField.getText());
+            case H:
+                return (double)Integer.parseInt(hTextField.getText());
+            case SOLUTION:
+                return (double)Integer.parseInt(solutionTextField.getText());
+            case ALL_SOLUTIONS:
+                return (allSolutionsCheckBox.isSelected() ? 1. : 0.);
         }
         return null;
     }
