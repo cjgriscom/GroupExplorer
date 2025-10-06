@@ -174,8 +174,7 @@ public class GroupExplorer implements AbstractGroupProperties {
         applyOperation(index, true);
     }
 
-    public void applyOperation(int index, boolean addToMap) {
-        int[][] operation = parsedOperations.get(index);
+    public void applyOperation(int[][] operation, boolean addToMap) {
         for (int[] cycle : operation) {
             final int len = cycle.length;
             if (len <= 1) {
@@ -198,6 +197,11 @@ public class GroupExplorer implements AbstractGroupProperties {
             }
         }
         if (addToMap) stateMap.add(State.of(elements.clone(), nElements, mem));
+    }
+
+    public void applyOperation(int index, boolean addToMap) {
+        int[][] operation = parsedOperations.get(index);
+        applyOperation(operation, addToMap);
     }
 
     public int[] copyCurrentState() {
