@@ -21,7 +21,6 @@ import java.util.Set;
 import org.jgrapht.Graph;
 import org.jgrapht.Graphs;
 import org.jgrapht.alg.cycle.JohnsonSimpleCycles;
-import org.jgrapht.alg.isomorphism.VF2GraphIsomorphismInspector;
 import org.jgrapht.alg.planar.BoyerMyrvoldPlanarityInspector;
 import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleDirectedGraph;
@@ -39,11 +38,8 @@ import io.chandler.gap.graph.genus.MultiGenus;
 // In a deep cut puzzle you can select the same line twice and still have a proper conscruction
 // But the duplicate polygon check blocks it
 public class PlanarStudyRepeated {
-    private static final boolean JBLISS = true;
     static {
-        if (JBLISS) {
-            System.loadLibrary("jbliss");
-        }
+        System.loadLibrary("jbliss");
     }
 
     public static void main(String[] args) throws IOException {
@@ -54,13 +50,14 @@ public class PlanarStudyRepeated {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
+        int MAX_DUPLICATE_POLYGONS = 0;
         boolean allowSubgroups = true;
         boolean requirePlanar = true;
         boolean discardOverGenus1 = true;
-        int enforceLoopMultiples = 1;
+        int enforceLoopMultiples = 3;
         // In this experiment we want to generate files and then filter in two stages.
         boolean generate = true;
-        int repetitions = 4; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
+        int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
         boolean directed = true;
 
@@ -71,15 +68,28 @@ public class PlanarStudyRepeated {
 
         // Either use a complete description like "6p 3-cycles" or a partial description like "5-cycles" for 5-cycles only
         String[] conj = new String[] {
-            "2-cycles",  "2-cycles"
+            "3-cycles",  "2-cycles"
         };
         // For phase 1, we use two different files (indices 0 and 1).
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.o8m2_2;
-        String groupName = "o8m2_2";
-        System.out.println(groupName);
+        String generator = Generators.m22_2;
+        String groupName = "m22_2";
+
+        // Print configuration
+        System.out.println("Group: " + groupName);
+        System.out.println("Generator: " + generator);
+        System.out.println("  Conjugacy classes: " + Arrays.toString(conj));
+        System.out.println("    Phase 1 indices: " + Arrays.toString(phase1Indices));
+        System.out.println("    Phase 2 indices: " + Arrays.toString(phase2Indices));
+        System.out.println("Max duplicate polygons: " + MAX_DUPLICATE_POLYGONS);
+        System.out.println("Planar: " + requirePlanar);
+        System.out.println("Toroidal: " + discardOverGenus1);
+        System.out.println("Loop multiples: " + enforceLoopMultiples);
+        System.out.println("Directed: " + directed);
+        System.out.println("Generate: " + generate);
+
         File root = new File("PlanarStudyMulti/" + groupName);
         root.mkdirs();
 
@@ -88,10 +98,10 @@ public class PlanarStudyRepeated {
         // --------------------------------------------------------
         if (generate &&
                       !groupName.startsWith("u4_3_") &&
+                      !groupName.startsWith("o8p2") &&
                       !groupName.startsWith("o8m2") &&
+                      !groupName.startsWith("hs") &&
                       !generator.equals(Generators.m24) &&
-                      !generator.equals(Generators.hs) &&
-                      !generator.equals(Generators.hs_2) &&
                       !generator.equals(Generators.mcl)) {
             boolean multithread = true;
             PrintStream[] filesOut = new PrintStream[conj.length];
@@ -101,18 +111,8 @@ public class PlanarStudyRepeated {
             
             GroupExplorer g = new GroupExplorer(generator, mem, new HashSet<>(), new HashSet<>(), new HashSet<>(), multithread);
             Generators.exploreGroup(g, (state, description) -> {
-                //if (description.endsWith("3-cycles") || description.endsWith("2-cycles")) System.out.println(description);
                 for (int i = 0; i < conj.length; i++) {
-                    boolean match = false;
-                    if (conj[i].contains(" ")) {
-                        match = description.equals(conj[i]);
-                    } else {
-                        if (conj[i].contains("+")) {
-                            match = description.contains(conj[i].replace("+", ""));
-                        } else {
-                            match = !description.contains(",") && description.endsWith(conj[i]);
-                        }
-                    }
+                    boolean match = conjMatches(conj[i], description);
                     if (match) {
                         String cycles = GroupExplorer.stateToNotation(state);
                         filesOut[i].println(cycles);
@@ -139,18 +139,6 @@ public class PlanarStudyRepeated {
         // Phase 1: Pair Filtering
         // --------------------------------------------------------
         System.out.println("Starting Phase 1: Pair Filtering");
-        // Read lines from the two designated files.
-        List<String> lines1 = new ArrayList<>();
-        File file1 = new File(root.getAbsolutePath() + "/" + conj[phase1Indices[0]] + ".txt");
-        try (Scanner scanner1 = new Scanner(file1)) {
-            while (scanner1.hasNextLine()) {
-                String l = scanner1.nextLine();
-                if (!l.trim().isEmpty()) {
-                    lines1.add(l);
-                }
-            }
-        }
-        Collections.shuffle(lines1, new Random(123));
 
         List<String> lines2 = new ArrayList<>();
         File file2 = new File(root.getAbsolutePath() + "/" + conj[phase1Indices[1]] + ".txt");
@@ -183,19 +171,55 @@ public class PlanarStudyRepeated {
         List<int[][][]> candidatePairs = new ArrayList<>();
         List<Graph<Integer, DefaultEdge>> pairGraphs = new ArrayList<>();
         HashSet<String> canonicalGraphs = new HashSet<>();
-        PrintStream phase1Out = new PrintStream(root.getAbsolutePath() + "/" + (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") + (requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") + conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt");
+        PrintStream phase1Out = new PrintStream(root.getAbsolutePath() + "/" + (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") + (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") + (requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") + conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt");
         int[] found = new int[repetitions + 1];
 
         int p1_1_count = 0;
-        int p1_2_count = 0;
 
-        // Nested loops over the two files with early termination support.
+        String allConjClasses = gap.getConjugacyClasses(generator);
+        int nPoints = 0;
+        for (int[][] x : GroupExplorer.parseOperations(generator)) {
+            for (int[] y : x) {
+                for (int z : y) {
+                    nPoints = Math.max(nPoints, z);
+                }
+            }
+        }
+
+        // Get an exemplary cycle from each matching conjugacy class
+        List<String> lines1 = new ArrayList<>();
+
+        
+        List<int[][]> conjClasses = GroupExplorer.parseOperations(allConjClasses);
+        for (int[][] x : conjClasses) {
+            String y = GroupExplorer.describeCycles(nPoints, x);
+
+            if (conjMatches(conj[0], y)) {
+                lines1.add(GroupExplorer.cyclesToNotation(x));
+                System.out.println("  Using phase 1 conjugacy class "+lines1.size()+": " + y);
+            }
+        }
+
+        // Nested loops over the two lists with early termination support.
         phase1Loop: for (String l1 : lines1) {
+            int p1_2_count = 0;
             p1_1_count++;
+            System.out.println("  Searching conjugacy class " + p1_1_count + " / " + lines1.size());
             int[][][] parsed1 = GroupExplorer.parseOperationsArr(l1);
+            GroupExplorer ge = new GroupExplorer(generator, mem, new HashSet<>(), new HashSet<>(), new HashSet<>(), true);
+            ge.applyOperation(parsed1[0], false);
+            int[] l1State = ge.copyCurrentState();
             int[][] firstCandidate = parsed1[0]; // use the first generator set from file1.
             for (String l2 : lines2) {
+                int[][][] parsed2 = GroupExplorer.parseOperationsArr(l2);
+                int[][] secondCandidate = parsed2[0]; // use the first generator set from file2.
+                ge.resetElements(false);
+                ge.applyOperation(parsed2[0], false);
+                int[] l2State = ge.copyCurrentState();
+
                 p1_2_count++;
+                // Check if
+                if (Arrays.equals(l1State, l2State)) continue;
                 // Check for a key press to allow early termination of Phase 1 filtering.
                 try {
                     if (System.in.available() > 0) {
@@ -205,18 +229,16 @@ public class PlanarStudyRepeated {
                         }
                         System.out.println("p1_1_count: " + p1_1_count + " / " + lines1.size());
                         System.out.println("p1_2_count: " + p1_2_count + " / " + lines2.size());
-                        break phase1Loop;
+                        continue phase1Loop;
                     }
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
-                int[][][] parsed2 = GroupExplorer.parseOperationsArr(l2);
-                int[][] secondCandidate = parsed2[0]; // use the first generator set from file2.
                 // Combine the two generators into a pair.
                 int[][][] combinedPair = new int[][][]{firstCandidate, secondCandidate};
                 
                 // Check for duplicate polygons (e.g. [1,2,3] vs [2,1,3]).
-                if (hasDuplicatePolygon(combinedPair)) {
+                if (hasDuplicatePolygon(combinedPair, MAX_DUPLICATE_POLYGONS)) {
                     continue;
                 }
                 
@@ -240,46 +262,32 @@ public class PlanarStudyRepeated {
 
                 Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, directed);
 
+                String canonicalLabeling = null;
+
+                // Check for isomorphic duplicates.
+                fi.tkk.ics.jbliss.Graph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(combinedPair, directed);
+                canonicalLabeling = getCanonicalGraph(jblissGraph);
+                if (canonicalGraphs.contains(canonicalLabeling)) {
+                    continue;
+                }
+
                 // Enforce all simple cycles have length multiple of N (if enabled)
                 if (!allEdgeCyclesAreMultiples(candGraph, enforceLoopMultiples)) {
                     continue;
                 }
-
-                boolean duplicate = false;
-                String canonicalLabeling = null;
-
-                // Check for isomorphic duplicates.
-                if (JBLISS) {
-                    fi.tkk.ics.jbliss.Graph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(combinedPair, directed);
-                    canonicalLabeling = getCanonicalGraph(jblissGraph);
-                    if (canonicalGraphs.contains(canonicalLabeling)) {
-                        duplicate = true;
-                        break;
-                    }
-                } else {
-                    for (Graph<Integer, DefaultEdge> g : pairGraphs) {
-                        VF2GraphIsomorphismInspector<Integer, DefaultEdge> inspector =
-                                new VF2GraphIsomorphismInspector<>(candGraph, g);
-                        if (inspector.isomorphismExists()) {
-                            duplicate = true;
-                            break;
-                        }
-                    }
-                }
-                if (duplicate)
-                    continue;
                 
-                if (Math.random() < 0.01) Collections.shuffle(pairGraphs);
+                //if (Math.random() < 0.01) Collections.shuffle(pairGraphs);
                 if (size == null) size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
-                System.out.println("Found new "+(!requirePlanar ? "non-" : "")+"planar graph " + found[0] + " with order " + size);
                 
                 candidatePairs.add(combinedPair);
                 pairGraphs.add(candGraph);
-                if (JBLISS) canonicalGraphs.add(canonicalLabeling);
+                canonicalGraphs.add(canonicalLabeling);
                 if (size.equals(String.valueOf(order))) {
                     phase1Out.println(GroupExplorer.generatorsToString(combinedPair));
                     found[0]++;
                 }
+
+                System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[0] + " results and " + candidatePairs.size() + " candidates");
             }
         }
         phase1Out.close();
@@ -296,7 +304,7 @@ public class PlanarStudyRepeated {
         
         List<int[][][]> currentCandidates = new ArrayList<>(candidatePairs);
         // For output naming, build a base file name.
-        String baseFileName =  (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +(requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") + conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase2Indices[0]];
+        String baseFileName =(MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") + (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +(requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") + conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase2Indices[0]];
         
         for (int r = 1; r <= repetitions; r++) {
             System.out.println("Starting Phase 2, round " + r + "");
@@ -308,6 +316,7 @@ public class PlanarStudyRepeated {
             // For each candidate from the previous round, combine with each line from file3.
             for (int i = 0; i < currentCandidates.size(); i++) {
                 int[][][] candidate = currentCandidates.get(i);
+
                 // Inner loop: iterate over individual lines from file3.
                 outerRoundLoop: for (String l : lines3) {
                     // Key press listener for early termination of the inner loop.
@@ -330,6 +339,8 @@ public class PlanarStudyRepeated {
                     }
                     // Parse the line from file2 and use its generator (index 0).
                     int[][][] parsedGen = GroupExplorer.parseOperationsArr(l);
+                    if (Arrays.deepEquals(candidate[0], parsedGen[0])) continue;
+                    if (Arrays.deepEquals(candidate[1], parsedGen[0])) continue;
                     int[][] newGenerator = parsedGen[0];
                     // Build the new candidate by appending newGenerator to the current candidate.
                     int currentLen = candidate.length;
@@ -339,7 +350,7 @@ public class PlanarStudyRepeated {
                     }
                     newCandidate[currentLen] = newGenerator;
                     // Check for duplicate polygons in the new candidate.
-                    if (hasDuplicatePolygon(newCandidate)) {
+                    if (hasDuplicatePolygon(newCandidate, MAX_DUPLICATE_POLYGONS)) {
                         continue;
                     }
                     // Check planarity if required.
@@ -348,32 +359,18 @@ public class PlanarStudyRepeated {
                     }
                     Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, directed);
 
+                    // Check for isomorphic duplicates.
+                    String canonicalLabeling = null;
+                    fi.tkk.ics.jbliss.Graph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(newCandidate, directed);
+                    canonicalLabeling = getCanonicalGraph(jblissGraph);
+                    if (canonicalGraphs.contains(canonicalLabeling)) {
+                        continue;
+                    }
+                    
                     // Enforce all simple cycles have length multiple of N (if enabled)
                     if (!allEdgeCyclesAreMultiples(candGraph, enforceLoopMultiples)) {
                         continue;
                     }
-
-                    // Check for isomorphic duplicates.
-                    boolean duplicate = false;
-                    String canonicalLabeling = null;
-                    if (JBLISS) {
-                        fi.tkk.ics.jbliss.Graph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(newCandidate, directed);
-                        canonicalLabeling = getCanonicalGraph(jblissGraph);
-                        if (canonicalGraphs.contains(canonicalLabeling)) {
-                            duplicate = true;
-                            break;
-                        }
-                    } else {
-                        for (Graph<Integer, DefaultEdge> g : newCandidateGraphs) {
-                            VF2GraphIsomorphismInspector<Integer, DefaultEdge> inspector =
-                                    new VF2GraphIsomorphismInspector<>(candGraph, g);
-                            if (inspector.isomorphismExists()) {
-                                duplicate = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (duplicate) continue;
 
                     // Check for genus 1 if required.
                     if (discardOverGenus1 && !(checkPlanarity(newCandidate) || checkGenus1(newCandidate))) {
@@ -381,18 +378,20 @@ public class PlanarStudyRepeated {
                     }
                     
                     String size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
-                    System.out.println("Found new "+(!requirePlanar ? "non-" : "")+"planar graph " + found[r] + " with order " + size);
                     
                     newCandidates.add(newCandidate);
                     newCandidateGraphs.add(candGraph);
-                    if (JBLISS) canonicalGraphs.add(canonicalLabeling);
+                    canonicalGraphs.add(canonicalLabeling);
                     if (size.equals(String.valueOf(order))) {
                         phase2RoundOut.println(GroupExplorer.generatorsToString(newCandidate));
                         found[r]++;
                     }
-                    roundCount++;
+                    roundCount++;   
+
+                    System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[r] + " results and " + newCandidates.size() + " candidates");
+
                 }
-                System.out.println("Completed inner loop for candidate " + i + " of " + currentCandidates.size());
+                System.out.println("  Completed inner loop for candidate " + i + " of " + currentCandidates.size());
             }
             phase2RoundOut.close();
             System.out.println("Round " + r + " completed. Unique new candidates: " + roundCount);
@@ -400,18 +399,36 @@ public class PlanarStudyRepeated {
         }
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + order + " found: " + Arrays.toString(found));
     }
+
+    private static boolean conjMatches(String conj, String description) {
+        boolean match = false;
+        if (conj.contains(" ")) {
+            match = description.equals(conj);
+        } else {
+            if (conj.contains("+")) {
+                match = description.contains(conj.replace("+", ""));
+            } else {
+                match = !description.contains(",") && description.endsWith(" " + conj);
+            }
+        }
+        return match;
+    }
     
     /**
      * Checks whether any duplicate polygon appears in the combined generator array.
      * Two polygons are considered duplicates if their canonical (sorted) representation is equal.
      */
-    private static boolean hasDuplicatePolygon(int[][][] combinedGen) {
+    private static boolean hasDuplicatePolygon(int[][][] combinedGen, int maxAllowed) {
+        int count = 0;
         Set<String> set = new HashSet<>();
         for (int[][] cycle : combinedGen) {
             for (int[] polygon : cycle) {
                 String canon = canonicalPolygon(polygon);
                 if (!set.add(canon)) {
-                    return true;
+                    count++;
+                    if (count > maxAllowed) {
+                        return true;
+                    }
                 }
             }
         }
@@ -491,7 +508,7 @@ public class PlanarStudyRepeated {
     public static fi.tkk.ics.jbliss.Graph<Integer> buildJblissGraphFromCombinedGen(int[][][] combinedGen, boolean directed) {
         fi.tkk.ics.jbliss.Graph<Integer> graph = new fi.tkk.ics.jbliss.Graph<Integer>();
         HashSet<Integer> vertices = new HashSet<>();
-        HashSet<Long> edges = new HashSet<>();
+        //HashSet<Long> edges = new HashSet<>();
         for (int[][] cycle : combinedGen) {
             for (int[] polygon : cycle) {
                 for (int vertex : polygon) {
@@ -502,14 +519,14 @@ public class PlanarStudyRepeated {
                 }
                 for (int i = 0; i < polygon.length; i++) {
                     int v1 = polygon[i], v2 = polygon[(i + 1) % polygon.length];
-                    long edgeCache = ((long) v1 << 31) | v2;
-                    if (!edges.contains(edgeCache)) {
-                        edges.add(edgeCache);
+                    //long edgeCache = ((long) v1 << 31) | v2;
+                    //if (!edges.contains(edgeCache)) {
+                       // edges.add(edgeCache);
                         graph.add_edge(v1, v2);
                         if (!directed || polygon.length == 2) {
                             graph.add_edge(v2, v1);
                         }
-                    }
+                    //}
                 }
             }
         }
