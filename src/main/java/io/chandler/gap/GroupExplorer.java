@@ -353,6 +353,15 @@ public class GroupExplorer implements AbstractGroupProperties {
 
     int lastSize = 0;
     int iteration = 0;
+    int maxPeekSize = -1;
+
+    /**
+     * WARNING cannot be combined with multithreaded exploration
+     * @param maxPeekSize
+     */
+    public void setMaxPeekSize(int maxPeekSize) {
+        this.maxPeekSize = maxPeekSize;
+    }
 
     public int getIteration() {
         return iteration;
@@ -464,6 +473,11 @@ public class GroupExplorer implements AbstractGroupProperties {
                                 }
                             } else {
                                 peekArrList.add(newState);
+                                if (maxPeekSize > 0 && peekArrList.size() >= maxPeekSize) {
+                                    // Process callback and clear
+                                    peekStateAndDepth.accept(peekArrList, iteration);
+                                    peekArrList.clear();
+                                }
                             }
                         }
                     }
