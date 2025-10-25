@@ -37,7 +37,7 @@ import io.chandler.gap.graph.genus.MultiGenus;
 // PlanarStudy has a problem
 // In a deep cut puzzle you can select the same line twice and still have a proper conscruction
 // But the duplicate polygon check blocks it
-public class PlanarStudyRepeated {
+public class PlanarStudy {
     static {
         System.loadLibrary("jbliss");
     }
@@ -90,7 +90,7 @@ public class PlanarStudyRepeated {
         System.out.println("Directed: " + directed);
         System.out.println("Generate: " + generate);
 
-        File root = new File("PlanarStudyMulti/" + groupName);
+        File root = new File("PlanarStudy/" + groupName);
         root.mkdirs();
 
         // --------------------------------------------------------
