@@ -70,8 +70,9 @@ public class GraphVisualizer extends Application {
 
     private Pane graphPane;
 
-    // Add new instance variables for layout configuration:
     private TextField seedTextField, itersTextField, thetaTextField, normTextField, triesTextField, initialItersTextField, repulsionFactorTextField, wTextField, hTextField, solutionTextField;
+    // editable paginator index field (k in k / n)
+    private TextField pageIndexTextField;
     private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel, repulsionFactorLabel, wLabel, hLabel, solutionLabel;
     private Button solutionPrevButton, solutionNextButton;
     private ComboBox<String> layoutChoiceBox;
@@ -82,14 +83,10 @@ public class GraphVisualizer extends Application {
     private CheckBox showCirclesCheckBox;
     private CheckBox showFittedNodesCheckBox;
     private CheckBox allSolutionsCheckBox;
-    // Remove the slider and add a trackball control for full 3D rotation.
-    private Pane trackballPane;
-    // Rotation angles (in radians) around X and Y axes.
-    private double rotationX = 0;
-    private double rotationY = 0;
-    // For tracking mouse movement in the trackball.
-    private double lastMouseX = 0;
-    private double lastMouseY = 0;
+    // Trackball rotation state (accumulated 3x3 rotation matrix) and last sphere vector
+    private double[][] trackballRotation = new double[][] { {1,0,0}, {0,1,0}, {0,0,1} };
+    private Double lastMouseX = null;
+    private Double lastMouseY = null;
     
     // Scale parameter for zooming
     private double scale = 1.0;
@@ -98,14 +95,11 @@ public class GraphVisualizer extends Application {
     private String cachedGraphKey = null;
     private Map<Integer, double[]> cachedBasePositions = new HashMap<>();
 
-    // Add a new checkbox for showing direction
     private CheckBox showDirectionCheckBox;
 
-    // Add new instance variables for interactive arrow updates:
     private List<DirectedArrow> directedArrows = new ArrayList<>();
     private Map<Integer, Circle> currentVertexCircleMap = new HashMap<>();
 
-    // New: Suppress render control
     private CheckBox suppressRenderCheckBox;
     private boolean suppressRender = false;
     private boolean renderQueued = false;
@@ -179,7 +173,10 @@ public class GraphVisualizer extends Application {
         // Create paginator controls.
         Button prevButton = new Button("Previous");
         Button nextButton = new Button("Next");
-        Label pageLabel = new Label("Graph 1 / " + graphLines.size());
+        // Editable index field followed by total count label: "k / n"
+        pageIndexTextField = new TextField(String.valueOf(currentGraphIndex + 1));
+        pageIndexTextField.setPrefWidth(60);
+        Label pageLabel = new Label(" / " + graphLines.size());
 
         // Create layout configuration controls.
         seedTextField = new TextField("0");
@@ -212,20 +209,34 @@ public class GraphVisualizer extends Application {
         fitLabel = new Label("");
 
         // Create a trackball control for full 3D rotation.
-        trackballPane = new Pane();
-        trackballPane.setPrefSize(50, 50);
-        trackballPane.setStyle("-fx-background-color: lightgray; -fx-border-color: black;");
-        trackballPane.setOnMousePressed(e -> {
-            lastMouseX = e.getSceneX();
-            lastMouseY = e.getSceneY();
+        graphPane.setOnMousePressed(e -> {
+            if (!e.isSecondaryButtonDown()) {
+                lastMouseX = null;
+                lastMouseY = null;
+                return;
+            } else {
+                lastMouseX = e.getSceneX();
+                lastMouseY = e.getSceneY();
+                e.consume();
+            }
         });
-        trackballPane.setOnMouseDragged(e -> {
+        graphPane.setOnMouseDragged(e -> {
+            if (lastMouseX == null || lastMouseY == null) {
+                return;
+            }
             double deltaX = e.getSceneX() - lastMouseX;
             double deltaY = e.getSceneY() - lastMouseY;
-            rotationY += deltaX * 0.01;
-            rotationX += deltaY * 0.01;
             lastMouseX = e.getSceneX();
             lastMouseY = e.getSceneY();
+            deltaX = -deltaX;
+
+            // Apply yaw (around Y) for horizontal drag, and pitch (around X) for vertical drag
+            double sensitivity = 0.01; // radians per pixel
+            double[][] Ry = rotationFromAxisAngle(0, 1, 0, deltaX * sensitivity);
+            double[][] Rx = rotationFromAxisAngle(1, 0, 0, deltaY * sensitivity);
+            // New rotation applied in world axes order: first yaw then pitch
+            trackballRotation = multiply3(Rx, multiply3(Ry, trackballRotation));
+
             updateGraph(graphPane, pageLabel);
         });
                 
@@ -275,6 +286,9 @@ public class GraphVisualizer extends Application {
             if (selectedFile != null) {
                 graphLines = readGraphLinesFromFile(selectedFile.getAbsolutePath());
                 currentGraphIndex = 0;
+                // Update total label and index field
+                pageLabel.setText(" / " + graphLines.size());
+                pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
                 updateGraph(graphPane, pageLabel);
                 updateGraphInfo(graphLines.get(currentGraphIndex));
             }
@@ -314,7 +328,7 @@ public class GraphVisualizer extends Application {
         });
 
         // Create a top-bar HBox for the remaining controls.
-        HBox topControls = new HBox(10, randomizeButton, loadButton, trackballPane);
+        HBox topControls = new HBox(10, randomizeButton, loadButton);
         topControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
         root.setTop(topControls);
 
@@ -346,7 +360,7 @@ public class GraphVisualizer extends Application {
         root.setRight(sidebar);
 
         // Create the paginator controls.
-        HBox paginator = new HBox(10, prevButton, pageLabel, nextButton);
+        HBox paginator = new HBox(10, prevButton, pageIndexTextField, pageLabel, nextButton);
         paginator.setStyle("-fx-padding: 10; -fx-alignment: center;");
         
         // Add the "Remove Duplicates" button
@@ -384,7 +398,6 @@ public class GraphVisualizer extends Application {
             }
         });
 
-        // Add the "Filter Share Lines..." button.
         Button filterShareButton = new Button("Filter Share Lines...");
         filterShareButton.setOnAction(e -> {
             TextInputDialog dialog = new TextInputDialog("");
@@ -440,6 +453,21 @@ public class GraphVisualizer extends Application {
                 currentGraphIndex++;
                 updateGraph(graphPane, pageLabel);
                 updateGraphInfo(graphLines.get(currentGraphIndex));
+            }
+        });
+
+        // Allow typing an index (1-based) into the text field to jump directly
+        pageIndexTextField.setOnKeyReleased(e -> {
+            try {
+                int idx = Integer.parseInt(pageIndexTextField.getText().trim());
+                if (idx < 1) idx = 1;
+                if (idx > graphLines.size()) idx = graphLines.size();
+                currentGraphIndex = idx - 1;
+                updateGraph(graphPane, pageLabel);
+                updateGraphInfo(graphLines.get(currentGraphIndex));
+            } catch (NumberFormatException ex) {
+                // Reset to current on invalid input
+                //pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
             }
         });
         // Render the first graph.
@@ -789,23 +817,18 @@ public class GraphVisualizer extends Application {
             positions.put(entry.getKey(), copy);
         }
 
-        // If positions are 3D, apply the trackball rotation (using rotationX and rotationY) then re-center.
+        // If positions are 3D, apply the trackball rotation matrix then re-center.
         if (!positions.isEmpty()) {
             int dim = positions.values().iterator().next().length;
             if (dim == 3) {
-                double angleX = rotationX; // rotation about horizontal axis
-                double angleY = rotationY; // rotation about vertical axis
                 for (Map.Entry<Integer, double[]> entry : positions.entrySet()) {
                     double[] pos = entry.getValue();
                     double x = pos[0], y = pos[1], z = pos[2];
-                    // First, rotate around the x-axis:
-                    double y1 = Math.cos(angleX) * y - Math.sin(angleX) * z;
-                    double z1 = Math.sin(angleX) * y + Math.cos(angleX) * z;
-                    // Next, rotate around the y-axis:
-                    double rotatedX = Math.cos(angleY) * x + Math.sin(angleY) * z1;
-                    double rotatedY = y1;
-                    pos[0] = rotatedX;
-                    pos[1] = rotatedY;
+                    double rx = trackballRotation[0][0]*x + trackballRotation[0][1]*y + trackballRotation[0][2]*z;
+                    double ry = trackballRotation[1][0]*x + trackballRotation[1][1]*y + trackballRotation[1][2]*z;
+                    // double rz = trackballRotation[2][0]*x + trackballRotation[2][1]*y + trackballRotation[2][2]*z; // not used for 2D projection
+                    pos[0] = rx;
+                    pos[1] = ry;
                 }
 
                 // Compute the average x and y to center the graph.
@@ -832,7 +855,13 @@ public class GraphVisualizer extends Application {
             graphPane.getChildren().clear();
             // Reset directed arrows so they can be re-created
             directedArrows = new ArrayList<>();
-            pageLabel.setText("Graph " + (currentGraphIndex + 1) + " / " + graphLines.size());
+            // Update paginator display (keep text field and total in sync)
+            String graphIdxString = String.valueOf(currentGraphIndex + 1);
+            String curString = pageIndexTextField.getText();
+            if (!curString.equals(graphIdxString)) {
+                pageIndexTextField.setText(graphIdxString);
+            }
+            pageLabel.setText(" / " + graphLines.size());
             drawPlanarGraph(currentGraph, graphPane, currentLine, positions);
         }
     }
@@ -1066,6 +1095,31 @@ public class GraphVisualizer extends Application {
                 arrow.update(srcPos, tgtPos);
             }
         }
+    }
+
+    private double[][] rotationFromAxisAngle(double ax, double ay, double az, double angle) {
+        double c = Math.cos(angle);
+        double s = Math.sin(angle);
+        double t = 1.0 - c;
+        double[][] R = new double[3][3];
+        R[0][0] = t*ax*ax + c;     R[0][1] = t*ax*ay - s*az; R[0][2] = t*ax*az + s*ay;
+        R[1][0] = t*ay*ax + s*az;  R[1][1] = t*ay*ay + c;    R[1][2] = t*ay*az - s*ax;
+        R[2][0] = t*az*ax - s*ay;  R[2][1] = t*az*ay + s*ax; R[2][2] = t*az*az + c;
+        return R;
+    }
+
+    private double[][] multiply3(double[][] A, double[][] B) {
+        double[][] C = new double[3][3];
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                C[i][j] = A[i][0]*B[0][j] + A[i][1]*B[1][j] + A[i][2]*B[2][j];
+            }
+        }
+        return C;
+    }
+
+    private double clamp(double v, double lo, double hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 
     private static class DirectedArrow {
