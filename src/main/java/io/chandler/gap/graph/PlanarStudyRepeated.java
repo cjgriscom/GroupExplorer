@@ -54,28 +54,28 @@ public class PlanarStudyRepeated {
         boolean allowSubgroups = true;
         boolean requirePlanar = true;
         boolean discardOverGenus1 = true;
-        int enforceLoopMultiples = 3;
+        int enforceLoopMultiples = 1;
         // In this experiment we want to generate files and then filter in two stages.
         boolean generate = true;
-        int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
+        int repetitions = 4; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
         boolean directed = true;
 
-        int order = -1;
+        long order = -1;
         MemorySettings mem = MemorySettings.COMPACT;
 
         // We use two cycle descriptions for the candidate pairs.
 
         // Either use a complete description like "6p 3-cycles" or a partial description like "5-cycles" for 5-cycles only
         String[] conj = new String[] {
-            "3-cycles",  "2-cycles"
+            "3-cycles",  "3-cycles"
         };
         // For phase 1, we use two different files (indices 0 and 1).
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.m22_2;
-        String groupName = "m22_2";
+        String generator = Generators.m12;
+        String groupName = "m12";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -101,8 +101,9 @@ public class PlanarStudyRepeated {
                       !groupName.startsWith("o8p2") &&
                       !groupName.startsWith("o8m2") &&
                       !groupName.startsWith("hs") &&
-                      !generator.equals(Generators.m24) &&
-                      !generator.equals(Generators.mcl)) {
+                      !groupName.startsWith("mcl") &&
+                      !groupName.startsWith("co3") &&
+                      !generator.equals(Generators.m24)) {
             boolean multithread = true;
             PrintStream[] filesOut = new PrintStream[conj.length];
             for (int i = 0; i < conj.length; i++) {
@@ -132,8 +133,9 @@ public class PlanarStudyRepeated {
             GapInterface gap = new GapInterface();
             String orderS = gap.runGapSizeCommand(generator, 2).get(1).trim();
             System.out.println("Order: " + orderS);
-            order = Integer.parseInt(orderS);
+            order = Long.parseLong(orderS);
         }
+
 
         // --------------------------------------------------------
         // Phase 1: Pair Filtering
