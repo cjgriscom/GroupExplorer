@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 
 import org.jgrapht.Graph;
 import org.jgrapht.Graphs;
@@ -18,14 +19,14 @@ import io.chandler.gap.GroupExplorer;
 
 public class GridSolver {
 	final int MAX_SOLUTIONS = 10000;
-	final long TIMEOUT_MS = 30000L; // 30 seconds
+	private final long timeoutMs; // per-solve timeout in milliseconds
 
 	boolean DONT_VALIDATE = true;
 	boolean DELETE_FILES = true;
 
 	private final Graph<Integer, DefaultEdge> graph;
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws TimeoutException {
 		// 'snake' / straight line test
 		String genSnake = "[(1,2)(3,4)(5,6)(7,8),(2,3)(4,5)(6,7)]";
 
@@ -35,7 +36,7 @@ public class GridSolver {
 		// o2m2_2 - really struggles but works at 10x13
 		String gen_o2m2_2 = "[(1,68)(2,58)(3,55)(4,51)(5,106)(7,96)(8,30)(9,98)(10,95)(11,42)(12,15)(13,88)(14,45)(16,107)(18,77)(19,47)(20,108)(21,44)(22,118)(23,71)(24,114)(26,53)(27,56)(28,104)(29,111)(31,32)(33,62)(34,69)(35,60)(36,78)(37,93)(38,63)(39,113)(40,112)(41,76)(43,94)(46,80)(48,90)(49,115)(50,64)(52,83)(54,66)(57,89)(59,102)(61,92)(67,110)(70,86)(72,117)(73,103)(74,119)(75,82)(79,100)(81,99)(85,97)(87,91)(101,109),(1,77)(3,18)(4,74)(6,102)(8,62)(10,110)(14,30)(15,66)(17,72)(24,73)(26,101)(28,42)(31,48)(33,43)(34,50)(35,111)(36,70)(40,92)(45,94)(55,57)(58,98)(59,65)(63,82)(68,89)(76,107)(80,118)(81,85)(84,117),(1,8)(2,44)(3,50)(4,68)(5,97)(6,92)(7,16)(9,13)(11,21)(12,69)(14,26)(15,76)(17,58)(18,34)(19,78)(20,27)(22,115)(23,96)(24,65)(25,87)(28,118)(30,101)(31,117)(32,108)(33,81)(36,82)(37,53)(38,60)(40,102)(41,56)(42,80)(43,85)(46,79)(47,104)(48,84)(52,113)(54,114)(59,73)(62,77)(63,70)(64,95)(66,107)(67,103)(71,105)(72,98)(74,89)(83,109)(86,106)(88,99)(90,91)(100,116)(112,119)]";
 
-		// J2_2 - a known 12x10 solution
+		// J2_2 - a known 12x9 solution
 		String genJ = "[(1,99)(2,86)(3,17)(5,23)(6,94)(8,47)(9,58)(10,45)(11,97)(13,18)(14,37)(15,81)(19,26)(21,62)(22,89)(25,69)(27,100)(28,49)(29,92)(30,75)(31,74)(33,84)(34,82)(35,71)(36,90)(39,54)(41,66)(42,67)(43,83)(44,91)(46,57)(48,53)(50,95)(51,77)(55,93)(56,76)(59,61)(63,65)(68,98)(70,79)(72,73)(78,85)(87,88),(1,90)(2,70)(3,73)(4,9)(5,7)(6,87)(8,96)(10,24)(11,42)(12,33)(13,100)(14,38)(15,27)(16,61)(17,95)(18,39)(19,29)(20,77)(21,71)(22,86)(23,43)(25,98)(26,47)(28,45)(30,84)(31,40)(32,69)(34,58)(35,88)(36,55)(37,72)(41,54)(44,82)(46,80)(48,76)(49,93)(50,68)(51,56)(52,66)(53,92)(57,99)(59,81)(60,64)(62,79)(63,83)(65,91)(67,74)(75,78)(85,97)(89,94),(1,92)(2,82)(3,33)(4,22)(6,52)(8,96)(9,86)(10,81)(12,73)(13,28)(14,38)(15,27)(17,95)(18,55)(19,80)(20,97)(21,75)(23,64)(24,59)(25,79)(29,46)(30,68)(31,74)(32,65)(34,58)(35,51)(36,39)(40,67)(41,76)(43,60)(44,70)(45,100)(48,54)(49,93)(50,84)(53,90)(56,88)(57,99)(62,98)(66,87)(69,91)(71,78)(77,85)]";
 		
 		String gen = gen_o2m2_2;
@@ -71,13 +72,19 @@ public class GridSolver {
 
 	public GridSolver(Graph<Integer, DefaultEdge> graph) {
 		this.graph = graph;
+		this.timeoutMs = 30000L; // default 30s
+	}
+
+	public GridSolver(Graph<Integer, DefaultEdge> graph, long timeoutMs) {
+		this.graph = graph;
+		this.timeoutMs = timeoutMs;
 	}
 
 	/**
 	 * Finds all possible grid embeddings of the graph.
 	 * @return List of all valid grid coordinate mappings
 	 */
-	public java.util.List<Map<Integer, int[]>> solveAll(int w, int h, int[] fixedPair, boolean allSolutions) {
+	public java.util.List<Map<Integer, int[]>> solveAll(int w, int h, int[] fixedPair, boolean allSolutions) throws TimeoutException {
 		// Try VF3L to get all solutions
 		if (graph.vertexSet().size() >= 1) {
 			Graph<Integer, DefaultEdge> pattern = toUndirected(graph);
@@ -102,7 +109,7 @@ public class GridSolver {
 		return java.util.Collections.emptyList();
 	}
 
-	public static java.util.List<Map<Integer, int[]>> solveAll(int w, int h, int[] fixedPair, boolean allSolutions, Graph<Integer, DefaultEdge> graph) {
+	public static java.util.List<Map<Integer, int[]>> solveAll(int w, int h, int[] fixedPair, boolean allSolutions, Graph<Integer, DefaultEdge> graph) throws TimeoutException {
 		return new GridSolver(graph).solveAll(w,h, fixedPair, allSolutions);
 	}
 
@@ -196,7 +203,7 @@ public class GridSolver {
 		return sb.toString();
 	}
 
-	private java.util.List<Map<Integer, int[]>> tryVF3PAllSolutions(Graph<Integer, DefaultEdge> pattern, int w, int h, int[] fixedPair, boolean allSolutions) {
+	private java.util.List<Map<Integer, int[]>> tryVF3PAllSolutions(Graph<Integer, DefaultEdge> pattern, int w, int h, int[] fixedPair, boolean allSolutions) throws TimeoutException {
 		
 
 		java.util.List<Map<Integer, int[]>> solutions = new java.util.ArrayList<>();
@@ -232,6 +239,18 @@ public class GridSolver {
 			pb.redirectErrorStream(true);
 			Process process = pb.start();
 			long startTime = System.currentTimeMillis();
+			final java.util.concurrent.atomic.AtomicBoolean timedOut = new java.util.concurrent.atomic.AtomicBoolean(false);
+			final java.util.Timer killTimer = new java.util.Timer(true);
+			killTimer.schedule(new java.util.TimerTask() {
+				@Override
+				public void run() {
+					if (process.isAlive()) {
+						System.out.println("VF3L hard timeout reached (" + (timeoutMs/1000) + "s), killing process...");
+						timedOut.set(true);
+						try { process.destroyForcibly(); } catch (Exception ignore) {}
+					}
+				}
+			}, timeoutMs);
 
 			if (DELETE_FILES) {
 			patternFile.deleteOnExit();
@@ -244,9 +263,9 @@ public class GridSolver {
 				String line;
 				while ((line = reader.readLine()) != null) {
 					// Check timeout
-					if (System.currentTimeMillis() - startTime > TIMEOUT_MS) {
-						System.out.println("VF3L timeout reached (" + (TIMEOUT_MS/1000) + "s), stopping...");
-						process.destroy();
+					if (System.currentTimeMillis() - startTime > timeoutMs) {
+						System.out.println("VF3L timeout reached (" + (timeoutMs/1000) + "s), stopping...");
+						try { process.destroyForcibly(); } catch (Exception ignore) {}
 						break;
 					}
 					
@@ -280,6 +299,8 @@ public class GridSolver {
 				}
 			} catch (InterruptedException e) {
 				process.destroyForcibly();
+			} finally {
+				try { killTimer.cancel(); } catch (Exception ignore) {}
 			}
 
 			if (DELETE_FILES) {
@@ -288,6 +309,12 @@ public class GridSolver {
 			}
 
 			System.out.println("VF3L found total of " + solutions.size() + " valid solutions!");
+
+			if (timedOut.get()) {
+				throw new TimeoutException();
+			}
+		} catch (TimeoutException e) {
+			throw e;
 		} catch (Exception e) {
 			System.err.println("VF3L error: " + e.getMessage());
 			e.printStackTrace();
