@@ -56,22 +56,14 @@ public class GFGroupExplorer implements AbstractGroupProperties {
 
     public static void main(String[] args) throws Exception {
         runGenerator(Generators.l2_8_gf28, Generators.l2_8, "test_l2_8", 504);
-        //runGenerator(Generators.o8m2_gf28, Generators.o8m2, "o8m2", 197406720L);
-        //runGenerator(Generators.o8m2_2_gf28, Generators.o8m2_2, "o8m2_2", 197406720L*2);
-        runGenerator(Generators.o8p2_gf28, Generators.o8p2, "o8p2", 174182400L);
-        runGenerator(Generators.o8p2_gf28, Generators.o8p2_135, "o8p2_135", 174182400L);
-
-
-        int[] a = {2,1,5,7,3,10,4,13,15,6,18,20,8,23,9,26,28,11,31,12,33,35,14,38,39,16,42,17,45,46,19,49,21,41,22,54,37,24,25,57,34,27,61,62,29,30,65,66,32,50,67,69,70,36,73,75,40,78,80,82,43,44,85,86,47,48,51,89,52,53,92,94,55,97,56,99,101,58,103,59,104,60,106,107,63,64,87,110,68,108,105,71,112,72,115,96,74,117,76,119,77,116,79,81,91,83,84,90,113,88,111,93,109,126,95,102,98,121,100,124,118,130,127,120,131,114,123,133,129,122,125,134,128,132,135};
-        int[] b = {3,4,6,8,9,11,12,14,16,17,19,21,22,24,25,27,29,30,1,32,34,36,37,2,40,41,43,44,38,47,48,50,51,52,53,55,56,46,39,58,59,60,5,63,64,10,61,20,26,31,68,7,71,72,74,76,77,79,81,57,83,84,75,87,65,66,88,90,91,33,93,95,96,13,98,100,102,78,15,92,49,105,18,108,69,109,106,80,85,70,104,111,113,114,107,116,112,28,118,23,120,42,121,89,122,123,119,97,124,125,67,62,35,127,101,128,129,82,54,103,115,99,45,126,132,131,133,130,110,73,86,117,135,134,94};
-
-        String aNot = GroupExplorer.stateToNotation(a);
-        String bNot = GroupExplorer.stateToNotation(b);
-        System.out.println("[" + aNot + "," + bNot + "]");
+        //runGenerator(Generators.o8m2_gf28, Generators.o8m2, "o8m2", 197406720);
+        //runGenerator(Generators.o8m2_2_gf28, Generators.o8m2_2, "o8m2_2", 197406720*2);
+        //runGenerator(Generators.o8p2_gf28, Generators.o8p2, "o8p2", 174182400);
+        //runGenerator(Generators.o8p2_2_gf28, Generators.o8p2_2, "o8p2_2", 174182400*2);
     }
 
-	public static void runGenerator(GFGenerator generator, String permGen, String groupName, long orderEst) throws Exception {
-		GFGroupExplorer explorer = new GFGroupExplorer(generator);
+	public static void runGenerator(GFGenerator generator, String permGen, String groupName, int orderEst) throws Exception {
+		GFGroupExplorer explorer = new GFGroupExplorer(generator, orderEst+1);
 
 		File root = new File("PlanarStudyMulti/" + groupName);
 		root.mkdirs();
@@ -188,7 +180,7 @@ public class GFGroupExplorer implements AbstractGroupProperties {
 
 	}
 
-    public GFGroupExplorer(GFGenerator generator) {
+    public GFGroupExplorer(GFGenerator generator, Integer initialCacheSize) {
         if (generator == null) {
             throw new IllegalArgumentException("GFGenerator must not be null");
         }
@@ -204,7 +196,11 @@ public class GFGroupExplorer implements AbstractGroupProperties {
         this.identity = GF2_8x8_Cache.identity();
         this.encodedGeneratorZero = GF2_8x8_Cache.encode(generatorZero);
         this.encodedGeneratorOne  = GF2_8x8_Cache.encode(generatorOne);
-        this.visited = Collections.synchronizedSet(new ObjectOpenHashSet<>());
+        if (initialCacheSize != null) {
+            this.visited = Collections.synchronizedSet(new ObjectOpenHashSet<>(initialCacheSize));
+        } else {
+            this.visited = Collections.synchronizedSet(new ObjectOpenHashSet<>());
+        }
 
         enqueue(identity, null, null, null);
     }
