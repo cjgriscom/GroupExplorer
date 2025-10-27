@@ -122,7 +122,7 @@ public class GridRipper {
 			int[][][] genOps = GroupExplorer.parseOperationsArr(generatorString);
 			
 			// Build the graph from the generators
-			Graph<Integer, DefaultEdge> graph = PlanarStudyRepeated.buildGraphFromCombinedGen(genOps, false);
+			Graph<Integer, DefaultEdge> graph = PlanarStudy.buildGraphFromCombinedGen(genOps, false);
 			
 			// Create a GridSolver with custom timeout
 			GridSolver solver = new GridSolver(graph, timeoutMS);

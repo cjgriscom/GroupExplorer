@@ -12,7 +12,7 @@ import org.jgrapht.graph.DefaultEdge;
 import io.chandler.gap.GapInterface;
 import io.chandler.gap.GroupExplorer;
 import io.chandler.gap.Permu;
-import io.chandler.gap.graph.PlanarStudyRepeated;
+import io.chandler.gap.graph.PlanarStudy;
 
 public class M11GraphFilter {
 
@@ -84,7 +84,7 @@ public class M11GraphFilter {
 							if (found.contains(combined1)) return;
 							found.add(combined1);
 							 // Check for isomorphic duplicates.
-							 Graph<Integer, DefaultEdge> candGraph = PlanarStudyRepeated.buildGraphFromCombinedGen(combined1, false);
+							 Graph<Integer, DefaultEdge> candGraph = PlanarStudy.buildGraphFromCombinedGen(combined1, false);
 							 for (Graph<Integer, DefaultEdge> g : pairGraphs) {
 								 VF2GraphIsomorphismInspector<Integer, DefaultEdge> inspector =
 										 new VF2GraphIsomorphismInspector<>(candGraph, g);

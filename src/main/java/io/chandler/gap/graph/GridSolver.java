@@ -45,7 +45,7 @@ public class GridSolver {
 
 		///////////////////////////////////////////////////////
 		int[][][] genOps = GroupExplorer.parseOperationsArr(gen);
-		Graph<Integer, DefaultEdge> graph = PlanarStudyRepeated.buildGraphFromCombinedGen(genOps, false);
+		Graph<Integer, DefaultEdge> graph = PlanarStudy.buildGraphFromCombinedGen(genOps, false);
 		GridSolver solver = new GridSolver(graph);
 		
 		List<Map<Integer, int[]>> coords;

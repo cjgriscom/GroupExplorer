@@ -132,7 +132,7 @@ public class GraphVisualizer extends Application {
             launch(args);
         } else {
             //launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudyMulti/eliac/dual 4-cycles-triple 2-cycles-filtered.txt" });
-            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudyMulti/u4_2_2/l2-2-cycles-2-cycles-2-cycles_R2-filtered.txt" });
+            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudy/u4_2_2/l2-2-cycles-2-cycles-2-cycles_R2-filtered.txt" });
         }
     }
 
