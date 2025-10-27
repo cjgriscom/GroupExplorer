@@ -33,13 +33,9 @@ import io.chandler.gap.GroupExplorer;
 import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.graph.genus.MultiGenus;
 
-
-// PlanarStudy has a problem
-// In a deep cut puzzle you can select the same line twice and still have a proper conscruction
-// But the duplicate polygon check blocks it
 public class PlanarStudy {
     static {
-        System.loadLibrary("jbliss");
+        loadJBliss();
     }
 
     public static void main(String[] args) throws IOException {
@@ -50,18 +46,16 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS = 0;
-        boolean allowSubgroups = true;
-        boolean requirePlanar = true;
-        boolean discardOverGenus1 = true;
-        int enforceLoopMultiples = 1;
-        // In this experiment we want to generate files and then filter in two stages.
-        boolean generate = true;
+        int MAX_DUPLICATE_POLYGONS = 0; // Useful for allowing overlapping 2-cycles
+        boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
+        boolean requirePlanar = true; // Require the graphs to be planar / polyhedral
+        boolean discardOverGenus1 = true; // If not requiring planar, this will discard graphs with genus > 1
+        int enforceLoopMultiples = 1; // For planar grid stuff, set to 1 for normal operation
+        boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 4; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
-        boolean directed = true;
+        boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
 
-        long order = -1;
         MemorySettings mem = MemorySettings.COMPACT;
 
         // We use two cycle descriptions for the candidate pairs.
@@ -74,8 +68,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.m12;
-        String groupName = "m12";
+        String generator = Generators.m11_12pt;
+        String groupName = "m11_12pt";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -92,6 +86,8 @@ public class PlanarStudy {
 
         File root = new File("PlanarStudy/" + groupName);
         root.mkdirs();
+
+        long order = -1;
 
         // --------------------------------------------------------
         // Generation branch: generate input files if needed.
@@ -400,6 +396,23 @@ public class PlanarStudy {
             currentCandidates = newCandidates;
         }
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + order + " found: " + Arrays.toString(found));
+    }
+
+    private static void loadJBliss() {
+        // Check if we're on linux amd64
+
+        if (System.getProperty("os.name").toLowerCase().contains("linux") && System.getProperty("os.arch").toLowerCase().contains("amd64")) {
+            File jbliss = new File("lib/libjbliss.so");
+            if (!jbliss.exists()) {
+                System.out.println("JBliss library not found.");
+                System.exit(1);
+            }
+            System.load(jbliss.getAbsolutePath());
+        } else {
+            System.out.println("JBliss library not found. Only Linux amd64 is pre-compiled.");
+            System.exit(1);
+        }
+        
     }
 
     private static boolean conjMatches(String conj, String description) {
