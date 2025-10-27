@@ -13,8 +13,11 @@ This is a long list of generators for various groups.
 
 This is a tool that lists out all possible canonical generator pairs (or triples, etc) for a given group.  There are many options for filtering the results.
 
-JBliss is a graph canonization library required for PlanarStudy.  I've only compiled it for Linux but it should be possible to compile it for other platforms using the source here:
+Note: this only works for small-ish groups, and other manual methods are required for larger ones.
 
+GAP must be on the PATH to use PlanarStudy.
+
+JBliss is a graph canonization library required for PlanarStudy.  I've only compiled it for Linux but it should be possible to compile it for other platforms using the source here:
 http://www.tcs.hut.fi/Software/bliss/jbliss-0.50beta2.zip
 
 ### GraphVisualizer.java
