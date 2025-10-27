@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -62,7 +63,7 @@ public class GraphVisualizer extends Application {
     private static final double NODE_RADIUS = 20;
 
     private String filePath;
-    private List<String> graphLines;
+    private List<String> graphLines = Collections.emptyList();
     private int currentGraphIndex = 0;
     // Add a map to store edge frequencies; keys are in the form "min-max".
     private Map<String, Integer> edgeFrequencyMap;
@@ -131,20 +132,21 @@ public class GraphVisualizer extends Application {
         if (args.length > 0) {
             launch(args);
         } else {
-            //launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudyMulti/eliac/dual 4-cycles-triple 2-cycles-filtered.txt" });
-            launch(new String[] { "/home/cjgriscom/Programming/GroupExplorer/PlanarStudy/u4_2_2/l2-2-cycles-2-cycles-2-cycles_R2-filtered.txt" });
+            String previewFile = "PlanarStudy/u4_2_2/l2-2-cycles-2-cycles-2-cycles_R2-filtered.txt";
+            if (new File(previewFile).exists()) {
+                launch(new String[] { previewFile });
+            } else {
+                launch(new String[]{});
+            }            
         }
     }
 
     @Override
     public void start(Stage primaryStage) {
-		System.out.println(bFoldsA(new int[] {17,18,19,20}, new int[] {19,18,17}));
-        filePath = getParameters().getRaw().get(0);
-        graphLines = readGraphLinesFromFile(filePath);
+        if (getParameters().getRaw().size() > 0) {
 
-        if (graphLines.isEmpty()) {
-            System.out.println("No graphs loaded from the file.");
-            return;
+            filePath = getParameters().getRaw().get(0);
+            graphLines = readGraphLinesFromFile(filePath);
         }
 
         // Create the main layout:
@@ -176,7 +178,7 @@ public class GraphVisualizer extends Application {
         // Editable index field followed by total count label: "k / n"
         pageIndexTextField = new TextField(String.valueOf(currentGraphIndex + 1));
         pageIndexTextField.setPrefWidth(60);
-        Label pageLabel = new Label(" / " + graphLines.size());
+        Label pageLabel = new Label(" / " + (graphLines == null ? 0 : graphLines.size()));
 
         // Create layout configuration controls.
         seedTextField = new TextField("0");
