@@ -1,18 +1,117 @@
 package io.chandler.gap;
 
 import java.io.*;
+import java.lang.ProcessBuilder.Redirect;
 import java.util.*;
 
 public class GapInterface {
-    private static final String gapPath = "gap";
+    private static final GapConfig gapConfig = findGapExecutable();
     private Process process;
     private BufferedWriter writer;
     private BufferedReader reader;
 
+    private enum LaunchMode {
+        DIRECT,
+        CYGWIN_BASH
+    }
+
+    /**
+     * Configuration for launching GAP
+     */
+    private static class GapConfig {
+        final LaunchMode mode;
+        final String command;
+        final File gapRootDir;
+        String gapExePath;  // MSYS-style path for gap.exe (e.g., /opt/gap-4.15.1/gap.exe)
+
+        GapConfig(LaunchMode mode, String command, File gapRootDir) {
+            this.mode = mode;
+            this.command = command;
+            this.gapRootDir = gapRootDir;
+        }
+    }
+
     public GapInterface() throws IOException {
         reset();
     }
+    
+    /**
+     * Finds the GAP executable by searching common installation locations.
+     * @return GapConfig with information on how to launch GAP
+     */
+    private static GapConfig findGapExecutable() {
+        
+        // On Windows, search Program Files for GAP installations
+        if (System.getProperty("os.name").toLowerCase().startsWith("windows")) {
+            String[] programFilesDirs = {
+                System.getenv("ProgramFiles"),        // C:\Program Files
+                System.getenv("ProgramFiles(x86)"),   // C:\Program Files (x86)
+                "C:\\Program Files",
+                "C:\\Program Files (x86)"
+            };
+            
+            for (String programFilesDir : programFilesDirs) {
+                if (programFilesDir == null) continue;
+                
+                File dir = new File(programFilesDir);
+                if (!dir.exists() || !dir.isDirectory()) continue;
+                
+                // Look for GAP-* directories
+                try {
+                    File[] gapDirs = dir.listFiles((d, name) -> 
+                        name.toLowerCase().startsWith("gap-") || name.toLowerCase().equals("gap"));
+                    
+                    if (gapDirs != null && gapDirs.length > 0) {
+                        // Sort by version number (descending) to get the latest version
+                        Arrays.sort(gapDirs, (a, b) -> b.getName().compareTo(a.getName()));
+                        
+                        for (File gapDir : gapDirs) {
+                            // Check for MSYS/Cygwin bash launcher (Windows installer version)
+                            File runtimeDir = new File(gapDir, "runtime");
+                            File bashExe = new File(runtimeDir, "bin\\bash.exe");
 
+                            if (bashExe.exists()) {
+                                // Look for gap.exe in runtime/opt/gap*/gap.exe
+                                File optDir = new File(runtimeDir, "opt");
+                                if (optDir.exists() && optDir.isDirectory()) {
+                                    File[] optGapDirs = optDir.listFiles((d, name) -> name.toLowerCase().startsWith("gap"));
+                                    if (optGapDirs != null && optGapDirs.length > 0) {
+                                        // Sort to get the latest version
+                                        Arrays.sort(optGapDirs, (a, b) -> b.getName().compareTo(a.getName()));
+                                        for (File optGapDir : optGapDirs) {
+                                            File gapExe = new File(optGapDir, "gap.exe");
+                                            if (gapExe.exists()) {
+                                                // Convert to MSYS path format: /opt/gap-4.15.1/gap.exe
+                                                String gapExePath = "/opt/" + optGapDir.getName() + "/gap.exe";
+                                                System.out.println("Found GAP at: " + gapDir.getAbsolutePath());
+                                                System.out.println("  GAP executable: " + gapExePath);
+                                                System.out.println("  Using bash launcher: " + bashExe.getAbsolutePath());
+                                                
+                                                GapConfig config = new GapConfig(LaunchMode.CYGWIN_BASH, bashExe.getAbsolutePath(), gapDir);
+                                                config.gapExePath = gapExePath;
+                                                return config;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                        }
+                    }
+                } catch (Exception e) {
+                    // Continue searching
+                }
+            }
+            
+            System.err.println("WARNING: GAP not found in Program Files. Falling back to 'gap' command.");
+            System.err.println("Please ensure GAP is installed or add it to your PATH.");
+            System.err.println("Download GAP from: https://www.gap-system.org/");
+        }
+        
+        // Fallback to 'gap'
+        return new GapConfig(LaunchMode.DIRECT, "gap", null);
+    }
+    
     public static void main(String[] args) throws IOException {
 
         GapInterface gap = new GapInterface();
@@ -23,19 +122,47 @@ public class GapInterface {
 
     public void reset() throws IOException {
         if (process != null) try {close();} catch (IOException e) {}
+        
         List<String> commands = new ArrayList<>();
-        commands.add(gapPath);
-        commands.add("-q"); // Quiet mode, less output
-        commands.add("--width");
-        commands.add("1000000"); // Avoid line breaks
-
-        ProcessBuilder pb = new ProcessBuilder(commands);
+        ProcessBuilder pb;
+        
+        if (gapConfig.mode == LaunchMode.CYGWIN_BASH) {
+            // Windows GAP with bundled MSYS bash launcher
+            File gapRoot = Objects.requireNonNull(gapConfig.gapRootDir, "GAP root directory not set");
+            File runtimeDir = new File(gapRoot, "runtime");
+            String gapExePath = Objects.requireNonNull(gapConfig.gapExePath, "GAP executable path not set");
+            
+            commands.add(gapConfig.command);           // runtime/bin/bash.exe
+            commands.add("--login");
+            commands.add("-c");
+            commands.add(gapExePath + " -q --width 1000000");
+            
+            pb = new ProcessBuilder(commands);
+            pb.directory(runtimeDir);                 // Set working directory to runtime dir
+            pb.redirectError(Redirect.INHERIT);
+            Map<String, String> env = pb.environment();
+            env.put("CHERE_INVOKING", "1");          // Don't cd to home on --login
+            env.put("MSYS2_ARG_CONV_EXCL", "*");     // Don't mangle paths
+            System.out.println("Launching GAP with bash from: " + runtimeDir.getAbsolutePath());
+            System.out.println("  Executing: " + gapExePath + " -q --width 1000000");
+        } else {
+            commands.add(gapConfig.command);
+            commands.add("-q"); // Quiet mode, less output
+            commands.add("--width");
+            commands.add("1000000"); // Avoid line breaks
+            
+            pb = new ProcessBuilder(commands);
+            if (gapConfig.gapRootDir != null) {
+                pb.directory(gapConfig.gapRootDir);
+            }
+            pb.redirectError(Redirect.INHERIT);
+        }
+        
         pb.redirectErrorStream(true);
         process = pb.start();
 
         writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));
         reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-
     }
 
     public void close() throws IOException {
@@ -73,6 +200,7 @@ public class GapInterface {
             String out = "";
             while (foundL != 0) {
                 line = reader.readLine().replaceAll(" ", "").trim();
+                System.out.println(line);
                 if (line.isEmpty()) continue;
                 int countL = count(line, "[");
                 int countR = count(line, "]");
