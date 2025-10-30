@@ -36,6 +36,7 @@ import javafx.beans.value.ObservableValue;
 import javafx.geometry.Bounds;
 import javafx.scene.Node;
 import javafx.scene.Scene;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
@@ -296,6 +297,15 @@ public class GraphVisualizer extends Application {
             }
         });
 
+        Button controlsButton = new Button("Controls");
+        controlsButton.setOnAction(e -> {
+            Alert alert = new Alert(Alert.AlertType.INFORMATION);
+            alert.setTitle("Controls");
+            alert.setHeaderText(null);
+            alert.setContentText("Left Click + Drag: Adjust Graph Points\nRight Click + Drag: Rotate 3D view");
+            alert.showAndWait();
+        });
+
         // Create layoutChoiceBox and other related checkboxes.
         layoutChoiceBox = new ComboBox<>();
         layoutChoiceBox.getItems().addAll(layoutAlgoMap.keySet());
@@ -330,7 +340,7 @@ public class GraphVisualizer extends Application {
         });
 
         // Create a top-bar HBox for the remaining controls.
-        HBox topControls = new HBox(10, randomizeButton, loadButton);
+        HBox topControls = new HBox(10, randomizeButton, loadButton, controlsButton);
         topControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
         root.setTop(topControls);
 
