@@ -373,12 +373,4 @@ public class Graph<V extends Comparable>
 				labeling.get(vertex2.id));
  	return g2;
     }
-
-
-
-    static {
-	/* Load the C++ library including the true bliss and
-	 * the JNI interface code */
-	System.loadLibrary("jbliss");
-    }
 }

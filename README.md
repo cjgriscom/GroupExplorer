@@ -11,14 +11,25 @@ This is a long list of generators for various groups.
 
 ### PlanarStudy.java
 
+A MinGW G++ installation (mingw32-gcc-g++) is required on Windows:
+https://sourceforge.net/projects/mingw/
+
+GAP is required:
+ * Windows: https://www.gap-system.org/install/windows/
+ * Linux: Available in most distro package managers
+
 This is a tool that lists out all possible canonical generator pairs (or triples, etc) for a given group.  There are many options for filtering the results.
 
 Note: this only works for small-ish groups, and other manual methods are required for larger ones.
 
 GAP must be on the PATH to use PlanarStudy.
 
-JBliss is a graph canonization library required for PlanarStudy.  I've only compiled it for Linux but it should be possible to compile it for other platforms using the source here:
-http://www.tcs.hut.fi/Software/bliss/jbliss-0.50beta2.zip
+multigenus is a binary that computes the genus of non-planar graphs.  It's only required if using the genus > 1 filter.  Currently only compiled for Linux.
+https://github.com/SanderGi/Genus
+
+JBliss is a graph canonization library required for PlanarStudy.  I've only compiled it for Linux and Windows x86_64, but it should be possible to compile it for other platforms using the source here:
+http://www.tcs.hut.fi/Software/bliss/
+https://github.com/cjgriscom/jbliss
 
 ### GraphVisualizer.java
 

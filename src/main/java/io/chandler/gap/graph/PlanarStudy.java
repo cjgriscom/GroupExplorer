@@ -399,8 +399,9 @@ public class PlanarStudy {
     }
 
     private static void loadJBliss() {
+        System.out.println(System.getProperty("os.name"));
+        System.out.println(System.getProperty("os.arch"));
         // Check if we're on linux amd64
-
         if (System.getProperty("os.name").toLowerCase().contains("linux") && System.getProperty("os.arch").toLowerCase().contains("amd64")) {
             File jbliss = new File("lib/libjbliss.so");
             if (!jbliss.exists()) {
@@ -408,8 +409,17 @@ public class PlanarStudy {
                 System.exit(1);
             }
             System.load(jbliss.getAbsolutePath());
+        // Check if we're on windows amd64
+        } else if (System.getProperty("os.name").toLowerCase().startsWith("windows") && System.getProperty("os.arch").toLowerCase().contains("amd64")) {
+            File jbliss = new File("lib/jbliss.dll");
+
+            if (!jbliss.exists()) {
+                System.out.println("JBliss library not found.");
+                System.exit(1);
+            }
+            System.load(jbliss.getAbsolutePath());
         } else {
-            System.out.println("JBliss library not found. Only Linux amd64 is pre-compiled.");
+            System.out.println("JBliss library not found. Only Linux / Windows x86_64 are pre-compiled.");
             System.exit(1);
         }
         
