@@ -200,7 +200,6 @@ public class GapInterface {
             String out = "";
             while (foundL != 0) {
                 line = reader.readLine().replaceAll(" ", "").trim();
-                System.out.println(line);
                 if (line.isEmpty()) continue;
                 int countL = count(line, "[");
                 int countR = count(line, "]");
