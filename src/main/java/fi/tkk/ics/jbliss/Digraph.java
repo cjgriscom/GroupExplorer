@@ -1,5 +1,5 @@
 /* 
- * @(#)Graph.java
+ * @(#)Digraph.java
  *
  * Copyright 2007-2010 by Tommi Junttila.
  * Released under the GNU General Public License version 3.
@@ -11,13 +11,13 @@ import java.io.PrintStream;
 import java.util.*;
 
 /**
- * An undirected graph.
+ * A directed graph.
  * Vertices can be colored (with integers) and self-loops are allowed
  * but multiple edges between vertices are ignored.
  *
  * @author Tommi Junttila
  */
-public class Graph<V extends Comparable>
+public class Digraph<V extends Comparable>
     implements Comparable
 {
     /* Intermediate translator stuff for mapping
@@ -72,7 +72,7 @@ public class Graph<V extends Comparable>
     /**
      * Create a new undirected graph with no vertices or edges.
      */
-    public Graph()
+    public Digraph()
     {
 	vertices = new TreeMap<V, Vertex>();
 	assert vertices != null;
@@ -92,7 +92,7 @@ public class Graph<V extends Comparable>
      */
     public void write_dot(PrintStream stream)
     {
-	stream.println("graph G {");
+	stream.println("digraph G {");
 	for(Map.Entry<V, Vertex> e : vertices.entrySet()) {
 	    V v = e.getKey();
 	    Vertex vertex = e.getValue();
@@ -114,7 +114,7 @@ public class Graph<V extends Comparable>
 	if(getClass() != other.getClass())
 	    throw new ClassCastException("Cannot compare "+getClass()+
 					 " to "+other.getClass());
-	Graph<V> h = (Graph<V>)other;
+	Digraph<V> h = (Digraph<V>)other;
 	if(nof_vertices() < h.nof_vertices()) return -1;
 	if(nof_vertices() > h.nof_vertices()) return 1;
 	Iterator i1 = vertices.keySet().iterator();
@@ -189,7 +189,7 @@ public class Graph<V extends Comparable>
 
 
     /**
-     * Add an undirected edge between the vertices v1 and v2.
+     * Add a directed edge between the vertices v1 and v2.
      * If either of the vertices is not in the graph, it will be added.
      * Duplicate edges between vertices are ignored.
      *
@@ -208,34 +208,11 @@ public class Graph<V extends Comparable>
 	    vertices.put(v2, vertex2);
 	}
 	vertex1.edges.add(vertex2);
-	vertex2.edges.add(vertex1);
-    }
-
-    /**
-     * Add a directed edge between the vertices v1 and v2.
-     * If either of the vertices is not in the graph, it will be added.
-     * Duplicate edges between vertices are ignored.
-     *
-     * @param v1  a vertex in the graph
-     * @param v2  a vertex in the graph
-     */
-    public void add_edge_directed(V v1, V v2) {
-	Vertex vertex1 = vertices.get(v1);
-	if(vertex1 == null) {
-	    vertex1 = new Vertex(v1);
-	    vertices.put(v1, vertex1);
-	}
-	Vertex vertex2 = vertices.get(v2);
-	if(vertex2 == null) {
-	    vertex2 = new Vertex(v2);
-	    vertices.put(v2, vertex2);
-	}
-	vertex1.edges.add(vertex2);
     }
 
 
     /**
-     * Remove an undirected edge between the vertices v1 and v2.
+     * Remove a directed edge between the vertices v1 and v2.
      *
      * @param v1  a vertex in the graph
      * @param v2  a vertex in the graph
@@ -248,7 +225,6 @@ public class Graph<V extends Comparable>
 	if(vertex2 == null)
 	    return;
 	vertex1.edges.remove(vertex2);
-	vertex2.edges.remove(vertex1);
     }
 
 
@@ -257,59 +233,15 @@ public class Graph<V extends Comparable>
      *
      * @return a copy of the graph
      */
-    public Graph<V> copy()
+    public Digraph<V> copy()
     {
-	Graph<V> g2 = new Graph<V>();
+	Digraph<V> g2 = new Digraph<V>();
 	for(Map.Entry<V,Vertex> e : vertices.entrySet())
 	    g2.add_vertex(e.getKey(), e.getValue().color);
 	for(Map.Entry<V,Vertex> e : vertices.entrySet())
 	    for(Vertex vertex2 : e.getValue().edges)
-		if(e.getValue().compareTo(vertex2) <= 0)
-		    g2.add_edge(e.getKey(), vertex2.id);
+		g2.add_edge(e.getKey(), vertex2.id);
  	return g2;
-    }
-
-
-    /**
-     * Find (a generating set for) the automorphism group of the graph.
-     * If the argument reporter is non-null,
-     * then a generating set of automorphisms is reported by calling its
-     * {@link Reporter#report} method for each generator.
-     *
-     * @param reporter        An object implementing the Reporter interface
-     * @param reporter_param  The parameter passed to the Reporter object
-     */
-    public void find_automorphisms(Reporter reporter, Object reporter_param)
-    {
-        long bliss = create();
-        assert bliss != 0;
-	_bliss_map     = new TreeMap<V,Integer>();
-	_bliss_map_inv = new TreeMap<Integer,V>();
-	for(Map.Entry<V,Vertex> e : vertices.entrySet()) {
-	    V v = e.getKey();
-	    Vertex vertex = e.getValue();
-	    int bliss_vertex = _add_vertex(bliss, vertex.color);
-	    _bliss_map.put(v, bliss_vertex);
-	    _bliss_map_inv.put(bliss_vertex,v);
-	}
-	for(Map.Entry<V,Vertex> e : vertices.entrySet()) {
-	    V v = e.getKey();
-	    Vertex vertex = e.getValue();
-	    for(Vertex vertex2 : vertex.edges) {
-		if(v.compareTo(vertex2.id) <= 0)
-		    _add_edge(bliss,
-			      _bliss_map.get(vertex.id),
-			      _bliss_map.get(vertex2.id));
-	    }
-	}
-	_reporter = reporter;
-	_reporter_param = reporter_param;
-        _find_automorphisms(bliss, _reporter);
-	destroy(bliss);
-	_bliss_map = null;
-	_bliss_map_inv = null;
-	_reporter = null;
-	_reporter_param = null;
     }
 
 
@@ -323,7 +255,7 @@ public class Graph<V extends Comparable>
      * @param reporter        An object implementing the Reporter interface
      * @param reporter_param  The parameter passed to the Reporter object
      */
-    public void find_automorphisms_directed(Reporter reporter, Object reporter_param)
+    public void find_automorphisms(Reporter reporter, Object reporter_param)
     {
         long bliss = create();
         assert bliss != 0;
@@ -358,7 +290,8 @@ public class Graph<V extends Comparable>
 
 
     /**
-     * Find the canonical labeling and the automorphism group of the graph.
+     * Find the canonical labeling and the automorphism group of the graph,
+     * treating it as a directed graph.
      * If the argument reporter is non-null,
      * then a generating set of automorphisms is reported by calling its
      * {@link Reporter#report} method for each generator.
@@ -370,7 +303,8 @@ public class Graph<V extends Comparable>
     }
 
     /**
-     * Find the canonical labeling and the automorphism group of the graph.
+     * Find the canonical labeling and the automorphism group of the graph,
+     * treating it as a directed graph.
      * If the argument reporter is non-null,
      * then a generating set of automorphisms is reported by calling its
      * {@link Reporter#report} method for each generator.
@@ -380,68 +314,6 @@ public class Graph<V extends Comparable>
      * @return           A canonical labeling permutation
      */
     public Map<V,Integer> canonical_labeling(Reporter reporter,
-					     Object reporter_param)
-    {
-        long bliss = create();
-        assert bliss != 0;
-	_bliss_map     = new TreeMap<V,Integer>();
-	_bliss_map_inv = new TreeMap<Integer,V>();
-	for(Map.Entry<V,Vertex> e : vertices.entrySet()) {
-	    V v = e.getKey();
-	    Vertex vertex = e.getValue();
-	    int bliss_vertex = _add_vertex(bliss, vertex.color);
-	    _bliss_map.put(v, bliss_vertex);
-	    _bliss_map_inv.put(bliss_vertex,v);
-	}
-	for(Map.Entry<V,Vertex> e : vertices.entrySet()) {
-	    V v = e.getKey();
-	    Vertex vertex = e.getValue();
-	    for(Vertex vertex2 : vertex.edges) {
-		if(v.compareTo(vertex2.id) <= 0)
-		    _add_edge(bliss,
-			      _bliss_map.get(vertex.id),
-			      _bliss_map.get(vertex2.id));
-	    }
-	}
-	_reporter = reporter;
-	_reporter_param = reporter_param;
-        int[] cf = _canonical_labeling(bliss, _reporter);
-	destroy(bliss);
-	TreeMap<V,Integer> labeling = new TreeMap<V,Integer>();
-	for(Map.Entry<V,Integer> e : _bliss_map.entrySet())
-	    labeling.put(e.getKey(), cf[e.getValue()]);
-	_bliss_map = null;
-	_bliss_map_inv = null;
-	_reporter = null;
-	_reporter_param = null;
-	return labeling;
-    }
-
-    /**
-     * Find the canonical labeling and the automorphism group of the graph,
-     * treating it as a directed graph.
-     * If the argument reporter is non-null,
-     * then a generating set of automorphisms is reported by calling its
-     * {@link Reporter#report} method for each generator.
-     *
-     * @return           A canonical labeling permutation
-     */
-    public Map<V,Integer> canonical_labeling_directed() {
-	return canonical_labeling_directed(null, null);
-    }
-
-    /**
-     * Find the canonical labeling and the automorphism group of the graph,
-     * treating it as a directed graph.
-     * If the argument reporter is non-null,
-     * then a generating set of automorphisms is reported by calling its
-     * {@link Reporter#report} method for each generator.
-     *
-     * @param reporter        An object implementing the Reporter interface
-     * @param reporter_param  The parameter passed to the Reporter object
-     * @return           A canonical labeling permutation
-     */
-    public Map<V,Integer> canonical_labeling_directed(Reporter reporter,
 						      Object reporter_param)
     {
         long bliss = create();
@@ -481,28 +353,6 @@ public class Graph<V extends Comparable>
 
 
     /**
-     * Copy and relabel the graph.
-     * The labeling is a Map that associates each vertex in the graph
-     * into new vertex.
-     *
-     * @param labeling  the labeling to apply
-     * @return the relabeled graph
-     */
-    public <W extends Comparable> Graph<W> relabel(Map<V,W> labeling)
-    {
-	assert labeling != null;
-	Graph<W> g2 = new Graph<W>();
-	for(Map.Entry<V, Vertex> e : vertices.entrySet())
-	    g2.add_vertex(labeling.get(e.getKey()), e.getValue().color);
-	for(Map.Entry<V, Vertex> e : vertices.entrySet())
-	    for(Vertex vertex2 : e.getValue().edges)
-		if(e.getValue().compareTo(vertex2) <= 0)
-		    g2.add_edge(labeling.get(e.getKey()),
-				labeling.get(vertex2.id));
- 	return g2;
-    }
-
-    /**
      * Copy and relabel the graph, treating it as a directed graph.
      * The labeling is a Map that associates each vertex in the graph
      * into new vertex.
@@ -510,16 +360,16 @@ public class Graph<V extends Comparable>
      * @param labeling  the labeling to apply
      * @return the relabeled graph
      */
-    public <W extends Comparable> Graph<W> relabel_directed(Map<V,W> labeling)
+    public <W extends Comparable> Digraph<W> relabel(Map<V,W> labeling)
     {
 	assert labeling != null;
-	Graph<W> g2 = new Graph<W>();
+	Digraph<W> g2 = new Digraph<W>();
 	for(Map.Entry<V, Vertex> e : vertices.entrySet())
 	    g2.add_vertex(labeling.get(e.getKey()), e.getValue().color);
 	for(Map.Entry<V, Vertex> e : vertices.entrySet())
 	    for(Vertex vertex2 : e.getValue().edges)
 		// Add all directed edges without the undirected check
-		g2.add_edge_directed(labeling.get(e.getKey()),
+		g2.add_edge(labeling.get(e.getKey()),
 				     labeling.get(vertex2.id));
  	return g2;
     }
