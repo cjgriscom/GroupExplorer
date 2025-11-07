@@ -1,9 +1,11 @@
 package io.chandler.gap.graph;
 
 import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -17,6 +19,8 @@ import java.util.Queue;
 import java.util.Random;
 import java.util.Scanner;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jgrapht.Graph;
 import org.jgrapht.Graphs;
@@ -34,9 +38,12 @@ import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.graph.genus.MultiGenus;
 
 public class PlanarStudy {
-    static {
-        loadJBliss();
-    }
+    private static final String DREADNAUT_PATH = 
+        "/home/cjgriscom/Programming/nauty/nauty2_9_1/dreadnaut";
+    // Switch between nauty (Ad) and Traces (At) when calling dreadnaut.
+    // Traces cannot handle directed graphs. If enabled but a batch contains any directed graphs,
+    // we will fall back to nauty for that batch.
+    private static final boolean USE_TRACES = true;
 
     public static void main(String[] args) throws IOException {
         // --------------------------------------------------------
@@ -50,7 +57,7 @@ public class PlanarStudy {
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = true; // Require the graphs to be planar / polyhedral
         boolean discardOverGenus1 = true; // If not requiring planar, this will discard graphs with genus > 1
-        int enforceLoopMultiples = 2; // For planar grid stuff, set to 1 for normal operation
+        int enforceLoopMultiples = 1; // For planar grid stuff, set to 1 for normal operation
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 2; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
@@ -69,7 +76,7 @@ public class PlanarStudy {
         int[] phase2Indices = new int[]{1};
 
         String generator = Generators.we8;
-        String groupName = "we8";
+        String groupName = "we8b";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -150,8 +157,6 @@ public class PlanarStudy {
             }
         }
         Collections.shuffle(lines2, new Random(321));
-        // Remove 1/4 of the lines
-        lines2.subList(0, lines2.size() / 4).clear(); // XXX
 
         List<String> lines3 = new ArrayList<>();
         File file3 = new File(root.getAbsolutePath() + "/" + conj[phase2Indices[0]] + ".txt");
@@ -164,22 +169,21 @@ public class PlanarStudy {
             }
         }
         Collections.shuffle(lines3, new Random(321));
-        // Remove 1/4 of the lines
-        lines3.subList(0, lines3.size() / 4).clear(); // XXX
 
         // instantiate GAP to check group order.
-        GapInterface gap = new GapInterface();
+        ThreadLocal<GapInterface> gapL = ThreadLocal.withInitial(() -> { try { return new GapInterface(); } catch (IOException e) { throw new RuntimeException("Failed to create GapInterface", e); } });
         
         // Create a list to save unique candidate pairs.
         List<int[][][]> candidatePairs = new ArrayList<>();
         List<Graph<Integer, DefaultEdge>> pairGraphs = new ArrayList<>();
-        HashSet<String> canonicalGraphs = new HashSet<>();
+        Set<String> canonicalGraphs = Collections.synchronizedSet(new HashSet<>());
+        Object phase1Lock = new Object();
         PrintStream phase1Out = new PrintStream(root.getAbsolutePath() + "/" + (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") + (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") + (requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") + conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt");
         int[] found = new int[repetitions + 1];
 
-        int p1_1_count = 0;
+        AtomicInteger p1_1_count = new AtomicInteger(0);
 
-        String allConjClasses = gap.getConjugacyClasses(generator);
+        String allConjClasses = gapL.get().getConjugacyClasses(generator);
         int nPoints = 0;
         for (int[][] x : GroupExplorer.parseOperations(generator)) {
             for (int[] y : x) {
@@ -196,12 +200,6 @@ public class PlanarStudy {
         List<int[][]> conjClasses = GroupExplorer.parseOperations(allConjClasses);
         for (int[][] x : conjClasses) {
             String y = GroupExplorer.describeCycles(nPoints, x);
-            if (y.equals("119p 2-cycles")) continue; // XXX
-            if (y.equals("116p 2-cycles")) continue; // XXX
-            if (y.equals("118p 2-cycles")) continue; // XXX
-            if (y.equals("117p 2-cycles")) continue; // XXX
-            if (y.equals("108p 2-cycles")) continue; // XXX
-            if (y.equals("107p 2-cycles")) continue; // XXX
 
             if (conjMatches(conj[0], y)) {
                 lines1.add(GroupExplorer.cyclesToNotation(x));
@@ -210,25 +208,36 @@ public class PlanarStudy {
         }
 
         // Nested loops over the two lists with early termination support.
-        phase1Loop: for (String l1 : lines1) {
-            int p1_2_count = 0;
-            p1_1_count++;
+        for (String l1 : lines1) {
+            AtomicInteger p1_2_count = new AtomicInteger(0);
+            p1_1_count.incrementAndGet();
             System.out.println("  Searching conjugacy class " + p1_1_count + " / " + lines1.size());
             int[][][] parsed1 = GroupExplorer.parseOperationsArr(l1);
-            GroupExplorer ge = new GroupExplorer(generator, mem, new HashSet<>(), new HashSet<>(), new HashSet<>(), true);
-            ge.applyOperation(parsed1[0], false);
-            int[] l1State = ge.copyCurrentState();
+
+            ThreadLocal<GroupExplorer> geL = ThreadLocal.withInitial(() -> {
+                GroupExplorer geT = new GroupExplorer(generator, mem, new HashSet<>(), new HashSet<>(), new HashSet<>(), true);
+                geT.applyOperation(parsed1[0], false);
+                return geT;
+            });
+            int[] l1State = geL.get().copyCurrentState();
             int[][] firstCandidate = parsed1[0]; // use the first generator set from file1.
-            for (String l2 : lines2) {
+
+            AtomicBoolean earlyTermination = new AtomicBoolean(false);
+
+            long orderFinal = order;
+
+            lines2.parallelStream().forEach(l2 -> {
+                if (earlyTermination.get()) return;
+                GroupExplorer ge = geL.get();
                 int[][][] parsed2 = GroupExplorer.parseOperationsArr(l2);
                 int[][] secondCandidate = parsed2[0]; // use the first generator set from file2.
                 ge.resetElements(false);
                 ge.applyOperation(parsed2[0], false);
                 int[] l2State = ge.copyCurrentState();
 
-                p1_2_count++;
+                p1_2_count.incrementAndGet();
                 // Check if
-                if (Arrays.equals(l1State, l2State)) continue;
+                if (Arrays.equals(l1State, l2State)) return;
                 // Check for a key press to allow early termination of Phase 1 filtering.
                 try {
                     if (System.in.available() > 0) {
@@ -236,9 +245,9 @@ public class PlanarStudy {
                         while (System.in.available() > 0) {
                             System.in.read();
                         }
-                        System.out.println("p1_1_count: " + p1_1_count + " / " + lines1.size());
-                        System.out.println("p1_2_count: " + p1_2_count + " / " + lines2.size());
-                        continue phase1Loop;
+                        earlyTermination.set(true);
+                        System.out.println("p1_1_count: " + p1_1_count.get() + " / " + lines1.size());
+                        System.out.println("p1_2_count: " + p1_2_count.get() + " / " + lines2.size());
                     }
                 } catch (IOException e) {
                     e.printStackTrace();
@@ -248,62 +257,62 @@ public class PlanarStudy {
                 
                 // Check for duplicate polygons (e.g. [1,2,3] vs [2,1,3]).
                 if (hasDuplicatePolygon(combinedPair, MAX_DUPLICATE_POLYGONS)) {
-                    continue;
+                    return;
                 }
                 
                 // Check planarity if required.
                 if (requirePlanar && !checkPlanarity(combinedPair)) {
-                    continue;
+                    return;
                 }
 
                 String size = null;
                 if (!allowSubgroups) {
-                    size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
-                    if (!size.equals(String.valueOf(order))) {
-                        continue;
+                    size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
+                    if (!size.equals(String.valueOf(orderFinal))) {
+                        return;
                     }
                 }
 
                 // Check for genus 1 if required.
                 if (discardOverGenus1 && !(checkPlanarity(combinedPair) || checkGenus1(combinedPair))) {
-                    continue;
+                    return;
                 }
 
                 Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, directed);
 
-                String canonicalLabeling = null;
-
                 // Check for isomorphic duplicates.
-                fi.tkk.ics.jbliss.AbstractGraph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(combinedPair, directed);
-                canonicalLabeling = getCanonicalGraph(jblissGraph);
-                if (canonicalGraphs.contains(canonicalLabeling)) {
-                    continue;
+                String canonicalLabeling = getCanonicalGraphViaDreadnautFromCombinedGen(combinedPair, directed);
+                synchronized (canonicalGraphs) {
+                    if (canonicalGraphs.contains(canonicalLabeling)) {
+                        return;
+                    }
                 }
 
                 // Enforce all simple cycles have length multiple of N (if enabled)
                 if (!allEdgeCyclesAreMultiples(candGraph, enforceLoopMultiples)) {
-                    continue;
+                    return;
                 }
                 
                 //if (Math.random() < 0.01) Collections.shuffle(pairGraphs);
-                if (size == null) size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
+                if (size == null) size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
                 
-                candidatePairs.add(combinedPair);
-                pairGraphs.add(candGraph);
-                canonicalGraphs.add(canonicalLabeling);
-                if (size.equals(String.valueOf(order))) {
-                    phase1Out.println(GroupExplorer.generatorsToString(combinedPair));
-                    found[0]++;
-                }
+                synchronized (phase1Lock) {
+                    // Prevent duplicates while lock is released
+                    if (!canonicalGraphs.add(canonicalLabeling)) return;
+                    candidatePairs.add(combinedPair);
+                    pairGraphs.add(candGraph);
+                    if (size.equals(String.valueOf(orderFinal))) {
+                        phase1Out.println(GroupExplorer.generatorsToString(combinedPair));
+                        found[0]++;
+                    }
 
-                System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[0] + " results and " + candidatePairs.size() + " candidates");
-            }
+                    System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[0] + " results and " + candidatePairs.size() + " candidates");
+                }
+            });
         }
         phase1Out.close();
         System.out.println("Phase 1 completed. Unique candidate pairs: " + candidatePairs.size());
         
-        
-        allowSubgroups = false;
         // --------------------------------------------------------
         // Phase 2: Repetitions-based candidate generation.
         // --------------------------------------------------------
@@ -370,7 +379,7 @@ public class PlanarStudy {
 
                     String size = null;
                     if (!allowSubgroups) {
-                        size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
+                        size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
                         if (!size.equals(String.valueOf(order))) {
                             continue;
                         }
@@ -379,9 +388,8 @@ public class PlanarStudy {
                     Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, directed);
 
                     // Check for isomorphic duplicates.
-                    String canonicalLabeling = null;
-                    fi.tkk.ics.jbliss.AbstractGraph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(newCandidate, directed);
-                    canonicalLabeling = getCanonicalGraph(jblissGraph);
+                    String canonicalLabeling = getCanonicalGraphViaDreadnautFromCombinedGen(newCandidate, directed);
+                    System.out.println(canonicalLabeling);
                     if (canonicalGraphs.contains(canonicalLabeling)) {
                         continue;
                     }
@@ -396,7 +404,7 @@ public class PlanarStudy {
                         continue;
                     }
                     
-                    if (size == null) size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
+                    if (size == null) size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
                     
                     newCandidates.add(newCandidate);
                     newCandidateGraphs.add(candGraph);
@@ -417,33 +425,6 @@ public class PlanarStudy {
             currentCandidates = newCandidates;
         }
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + order + " found: " + Arrays.toString(found));
-    }
-
-    private static void loadJBliss() {
-        System.out.println(System.getProperty("os.name"));
-        System.out.println(System.getProperty("os.arch"));
-        // Check if we're on linux amd64
-        if (System.getProperty("os.name").toLowerCase().contains("linux") && System.getProperty("os.arch").toLowerCase().contains("amd64")) {
-            File jbliss = new File("lib/libjbliss.so");
-            if (!jbliss.exists()) {
-                System.out.println("JBliss library not found.");
-                System.exit(1);
-            }
-            System.load(jbliss.getAbsolutePath());
-        // Check if we're on windows amd64
-        } else if (System.getProperty("os.name").toLowerCase().startsWith("windows") && System.getProperty("os.arch").toLowerCase().contains("amd64")) {
-            File jbliss = new File("lib/jbliss.dll");
-
-            if (!jbliss.exists()) {
-                System.out.println("JBliss library not found.");
-                System.exit(1);
-            }
-            System.load(jbliss.getAbsolutePath());
-        } else {
-            System.out.println("JBliss library not found. Only Linux / Windows x86_64 are pre-compiled.");
-            System.exit(1);
-        }
-        
     }
 
     private static boolean conjMatches(String conj, String description) {
@@ -597,6 +578,90 @@ public class PlanarStudy {
         graph.relabel(canonicalLabeling).write_dot(ps);
         ps.flush();
         return new String(baos.toByteArray());
+    }
+
+    private static boolean allTwoCycles(int[][][] combinedGen) {
+        for (int[][] cycle : combinedGen) {
+            for (int[] polygon : cycle) {
+                if (polygon.length != 2) return false;
+            }
+        }
+        return true;
+    }
+
+    public static String getCanonicalGraphViaDreadnautFromCombinedGen(int[][][] combinedGen, boolean directed) {
+        boolean dir = directed && !allTwoCycles(combinedGen);
+        Graph<Integer, DefaultEdge> g = buildGraphFromCombinedGen(combinedGen, dir);
+        try {
+            return getCanonicalGraphViaDreadnaut(g, dir);
+        } catch (IOException | InterruptedException e) {
+            throw new RuntimeException("dreadnaut failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static String getCanonicalGraphViaDreadnaut(Graph<Integer, DefaultEdge> graph, boolean directed)
+            throws IOException, InterruptedException {
+        java.util.List<Integer> verts = new java.util.ArrayList<>(graph.vertexSet());
+        java.util.Collections.sort(verts);
+        java.util.Map<Integer, Integer> v2i = new java.util.HashMap<>();
+        for (int i = 0; i < verts.size(); i++) v2i.put(verts.get(i), i);
+        int n = verts.size();
+
+        java.util.List<java.util.Set<Integer>> adj = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) adj.add(new java.util.TreeSet<>());
+
+        for (DefaultEdge e : graph.edgeSet()) {
+            Integer u = graph.getEdgeSource(e);
+            Integer v = graph.getEdgeTarget(e);
+            int iu = v2i.get(u);
+            int iv = v2i.get(v);
+            if (directed) {
+                adj.get(iu).add(iv);
+            } else {
+                adj.get(iu).add(iv);
+                adj.get(iv).add(iu);
+            }
+        }
+
+        // Fallback to checksum if adjacency block not found
+        StringBuilder input2 = new StringBuilder();
+        input2.append("l=0\n-m\n"); // No wrapping, disable level markers
+        {
+            String modeCmd = USE_TRACES && !directed ? "At" : "Ad";
+            input2.append(modeCmd).append("\n");
+        }
+        if (directed) input2.append("d\n");
+        input2.append("n=").append(n).append(" g\n");
+        for (int i = 0; i < n; i++) {
+            input2.append(i).append(":");
+            java.util.Set<Integer> neigh = adj.get(i);
+            if (!neigh.isEmpty()) {
+                input2.append(" ");
+                boolean first = true;
+                for (int j : neigh) {
+                    if (!first) input2.append(" ");
+                    input2.append(j);
+                    first = false;
+                }
+            }
+            input2.append(i == n - 1 ? ".\n" : ";\n");
+        }
+        input2.append("c -a\nx\nz\nq\n");
+
+        ProcessBuilder pb2 = new ProcessBuilder(DREADNAUT_PATH);
+        pb2.redirectErrorStream(true);
+        Process p2 = pb2.start();
+        try (java.io.OutputStream os = p2.getOutputStream()) {
+            os.write(input2.toString().getBytes());
+            os.flush();
+        }
+        StringBuilder out2 = new StringBuilder();
+        try (BufferedReader br2 = new BufferedReader(new InputStreamReader(p2.getInputStream()))) {
+            String l;
+            while ((l = br2.readLine()) != null) if (l.trim().startsWith("[")) out2.append(l.trim()).append('\n');
+        }
+        p2.waitFor();
+        return out2.toString().trim();
     }
 
     private static boolean allEdgeCyclesAreMultiples(Graph<Integer, DefaultEdge> graph, int k) {
