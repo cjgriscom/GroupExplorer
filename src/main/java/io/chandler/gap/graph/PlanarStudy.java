@@ -50,7 +50,7 @@ public class PlanarStudy {
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = true; // Require the graphs to be planar / polyhedral
         boolean discardOverGenus1 = true; // If not requiring planar, this will discard graphs with genus > 1
-        int enforceLoopMultiples = 1; // For planar grid stuff, set to 1 for normal operation
+        int enforceLoopMultiples = 2; // For planar grid stuff, set to 1 for normal operation
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 2; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
@@ -62,14 +62,14 @@ public class PlanarStudy {
 
         // Either use a complete description like "6p 3-cycles" or a partial description like "5-cycles" for 5-cycles only
         String[] conj = new String[] {
-            "3-cycles",  "3-cycles"
+            "2-cycles",  "2-cycles"
         };
         // For phase 1, we use two different files (indices 0 and 1).
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.l2_13;
-        String groupName = "l2_13";
+        String generator = Generators.we8;
+        String groupName = "we8";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -150,6 +150,8 @@ public class PlanarStudy {
             }
         }
         Collections.shuffle(lines2, new Random(321));
+        // Remove 1/4 of the lines
+        lines2.subList(0, lines2.size() / 4).clear(); // XXX
 
         List<String> lines3 = new ArrayList<>();
         File file3 = new File(root.getAbsolutePath() + "/" + conj[phase2Indices[0]] + ".txt");
@@ -162,6 +164,8 @@ public class PlanarStudy {
             }
         }
         Collections.shuffle(lines3, new Random(321));
+        // Remove 1/4 of the lines
+        lines3.subList(0, lines3.size() / 4).clear(); // XXX
 
         // instantiate GAP to check group order.
         GapInterface gap = new GapInterface();
@@ -192,6 +196,12 @@ public class PlanarStudy {
         List<int[][]> conjClasses = GroupExplorer.parseOperations(allConjClasses);
         for (int[][] x : conjClasses) {
             String y = GroupExplorer.describeCycles(nPoints, x);
+            if (y.equals("119p 2-cycles")) continue; // XXX
+            if (y.equals("116p 2-cycles")) continue; // XXX
+            if (y.equals("118p 2-cycles")) continue; // XXX
+            if (y.equals("117p 2-cycles")) continue; // XXX
+            if (y.equals("108p 2-cycles")) continue; // XXX
+            if (y.equals("107p 2-cycles")) continue; // XXX
 
             if (conjMatches(conj[0], y)) {
                 lines1.add(GroupExplorer.cyclesToNotation(x));
@@ -293,6 +303,7 @@ public class PlanarStudy {
         System.out.println("Phase 1 completed. Unique candidate pairs: " + candidatePairs.size());
         
         
+        allowSubgroups = false;
         // --------------------------------------------------------
         // Phase 2: Repetitions-based candidate generation.
         // --------------------------------------------------------
@@ -356,6 +367,15 @@ public class PlanarStudy {
                     if (requirePlanar && !checkPlanarity(newCandidate)) {
                         continue;
                     }
+
+                    String size = null;
+                    if (!allowSubgroups) {
+                        size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
+                        if (!size.equals(String.valueOf(order))) {
+                            continue;
+                        }
+                    }
+
                     Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, directed);
 
                     // Check for isomorphic duplicates.
@@ -376,7 +396,7 @@ public class PlanarStudy {
                         continue;
                     }
                     
-                    String size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
+                    if (size == null) size = gap.runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
                     
                     newCandidates.add(newCandidate);
                     newCandidateGraphs.add(candGraph);
@@ -550,7 +570,7 @@ public class PlanarStudy {
                 for (int i = 0; i < polygon.length; i++) {
                     int v1 = polygon[i], v2 = polygon[(i + 1) % polygon.length];
                     graph.add_edge(v1, v2);
-                    if (!directed || polygon.length == 2) {
+                    if (!directed && polygon.length == 2) {
                         graph.add_edge(v2, v1);
                     }
                 }

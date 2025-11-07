@@ -873,6 +873,8 @@ public class GraphVisualizer extends Application {
             if (!curString.equals(graphIdxString)) {
                 pageIndexTextField.setText(graphIdxString);
             }
+            // Printthe generator
+            System.out.println("Generator: " + currentLine);
             pageLabel.setText(" / " + graphLines.size());
             drawPlanarGraph(currentGraph, graphPane, currentLine, positions);
         }

@@ -18,8 +18,54 @@ import javafx.util.Pair;
 public class MiscSolvers {
 
 	public static void main(String[] args) {
-		crammedCubeSimm();
+        simpleCubeRotationExplorer();
 	}
+
+    // Simple cube rotation explorer
+    public static void simpleCubeRotationExplorer() {
+        String turns = "[" +
+            "(4,3,2,1)," +   // X
+            "(6,3,5,1)," +   // Y
+            "(1,2,3,4)," +   // X'
+            "(1,5,3,6)]";   // Y'
+            
+        String[] namesLookup = new String[] {
+            "X", "Y", "X'", "Y'"
+        };
+
+
+        GroupExplorer groudp = new GroupExplorer(turns, MemorySettings.COMPACT,
+            new HashSet<>(), new HashSet<>(), new HashSet<>(), false);
+        groudp.setTrackPath(true);
+        groudp.initIterativeExploration();
+
+        HashMap<State, Pair<State, Integer>> backtrack = new HashMap<>();
+
+        int counter[] = new int[2];
+
+        System.out.println((++counter[0]) + ":");
+
+        for (int i = 0; i < 10; i++) {
+            groudp.iterateExploration(false, 1000000, true, (states, depth) -> {
+                for (Object x : states) {
+                    PeekData data = (PeekData) x;
+                    backtrack.put(data.newState, new Pair<>(data.oldState, data.operation));
+                    
+                    // Print out path
+                    State current = data.newState;
+                    String op = "";
+                    while (backtrack.containsKey(current)) {
+                        Pair<State, Integer> d = backtrack.get(current);
+                        op = namesLookup[d.getValue()] + " " + op;
+                        current = d.getKey();
+                    }
+                    System.out.println((++counter[0]) + ": " + op);
+                }
+            });
+        }
+
+        System.out.println("Order: " + groudp.order());
+    }
 
     // Simplified version with just l3_3 stickers
     public static void triskellion_l3_3() {
