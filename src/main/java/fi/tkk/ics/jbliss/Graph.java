@@ -18,7 +18,7 @@ import java.util.*;
  * @author Tommi Junttila
  */
 public class Graph<V extends Comparable>
-    implements Comparable
+    implements Comparable, AbstractGraph<V>
 {
     /* Intermediate translator stuff for mapping
        bliss automorphisms back to jbliss automorphisms */

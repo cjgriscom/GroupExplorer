@@ -52,7 +52,7 @@ public class PlanarStudy {
         boolean discardOverGenus1 = true; // If not requiring planar, this will discard graphs with genus > 1
         int enforceLoopMultiples = 1; // For planar grid stuff, set to 1 for normal operation
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
-        int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
+        int repetitions = 2; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
 
@@ -62,7 +62,7 @@ public class PlanarStudy {
 
         // Either use a complete description like "6p 3-cycles" or a partial description like "5-cycles" for 5-cycles only
         String[] conj = new String[] {
-            "quadruple 3-cycles",  "quadruple 3-cycles"
+            "3-cycles",  "3-cycles"
         };
         // For phase 1, we use two different files (indices 0 and 1).
         int[] phase1Indices = new int[]{0,1};
@@ -96,6 +96,7 @@ public class PlanarStudy {
                       !groupName.startsWith("u4_3_") &&
                       !groupName.startsWith("o8p2") &&
                       !groupName.startsWith("o8m2") &&
+                      !groupName.startsWith("we8") &&
                       !groupName.startsWith("hs") &&
                       !groupName.startsWith("mcl") &&
                       !groupName.startsWith("co3") &&
@@ -263,7 +264,7 @@ public class PlanarStudy {
                 String canonicalLabeling = null;
 
                 // Check for isomorphic duplicates.
-                fi.tkk.ics.jbliss.Digraph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(combinedPair, directed);
+                fi.tkk.ics.jbliss.AbstractGraph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(combinedPair, directed);
                 canonicalLabeling = getCanonicalGraph(jblissGraph);
                 if (canonicalGraphs.contains(canonicalLabeling)) {
                     continue;
@@ -359,7 +360,7 @@ public class PlanarStudy {
 
                     // Check for isomorphic duplicates.
                     String canonicalLabeling = null;
-                    fi.tkk.ics.jbliss.Digraph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(newCandidate, directed);
+                    fi.tkk.ics.jbliss.AbstractGraph<Integer> jblissGraph = buildJblissGraphFromCombinedGen(newCandidate, directed);
                     canonicalLabeling = getCanonicalGraph(jblissGraph);
                     if (canonicalGraphs.contains(canonicalLabeling)) {
                         continue;
@@ -530,8 +531,20 @@ public class PlanarStudy {
         return graph;
     }
 
-    public static fi.tkk.ics.jbliss.Digraph<Integer> buildJblissGraphFromCombinedGen(int[][][] combinedGen, boolean directed) {
-        fi.tkk.ics.jbliss.Digraph<Integer> graph = new fi.tkk.ics.jbliss.Digraph<Integer>();
+    public static fi.tkk.ics.jbliss.AbstractGraph<Integer> buildJblissGraphFromCombinedGen(int[][][] combinedGen, boolean directed) {
+        // check if all 2-cycles
+        boolean all2Cycles = true;
+        for (int[][] cycle : combinedGen) {
+            for (int[] polygon : cycle) {
+                if (polygon.length != 2) {
+                    all2Cycles = false;
+                    break;
+                }
+            }
+        }
+        if (all2Cycles) directed = false;
+        fi.tkk.ics.jbliss.AbstractGraph<Integer> graph =
+            directed ? new fi.tkk.ics.jbliss.Digraph<Integer>() : new fi.tkk.ics.jbliss.Graph<Integer>();
         for (int[][] cycle : combinedGen) {
             for (int[] polygon : cycle) {
                 for (int i = 0; i < polygon.length; i++) {
@@ -546,7 +559,7 @@ public class PlanarStudy {
         return graph;
     }
 
-    public static String getCanonicalGraph(fi.tkk.ics.jbliss.Digraph<Integer> graph) {
+    public static String getCanonicalGraph(fi.tkk.ics.jbliss.AbstractGraph<Integer> graph) {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         PrintStream ps = new PrintStream(baos);
         DefaultReporter reporter = new DefaultReporter();
