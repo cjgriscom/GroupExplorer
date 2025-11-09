@@ -91,37 +91,47 @@ public class Trapentrix {
 		return list.toString();
 	}
 	
+	public static class SolveOpts {
+		public final boolean ignoreFirstOrbit;
+		public final boolean ignoreSecondOrbit;
+		public final boolean ignoreGrips;
+		public SolveOpts(boolean ignoreFirstOrbit, boolean ignoreSecondOrbit, boolean ignoreGrips) {
+			this.ignoreFirstOrbit = ignoreFirstOrbit;
+			this.ignoreSecondOrbit = ignoreSecondOrbit;
+			this.ignoreGrips = ignoreGrips;
+		}
+	}
 	private Stack<Move> solveState = new Stack<>();
 	private Function<Stack<Move>, Boolean> onSolutionFound;
-	public Stack<Move> trySolve(int maxDepth, Function<Stack<Move>, Boolean> onSolutionFound) {
+	public Stack<Move> trySolve(int maxDepth, SolveOpts solveOpts, Function<Stack<Move>, Boolean> onSolutionFound) {
 		solveState.clear();
 		this.onSolutionFound = onSolutionFound;
-		if (solve(maxDepth)) return solveState;
+		if (solve(maxDepth, solveOpts)) return solveState;
 		return null;
 	}
-	private boolean solve(int maxDepth) {
-		if (solved() && onSolutionFound.apply(solveState)) return true;
+	private boolean solve(int maxDepth, SolveOpts solveOpts) {
+		if (solved(solveOpts) && onSolutionFound.apply(solveState)) return true;
 		if (maxDepth == 0) return false;
 		maxDepth--;
 		if (solveState.isEmpty() || solveState.peek() == grip2Down || solveState.peek() == grip2Up) {
 			move(grip1Down);
 			solveState.push(grip1Down);
-			if (solve(maxDepth)) return true;
+			if (solve(maxDepth, solveOpts)) return true;
 			move(grip1Down);
 			solveState.pop(); 
 			solveState.push(grip1Up);
-			if (solve(maxDepth)) return true;
+			if (solve(maxDepth, solveOpts)) return true;
 			move(grip1Down);
 			solveState.pop(); 
 		}
 		if (solveState.isEmpty() || solveState.peek() == grip1Down || solveState.peek() == grip1Up) {
 			move(grip2Down);
 			solveState.push(grip2Down);
-			if (solve(maxDepth)) return true;
+			if (solve(maxDepth, solveOpts)) return true;
 			move(grip2Down);
 			solveState.pop(); 
 			solveState.push(grip2Up);
-			if (solve(maxDepth)) return true;
+			if (solve(maxDepth, solveOpts)) return true;
 			move(grip2Down);
 			solveState.pop(); 
 		}
@@ -191,9 +201,13 @@ public class Trapentrix {
 		state[loc.ordinal()] = newPiece;
 	}
 	
-	public boolean solved() {
-		if (Math.abs(g1Rotations) % 3 != 0 || Math.abs(g2Rotations) % 3 != 0) return false;
+	public boolean solved(SolveOpts solveOpts) {
+		if (!solveOpts.ignoreGrips) {
+			if (Math.abs(g1Rotations) % 3 != 0 || Math.abs(g2Rotations) % 3 != 0) return false;
+		}
 		for (int i= 0; i < reference.length; i++) {
+			if (solveOpts.ignoreSecondOrbit && reference[i].isSecondOrbit()) continue;
+			if (solveOpts.ignoreFirstOrbit && !reference[i].isSecondOrbit()) continue;
 			if (!reference[i].equals(state[i])) return false;
 		}
 		return true;
@@ -256,6 +270,9 @@ public class Trapentrix {
 		Piece(char color, String altName) {
 			this.color = color;
 			this.altName = altName;
+		}
+		public boolean isSecondOrbit() {
+			return altName.trim().isEmpty();
 		}
 	}
 }

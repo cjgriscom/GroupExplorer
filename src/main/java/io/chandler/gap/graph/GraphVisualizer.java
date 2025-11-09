@@ -2,6 +2,7 @@ package io.chandler.gap.graph;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -26,6 +27,7 @@ import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayoutMulti;
 import io.chandler.gap.graph.layoutalgos.ConcentricConstrainedLayout;
 import io.chandler.gap.graph.layoutalgos.GridLayout;
 import io.chandler.gap.graph.layoutalgos.Java3D;
+import io.chandler.gap.graph.layoutalgos.SATLayout;
 import io.chandler.gap.graph.layoutalgos.JavaNetworkx;
 import io.chandler.gap.graph.layoutalgos.JavaSpring;
 import io.chandler.gap.graph.layoutalgos.LayoutAlgo;
@@ -41,6 +43,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.BorderPane;
@@ -56,6 +59,12 @@ import javafx.stage.Stage;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.beans.binding.Bindings;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import javafx.application.Platform;
 
 public class GraphVisualizer extends Application {
 
@@ -80,11 +89,15 @@ public class GraphVisualizer extends Application {
     private ComboBox<String> layoutChoiceBox;
 	private Label numSharedLinesLabel;
     private Button genusButton;
+    private Button autButton;
     private Label fitLabel;
     // New checkbox to toggle the display of circles
     private CheckBox showCirclesCheckBox;
     private CheckBox showFittedNodesCheckBox;
     private CheckBox allSolutionsCheckBox;
+    private CheckBox showSquareGridCheckBox;
+    private CheckBox showHexGridCheckBox; // triangular lattice of points
+    private CheckBox showHoneycombGridCheckBox; // hexagonal honeycomb outlines
     // Trackball rotation state (accumulated 3x3 rotation matrix) and last sphere vector
     private double[][] trackballRotation = new double[][] { {1,0,0}, {0,1,0}, {0,0,1} };
     private Double lastMouseX = null;
@@ -113,6 +126,7 @@ public class GraphVisualizer extends Application {
         layoutAlgoMap.put("Java Networkx", new JavaNetworkx());
         layoutAlgoMap.put("Axis Constrained", new AxisConstrainedLayout());
         layoutAlgoMap.put("Axis Constrained Multi", new AxisConstrainedLayoutMulti());
+        layoutAlgoMap.put("SAT Layout", new SATLayout());
         layoutAlgoMap.put("Planar Puzzle", new ConcentricConstrainedLayout());
         layoutAlgoMap.put("Grid Solver", new GridLayout());
     }
@@ -209,6 +223,7 @@ public class GraphVisualizer extends Application {
 
         numSharedLinesLabel = new Label("Shared Lines: 0");
         genusButton = new Button("Genus: ?");
+        autButton = new Button("Aut: ?");
         fitLabel = new Label("");
 
         // Create a trackball control for full 3D rotation.
@@ -318,6 +333,20 @@ public class GraphVisualizer extends Application {
         showCirclesCheckBox = new CheckBox("Show Circles");
         showCirclesCheckBox.setSelected(true);
 
+        showSquareGridCheckBox = new CheckBox("Show Square Grid");
+        showSquareGridCheckBox.setSelected(false);
+        showSquareGridCheckBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
+
+        // Triangular lattice of points.
+        showHexGridCheckBox = new CheckBox("Show Triangular Grid");
+        showHexGridCheckBox.setSelected(false);
+        showHexGridCheckBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
+
+        // Hexagonal honeycomb outlines.
+        showHoneycombGridCheckBox = new CheckBox("Show Hexagonal Grid");
+        showHoneycombGridCheckBox.setSelected(false);
+        showHoneycombGridCheckBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
+
         showDirectionCheckBox = new CheckBox("Show Direction");
         showDirectionCheckBox.setSelected(false); // Default to not showing direction
         showDirectionCheckBox.setOnAction(e -> updateGraph(graphPane, pageLabel));
@@ -362,6 +391,9 @@ public class GraphVisualizer extends Application {
             hLabel, hTextField,
             solutionLabel, solutionBox,
             showCirclesCheckBox,
+            showSquareGridCheckBox,
+            showHexGridCheckBox,
+            showHoneycombGridCheckBox,
             showDirectionCheckBox,
             showFittedNodesCheckBox,
             allSolutionsCheckBox,
@@ -447,7 +479,11 @@ public class GraphVisualizer extends Application {
             });
         });
 
-        paginator.getChildren().addAll(removeDupButton, removeFoldedButton, filterShareButton, numSharedLinesLabel, genusButton, fitLabel);
+        Button filterByFitButton = new Button("Filter by Fit");
+        filterByFitButton.setOnAction(e -> showFilterByFitDialog(primaryStage, pageLabel));
+
+        paginator.getChildren().addAll(removeDupButton, removeFoldedButton, filterShareButton,
+                filterByFitButton, numSharedLinesLabel, genusButton, autButton, fitLabel);
 
         root.setBottom(paginator);
 
@@ -524,7 +560,9 @@ public class GraphVisualizer extends Application {
         int maxVertex = 0;
         for (int[][] cycle : generator) {
             for (int[] polygon : cycle) {
-                maxVertex = Math.max(maxVertex, polygon[polygon.length - 1]);
+                if (polygon.length > 0) {
+                    maxVertex = Math.max(maxVertex, polygon[polygon.length - 1]);
+                }
             }
         }
         
@@ -537,6 +575,33 @@ public class GraphVisualizer extends Application {
             MultiGenus.MultiGenusOption.LIMIT_TO_GENUS_1).get(0) + "";
         
         genusButton.setText("Genus: " + (genus.equals("-1") ? ">= 2" : genus));
+
+        // --- Automorphism group size readout ---
+        // Auto-compute |Aut(G)| if the graph is reasonably small; otherwise wait for button press.
+        if (maxVertex > 0 && maxVertex < 150) {
+            try {
+                BigInteger autOrder = GraphSymm.automorphismGroupOrder(generator, false);
+                autButton.setText("Aut: " + autOrder);
+            } catch (RuntimeException ex) {
+                autButton.setText("Aut: err");
+            }
+        } else {
+            autButton.setText("Aut: ?");
+        }
+
+        // Allow the user to (re)compute |Aut(G)| on demand, even for large graphs.
+        autButton.setOnAction(e -> {
+            try {
+                BigInteger autOrder = GraphSymm.automorphismGroupOrder(generator, false);
+                autButton.setText("Aut: " + autOrder);
+            } catch (RuntimeException ex) {
+                Alert alert = new Alert(Alert.AlertType.ERROR);
+                alert.setTitle("Automorphism computation failed");
+                alert.setHeaderText("Failed to compute |Aut(G)|");
+                alert.setContentText(ex.getMessage());
+                alert.showAndWait();
+            }
+        });
 
         // Allow the user to recompute the genus with no limit
         genusButton.setOnAction((e) -> {
@@ -724,6 +789,7 @@ public class GraphVisualizer extends Application {
         // Draw nodes with interactive dragging.
         Map<Integer, Circle> vertexCircleMap = new HashMap<>();
         Map<Integer, Text> vertexLabelMap = new HashMap<>();
+        int i = 0;
         for (Map.Entry<Integer, double[]> entry : positions.entrySet()) {
             int vertex = entry.getKey();
             double[] pos = entry.getValue();
@@ -735,7 +801,8 @@ public class GraphVisualizer extends Application {
 			// Set opacity
 			color = Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.5);
             circle.setFill(color);
-            Text text = new Text(pos[0] - NODE_RADIUS/2, pos[1] + NODE_RADIUS/2, vertex+"");
+            // Show the vertex label inside the circle.
+            Text text = new Text(pos[0] - NODE_RADIUS/2, pos[1] + NODE_RADIUS/2, String.valueOf(vertex));
             vertexCircleMap.put(vertex, circle);
             vertexLabelMap.put(vertex, text);
 
@@ -865,6 +932,8 @@ public class GraphVisualizer extends Application {
         
         if (positions != null) {
             graphPane.getChildren().clear();
+            // Draw background grid (if enabled) behind all other elements.
+            drawBackgroundGrid(graphPane);
             // Reset directed arrows so they can be re-created
             directedArrows = new ArrayList<>();
             // Update paginator display (keep text field and total in sync)
@@ -874,7 +943,7 @@ public class GraphVisualizer extends Application {
                 pageIndexTextField.setText(graphIdxString);
             }
             // Printthe generator
-            System.out.println("Generator: " + currentLine);
+            //System.out.println("Generator: " + currentLine);
             pageLabel.setText(" / " + graphLines.size());
             drawPlanarGraph(currentGraph, graphPane, currentLine, positions);
         }
@@ -944,10 +1013,51 @@ public class GraphVisualizer extends Application {
         for (ShadedPolygonWrapper wrapper : shadedPolys) {
             javafx.scene.shape.Polygon poly = wrapper.polygon;
             poly.getPoints().clear();
-            for (int vertex : wrapper.vertices) {
-                Circle c = vertexCircleMap.get(vertex);
-                if (c != null) {
-                    poly.getPoints().addAll(c.getCenterX(), c.getCenterY());
+            
+            if (wrapper.vertices.length == 2) {
+                // Handle length-2 polygons (lines) - recreate the quadrilateral
+                int a = wrapper.vertices[0];
+                int b = wrapper.vertices[1];
+                Circle sourceCircle = vertexCircleMap.get(a);
+                Circle targetCircle = vertexCircleMap.get(b);
+                
+                if (sourceCircle != null && targetCircle != null) {
+                    double[] sourcePos = {sourceCircle.getCenterX(), sourceCircle.getCenterY()};
+                    double[] targetPos = {targetCircle.getCenterX(), targetCircle.getCenterY()};
+                    
+                    // Calculate the direction vector of the line
+                    double dx = targetPos[0] - sourcePos[0];
+                    double dy = targetPos[1] - sourcePos[1];
+                    double length = Math.sqrt(dx * dx + dy * dy);
+                    
+                    // Normalize the direction vector
+                    double nx = dx / length;
+                    double ny = dy / length;
+                    
+                    // Calculate the perpendicular vector with a thin margin
+                    double px = -ny * graphPane.getWidth() / 200;
+                    double py = nx * graphPane.getWidth() / 200;
+                    
+                    // Define the four corners of the quadrilateral
+                    double[] p1 = {sourcePos[0] + px, sourcePos[1] + py};
+                    double[] p2 = {sourcePos[0] - px, sourcePos[1] - py};
+                    double[] p3 = {targetPos[0] - px, targetPos[1] - py};
+                    double[] p4 = {targetPos[0] + px, targetPos[1] + py};
+                    
+                    poly.getPoints().addAll(
+                        p1[0], p1[1],
+                        p2[0], p2[1],
+                        p3[0], p3[1],
+                        p4[0], p4[1]
+                    );
+                }
+            } else {
+                // Normal polygon - just add vertex positions
+                for (int vertex : wrapper.vertices) {
+                    Circle c = vertexCircleMap.get(vertex);
+                    if (c != null) {
+                        poly.getPoints().addAll(c.getCenterX(), c.getCenterY());
+                    }
                 }
             }
         }
@@ -1185,5 +1295,259 @@ public class GraphVisualizer extends Application {
 
         // Update the observable list with the required arguments
         requiredArgs.setAll(algo.getArgs());
+    }
+
+    /**
+     * Draws a faint background grid (square and/or hexagonal) behind the graph.
+     * The grid density is chosen so that there are at least roughly 300 grid points
+     * across the current pane area.
+     */
+    private void drawBackgroundGrid(Pane pane) {
+        if ((showSquareGridCheckBox == null || !showSquareGridCheckBox.isSelected()) &&
+            (showHexGridCheckBox == null || !showHexGridCheckBox.isSelected()) &&
+            (showHoneycombGridCheckBox == null || !showHoneycombGridCheckBox.isSelected())) {
+            return;
+        }
+
+        double width = pane.getWidth();
+        double height = pane.getHeight();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+
+        // Target number of visible grid points; overshoot a bit to stay safely above 300.
+        double targetPoints = 400.0;
+        double area = width * height;
+        // Base spacing estimate assuming a square grid: area / spacing^2 ≈ targetPoints.
+        double baseSpacing = Math.sqrt(area / targetPoints);
+        // Keep spacing within a reasonable pixel range.
+        double spacing = clamp(baseSpacing, 15.0, 80.0);
+
+        if (showSquareGridCheckBox != null && showSquareGridCheckBox.isSelected()) {
+            drawSquareGrid(pane, width, height, spacing);
+        }
+        if (showHexGridCheckBox != null && showHexGridCheckBox.isSelected()) {
+            drawTriangularGrid(pane, width, height, spacing);
+        }
+        if (showHoneycombGridCheckBox != null && showHoneycombGridCheckBox.isSelected()) {
+            drawHoneycombGrid(pane, width, height, spacing);
+        }
+    }
+
+    private void drawSquareGrid(Pane pane, double width, double height, double spacing) {
+        Color pointColor = Color.GRAY.deriveColor(0, 1, 1, 0.6);
+        int cols = (int) Math.ceil(width / spacing);
+        int rows = (int) Math.ceil(height / spacing);
+        double radius = 1.5;
+        for (int i = 0; i <= cols; i++) {
+            double x = i * spacing;
+            for (int j = 0; j <= rows; j++) {
+                double y = j * spacing;
+                Circle c = new Circle(x, y, radius, pointColor);
+                c.setStroke(null);
+                pane.getChildren().add(c);
+            }
+        }
+    }
+
+    // Triangular lattice of points (hexagonal packing) – "triangular grid" mode.
+    private void drawTriangularGrid(Pane pane, double width, double height, double spacing) {
+        Color pointColor = Color.GRAY.deriveColor(0, 1, 1, 0.6);
+        // For a hexagonal (triangular) lattice, vertical spacing between rows.
+        double rowHeight = spacing * Math.sqrt(3) / 2.0;
+        int rows = (int) Math.ceil(height / rowHeight) + 1;
+        int cols = (int) Math.ceil(width / spacing) + 1;
+        double radius = 1.7;
+        for (int row = 0; row <= rows; row++) {
+            double y = row * rowHeight;
+            double xOffset = (row % 2 == 0) ? 0.0 : spacing / 2.0;
+            for (int col = 0; col <= cols; col++) {
+                double x = xOffset + col * spacing;
+                if (x > width + spacing) {
+                    break;
+                }
+                Circle c = new Circle(x, y, radius, pointColor);
+                c.setStroke(null);
+                pane.getChildren().add(c);
+            }
+        }
+    }
+
+    // Hexagonal honeycomb outlines – "hexagonal grid" mode.
+    // Uses a standard pointy-top axial hex layout so neighboring cells share full edges.
+    private void drawHoneycombGrid(Pane pane, double width, double height, double spacing) {
+        Color lineColor = Color.GRAY.deriveColor(0, 1, 1, 0.5);
+
+        // Use spacing to derive hex corner radius.
+        double r = spacing / 2.0; // center-to-corner
+
+        // Axial coordinate to pixel for pointy-top hexes (see redblobgames):
+        // x = r * sqrt(3) * (q + r/2)
+        // y = r * 3/2 * rIdx
+        double sqrt3 = Math.sqrt(3.0);
+
+        // Choose coordinate ranges large enough to cover the pane.
+        int qMax = (int) Math.ceil(width / (r * sqrt3)) + 2;
+        int rMax = (int) Math.ceil(height / (r * 1.5)) + 2;
+
+        for (int rIdx = -rMax; rIdx <= rMax; rIdx++) {
+            for (int qIdx = -qMax; qIdx <= qMax; qIdx++) {
+                double cx = r * sqrt3 * (qIdx + rIdx / 2.0);
+                double cy = r * 1.5 * rIdx;
+
+                // Center the lattice in the pane.
+                cx += width / 2.0;
+                cy += height / 2.0;
+
+                // Cull hexes completely outside the view (with a small margin).
+                double margin = r;
+                if (cx + margin < 0 || cx - margin > width ||
+                    cy + margin < 0 || cy - margin > height) {
+                    continue;
+                }
+
+                javafx.scene.shape.Polygon hex = new javafx.scene.shape.Polygon();
+                for (int k = 0; k < 6; k++) {
+                    double angle = Math.toRadians(60 * k - 30); // pointy-top orientation
+                    double vx = cx + r * Math.cos(angle);
+                    double vy = cy + r * Math.sin(angle);
+                    hex.getPoints().addAll(vx, vy);
+                }
+                hex.setFill(null);
+                hex.setStroke(lineColor);
+                hex.setStrokeWidth(0.5);
+                pane.getChildren().add(hex);
+            }
+        }
+    }
+
+    private void showFilterByFitDialog(Stage owner, Label pageLabel) {
+        if (graphLines == null || graphLines.isEmpty()) return;
+
+        LayoutAlgo satAlgo = layoutAlgoMap.get("SAT Layout");
+        if (satAlgo == null) return;
+        EnumMap<LayoutAlgoArg, Double> args = getArgs(satAlgo);
+        int iterations = args.get(LayoutAlgoArg.ITERS).intValue();
+        long seed = args.get(LayoutAlgoArg.SEED).longValue();
+        int tries = args.get(LayoutAlgoArg.TRIES).intValue();
+        int initialIters = args.get(LayoutAlgoArg.INITIAL_ITERS).intValue();
+        double repulsionFactor = args.get(LayoutAlgoArg.REPULSION_FACTOR);
+
+        List<String> linesToProcess = new ArrayList<>(graphLines);
+        int total = linesToProcess.size();
+
+        Stage dialog = new Stage();
+        dialog.initOwner(owner);
+        dialog.setTitle("Filter by Fit (" + total + " generators)");
+
+        ObservableList<String> resultItems = FXCollections.observableArrayList();
+        ListView<String> listView = new ListView<>(resultItems);
+        listView.setPrefHeight(400);
+        listView.setPrefWidth(700);
+
+        Label progressLabel = new Label("0 / " + total + " completed");
+        Button stopButton = new Button("Stop");
+        TextField keepBelowField = new TextField("0.2");
+        keepBelowField.setPrefWidth(80);
+        Button applyFilterButton = new Button("Keep Below");
+
+        HBox controlBar = new HBox(10, progressLabel, stopButton,
+                new Label("Threshold:"), keepBelowField, applyFilterButton);
+        controlBar.setStyle("-fx-padding: 5; -fx-alignment: center-left;");
+
+        VBox dialogRoot = new VBox(5, controlBar, listView);
+        dialogRoot.setStyle("-fx-padding: 10;");
+
+        dialog.setScene(new Scene(dialogRoot, 720, 480));
+
+        // Shared mutable state for results
+        List<double[]> fitResults = Collections.synchronizedList(new ArrayList<>());
+        // fitResults entries: [fit, originalIndex]
+
+        int nThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+        ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+        AtomicInteger completed = new AtomicInteger(0);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < total; i++) {
+            final int idx = i;
+            final String line = linesToProcess.get(i);
+            futures.add(executor.submit(() -> {
+                if (Thread.currentThread().isInterrupted()) return;
+                double fit = SATLayout.computeFitOnly(line, iterations, seed, tries, initialIters, repulsionFactor);
+                fitResults.add(new double[]{fit, idx});
+                int done = completed.incrementAndGet();
+                if (done % Math.max(1, total / 100) == 0 || done == total) {
+                    Platform.runLater(() -> refreshFitList(resultItems, fitResults, linesToProcess, progressLabel, done, total));
+                }
+            }));
+        }
+
+        stopButton.setOnAction(ev -> {
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+            stopButton.setDisable(true);
+            stopButton.setText("Stopped");
+            Platform.runLater(() -> refreshFitList(resultItems, fitResults, linesToProcess, progressLabel, completed.get(), total));
+        });
+
+        applyFilterButton.setOnAction(ev -> {
+            double threshold;
+            try {
+                threshold = Double.parseDouble(keepBelowField.getText().trim());
+            } catch (NumberFormatException ex) {
+                return;
+            }
+            // Stop if still running
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+
+            // Build filtered list preserving fit-sorted order
+            List<double[]> snapshot;
+            synchronized (fitResults) {
+                snapshot = new ArrayList<>(fitResults);
+            }
+            snapshot.sort((a, b) -> Double.compare(a[0], b[0]));
+
+            List<String> filtered = new ArrayList<>();
+            for (double[] entry : snapshot) {
+                if (entry[0] < threshold) {
+                    filtered.add(linesToProcess.get((int) entry[1]));
+                }
+            }
+            graphLines = filtered;
+            currentGraphIndex = 0;
+            if (!graphLines.isEmpty()) {
+                updateGraph(graphPane, pageLabel);
+                updateGraphInfo(graphLines.get(currentGraphIndex));
+            } else {
+                graphPane.getChildren().clear();
+            }
+            pageLabel.setText(" / " + graphLines.size());
+            pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
+            dialog.close();
+        });
+
+        dialog.setOnCloseRequest(ev -> {
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+        });
+
+        dialog.show();
+    }
+
+    private static void refreshFitList(ObservableList<String> items, List<double[]> fitResults,
+            List<String> lines, Label progressLabel, int done, int total) {
+        List<double[]> snapshot;
+        synchronized (fitResults) {
+            snapshot = new ArrayList<>(fitResults);
+        }
+        snapshot.sort((a, b) -> Double.compare(a[0], b[0]));
+        List<String> display = new ArrayList<>(snapshot.size());
+        for (double[] entry : snapshot) {
+            display.add(String.format("%.6f  |  %s", entry[0], lines.get((int) entry[1])));
+        }
+        items.setAll(display);
+        progressLabel.setText(done + " / " + total + " completed");
     }
 }

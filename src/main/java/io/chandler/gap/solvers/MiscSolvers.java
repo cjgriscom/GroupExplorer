@@ -18,8 +18,103 @@ import javafx.util.Pair;
 public class MiscSolvers {
 
 	public static void main(String[] args) {
-        simpleCubeRotationExplorer();
+        trapentrixSimm();
 	}
+
+
+    public static void trapentrixSimm() {
+        // Red
+        // Y W
+        // Blue
+         // Distant state: (2,5)(3,7)(6,9)(10,12)
+          //  R' L' R' L R' L R L R' L R' L R L' R L R' L'
+
+        String turns = "[" +
+            "(1,2,3)(4,5,6)(7,8,9)(10,11,12)(21,20,19)(25,26,27)(29,30,31)," +   // LD
+            "(2,13,14)(3,6,15)(7,16,10)(17,18,8)(24,23,22)(27,26,28)(31,32,33)," +   // RU
+            "(3,2,1)(6,5,4)(9,8,7)(12,11,10)(19,20,21)(27,26,25)(31,30,29)," +   // LU
+            "(14,13,2)(15,6,3)(10,16,7)(8,18,17)(22,23,24)(28,26,27)(33,32,31)]";    // RD
+        // Fix 13,5,12,21,20,19,24,23,22 Swap 17,18
+
+        String[] namesLookup = new String[] {
+            "LD", "RU", "LU", "RD"
+        };
+        String[] inverseNamesLookup = new String[] {
+            "LU", "RD", "LD", "RU"
+        };
+
+        int[][][] g = GroupExplorer.parseOperationsArr(turns);
+
+        // Now g contains the full puzzle generator
+
+        GroupExplorer group = new GroupExplorer(
+            GroupExplorer.generatorsToString(g),
+            MemorySettings.COMPACT,
+            new HashSet<>(), new HashSet<>(), new HashSet<>(), true);
+        // I want to iteratively explore states until I find a match to this state:
+        // Zeroes should be ignored in comparison
+
+        // Fix 13,5,12,21,20,19,24,23,22 Swap 17,18
+       // int[] stateMatch = { 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24};
+        int[] stateMatch =   { 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,13,14,15,16,17,18,19,20,21,22,23,24,0,0,0,0  ,   0,0,0,0,0};
+
+        group.setTrackPath(true);
+        group.initIterativeExploration();
+
+        /*
+        group.applyOperation(0);
+        System.out.println(Arrays.toString(group.copyCurrentState()));
+        System.exit(0);*/
+
+        ArrayList<int[]> matchingStates = new ArrayList<>();
+
+        System.out.println(Arrays.toString(stateMatch));
+        System.out.println(Arrays.toString(group.copyCurrentState()));
+
+        HashMap<State, Pair<State, Integer>> backtrack = new HashMap<>();
+
+        while (matchingStates.size() < 100) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {}
+
+            group.iterateExploration(false, 300_000_000, true, (states, depth) -> {
+                for (Object x : states) {
+                    PeekData data = (PeekData) x;
+                    backtrack.put(data.newState, new Pair<>(data.oldState, data.operation));
+                    int[] state = data.newState.state();
+                    boolean matches = true;
+                    for (int i = 0; i < state.length; i++) {
+                        if (stateMatch[i] != 0 && state[i] != stateMatch[i]) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (matches) {
+                        System.out.println(GroupExplorer.stateToNotation(state));
+                        System.out.println(GroupExplorer.describeState(18, state));
+                        matchingStates.add(state);
+                        // Figure out path
+                        State current = State.of(state, group.nElements, group.mem);
+                        String op = "";
+                        String inverseOp = "";
+                        while (backtrack.containsKey(current)) {
+                            Pair<State, Integer> d = backtrack.get(current);
+                            op = namesLookup[d.getValue()] + " " + op;
+                            inverseOp = inverseOp + " " + inverseNamesLookup[d.getValue()];
+                            current = d.getKey();
+                        }
+                        System.out.println("Fwd: " + op);
+                        System.out.println("Inv: " + inverseOp);
+                        System.out.println(Arrays.toString(state));
+                    }
+                }
+            });
+            System.out.println(group.getIteration() + " " + group.order());
+
+        }
+
+    }
 
     // Simple cube rotation explorer
     public static void simpleCubeRotationExplorer() {

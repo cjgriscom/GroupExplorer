@@ -2,6 +2,7 @@ package io.chandler.gap.graph.layoutalgos;
 
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Random;
 
@@ -60,6 +61,21 @@ public class Java3D extends LayoutAlgo {
 
     @Override
     public Map<Integer, double[]> getResult() {
+        double[][] hardcodedArray = {
+            {360.90859981719836, 515.7404984597775, 125.87484565231426},
+            {463.6118896808394, 67.2, 203.47115590124963},
+            {604.8000000000001, 379.5651192368765, 250.80036702331},
+            {67.2, 222.30045267686796, 376.20381520653876},
+            {220.13120372586127, 200.52542771043233, 67.2},
+            {454.1852192906288, 396.449776360985, 564.7365560594545},
+            {303.29364573799444, 83.53995790754988, 510.56212356162837},
+            {204.88310486357307, 533.8382082347607, 438.83854179988793}
+        };
+        int indices[] = {16, 9, 10, 11, 12, 13, 14, 15};
+        Map<Integer, double[]> result = new HashMap<>();
+        for (int i = 0; i < indices.length; i++) {
+            result.put(indices[i], hardcodedArray[i]);
+        }
         return result;
     }
 

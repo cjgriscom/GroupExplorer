@@ -31,10 +31,11 @@ import io.chandler.gap.render.SnubDodecahedron;
 public class FullSelectionSearch {
 	public static void main(String[] args) throws Exception{
         //runRhombicDodecahedralSearch();
-		runDodecahedralSearch();
+		//runDodecahedralSearch();
         //runRhombicTriacontahedralSearch();
 		//runPentagonalIcositrahedralSearch();
         //runPentagonalHexecontahedralSearch();
+        runPseudorhombicubooctahedronEdgeSearch();
 	}
 
 
@@ -126,6 +127,71 @@ public class FullSelectionSearch {
 	}
 
 
+    static FullSelectionSearch getPseudorhombicubooctahedronEdgeSearch(boolean considerReverse, boolean reduceMirror) {
+
+        // Raw from puzzle-explorer-rs
+        String axesRaw = "[(4,26,46)(12,35,57),(35,86,106)(46,74,96),(96,141,160)(106,128,151),(4,160,180)(57,151,192),(141,226,247)(180,265,237),(12,247,281)(192,237,292),(26,281,332)(74,292,322),(86,322,265)(128,332,226)]";
+        String symmRaw = "[(4,35,96,151)(12,74,128,180)(26,86,141,192)(46,106,160,57)(226,237,281,322)(247,292,332,265),(4,332)(12,74)(35,292)(46,281)(57,322)(86,192)(96,247)(106,237)(128,180)(151,265)(160,226),(4,265)(12,128)(26,86)(35,332)(46,322)(57,226)(96,292)(106,281)(141,192)(151,247)(160,237)]";
+
+        int[][][] axesParsed = GroupExplorer.parseOperationsArr(axesRaw);
+        int[][][] symmParsed = GroupExplorer.parseOperationsArr(symmRaw);
+
+        // Indices are too big for Generator class, so renumber everything simultaneously
+        int[][][] combinedTmp = GroupExplorer.parseOperationsArr(GroupExplorer.renumberGeneratorNotation(axesRaw.substring(0, axesRaw.length() - 1) + "," + symmRaw.substring(1, symmRaw.length())));
+
+        System.out.println(GroupExplorer.generatorsToString(combinedTmp));
+        // Now piece out combinedTmp back into the proper lengths for axesParsed and symmParsed
+        axesParsed = Arrays.copyOfRange(combinedTmp, 0, axesParsed.length);
+        symmParsed = Arrays.copyOfRange(combinedTmp, axesParsed.length, combinedTmp.length);
+
+        // axesParsed[i] = 2 cycles of 3 elements for axis i (0-7)
+        int[][] axisCycles = new int[8][];
+        int[][][] axisFaces = new int[8][][];
+        for (int i = 0; i < 8; i++) {
+            axisCycles[i] = axesParsed[i][0];
+            axisFaces[i] = axesParsed[i];
+        }
+
+        Generator symmG = new Generator(symmParsed);
+        int elementsToStore = 20;
+        int maxGroupSize = 50000 + 2;
+
+        // Print generators to check
+        System.out.println(GroupExplorer.generatorsToString(axesParsed));
+        System.out.println(GroupExplorer.generatorsToString(symmParsed));
+
+        return new FullSelectionSearch(
+            symmG,
+            8,
+            1,
+            (i) -> axisCycles[i - 1].clone(),
+            (cycle) -> {
+                for (int a = 0; a < 8; a++) {
+                    for (int c = 0; c < 2; c++) {
+                        int[] face = axisFaces[a][c].clone();
+                        for (int r = 0; r < 3; r++) {
+                            if (Arrays.equals(face, cycle)) return (a + 1);
+                            if (Arrays.equals(CycleInverter.invertArray(face), cycle)) return -(a + 1);
+                            ArrayRotator.rotateRight(face);
+                        }
+                    }
+                }
+                throw new RuntimeException("No match for cycle " + Arrays.toString(cycle));
+            },
+            (generator) -> {
+                GroupExplorer group = new GroupExplorer(
+                    GroupExplorer.generatorsToString(GroupExplorer.renumberGenerators_fast(generator)),
+                    MemorySettings.FASTEST, new ParityStateCache(new LongStateCache(elementsToStore, 25)));
+                try {
+                    int iterations = group.exploreStates(false, maxGroupSize, null);
+                    if (iterations <= 0 || group.order() > maxGroupSize) return iterations;
+                } catch (Exception e) {
+                    return -2;
+                }
+                return group.order();
+            },
+            (i) -> axisFaces[i - 1]); // getFacesAboutVertex: 2 cycles per axis
+    }
 
 
     static FullSelectionSearch getIcosahedralSearch(boolean considerReverse, boolean reduceMirror) {
@@ -438,6 +504,20 @@ public class FullSelectionSearch {
 
     }
 
+    /** Pseudorhombicubooctahedron edges: 2x2, 3x2, 4x2 only (max 2 axes combined). */
+    public static void runPseudorhombicubooctahedronEdgeSearch() {
+        boolean considerReverse = true;
+        boolean reduceMirror = true;
+        FullSelectionSearch search = getPseudorhombicubooctahedronEdgeSearch(considerReverse, reduceMirror);
+
+        System.out.println("Searching for 2x2 selections");
+        search.exhaustiveMultiAxisSearch(2, 2, considerReverse, true);
+        System.out.println("Searching for 3x2 selections");
+        search.exhaustiveMultiAxisSearch(3, 2, considerReverse, true);
+        System.out.println("Searching for 4x2 selections");
+        search.exhaustiveMultiAxisSearch(4, 2, considerReverse, true);
+    }
+
 	public static void runPentagonalIcositrahedralSearch() throws IOException {
         Generator symmG = new Generator(GroupExplorer.parseOperationsArr(CubicGenerators.cubicPISymmetries_2));
 
@@ -539,17 +619,24 @@ public class FullSelectionSearch {
     Function<int[][][], Integer> groupChecker;
 
     Function<Integer, int[]> getFaceAboutVertex;
+    /** When non-null, each axis contributes multiple cycles to the generator. Used for pseudorhombicubooctahedron (2 cycles per axis). */
+    Function<Integer, int[][]> getFacesAboutVertex;
     Function<int[], Integer> getVertexFromFacesReversable;
 
     long cacheHits = 0, totalCacheChecks = 0;
 
     public FullSelectionSearch(Generator symmG, int nAxes, int initialAxis, Function<Integer, int[]> getFaceAboutVertex, Function<int[], Integer> getVertexFromFaces, Function<int[][][], Integer> groupChecker) {
+        this(symmG, nAxes, initialAxis, getFaceAboutVertex, getVertexFromFaces, groupChecker, null);
+    }
+
+    public FullSelectionSearch(Generator symmG, int nAxes, int initialAxis, Function<Integer, int[]> getFaceAboutVertex, Function<int[], Integer> getVertexFromFaces, Function<int[][][], Integer> groupChecker, Function<Integer, int[][]> getFacesAboutVertex) {
         this.symmG = symmG;
         this.nAxes = nAxes;
         this.initialAxis = initialAxis;
         this.getFaceAboutVertex = getFaceAboutVertex;
         this.getVertexFromFacesReversable = getVertexFromFaces;
         this.groupChecker = groupChecker;
+        this.getFacesAboutVertex = getFacesAboutVertex;
 
         HashSet<State> symm = new HashSet<>();
         GroupExplorer symmEx = new GroupExplorer(GroupExplorer.generatorsToString(symmG.generator()), MemorySettings.FASTEST, symm);
@@ -685,10 +772,21 @@ public class FullSelectionSearch {
             for (int i = 0; i < match.length; i++) {
                 generator[i] = new int[match[i].length][];
                 for (int j = 0; j < match[i].length; j++) {
-                    generator[i][j] = this.getFaceAboutVertex.apply(Math.abs(match[i][j])).clone();
-                    if (match[i][j] < 0) {
-                        generator[i][j] = reverseArray(generator[i][j]);
+                    int axis = Math.abs(match[i][j]);
+                    int[] face;
+                    if (getFacesAboutVertex != null) {
+                        int cycleIndex = 0;
+                        for (int k = 0; k < j; k++) {
+                            if (Math.abs(match[i][k]) == axis) cycleIndex++;
+                        }
+                        face = getFacesAboutVertex.apply(axis)[cycleIndex].clone();
+                    } else {
+                        face = getFaceAboutVertex.apply(axis).clone();
                     }
+                    if (match[i][j] < 0) {
+                        face = reverseArray(face);
+                    }
+                    generator[i][j] = face;
                 }
             }
 
@@ -815,27 +913,37 @@ public class FullSelectionSearch {
         
         if (onBoundary) {
             // Cull
+            int nCyclesPerAxis = getFacesAboutVertex != null ? getFacesAboutVertex.apply(1).length : 1;
             int[][][] generator = new int[completeGroups][][];
             int[][] axesSelectionsForCache = new int[completeGroups][];
             int[][] boundarySelection = new int[1][];
             int iCumulative = 0;
             for (int i = 0; i < generator.length; i++) {
                 int nAxesInGroup = axesPerSelection.get(i);
-                generator[i] = new int[nAxesInGroup][];
-                axesSelectionsForCache[i] = new int[nAxesInGroup];
-                // Boundary selection is the last axis group in the set
-                boundarySelection[0] = new int[nAxesInGroup];
+                int nCyclesInGroup = nAxesInGroup * nCyclesPerAxis;
+                generator[i] = new int[nCyclesInGroup][];
+                axesSelectionsForCache[i] = new int[nCyclesInGroup];
+                if (i == completeGroups - 1) {
+                    boundarySelection[0] = new int[nCyclesInGroup];
+                }
+                int cycleIdx = 0;
                 for (int j = 0; j < nAxesInGroup; j++) {
                     int selection = selections.get(iCumulative);
                     int axis = Math.abs(selection);
-                    int[] face = getFaceAboutVertex.apply(axis);
-                    if (selection < 0) {
-                        face = reverseArray(face);
+                    int[][] faces = getFacesAboutVertex != null ? getFacesAboutVertex.apply(axis) : new int[][]{getFaceAboutVertex.apply(axis)};
+                    for (int[] face : faces) {
+                        int[] faceToUse = selection < 0 ? reverseArray(face) : face.clone();
+                        generator[i][cycleIdx] = faceToUse;
+                        axesSelectionsForCache[i][cycleIdx] = selection;
+                        if (i == completeGroups - 1) {
+                            boundarySelection[0][cycleIdx] = selection;
+                        }
+                        cycleIdx++;
                     }
-                    generator[i][j] = face;
-                    axesSelectionsForCache[i][j] = selection;
                     iCumulative++;
-                    boundarySelection[0][j] = selection;
+                }
+                if (!isDisjointOperation(generator[i])) {
+                    return;
                 }
             }
 
@@ -922,8 +1030,10 @@ public class FullSelectionSearch {
         for (int i = i0; i < axes.size(); i++) {
             int axis = Math.abs(axes.get(i));
             maxAxisInCurrentGroup = Math.max(maxAxisInCurrentGroup, axis);
-            for (int face : getFaceAboutVertex.apply(axis)) {
-                usedFaces.add(face);
+            for (int[] cycle : getFacesForAxis(axis)) {
+                for (int face : cycle) {
+                    usedFaces.add(face);
+                }
             }
         }
 
@@ -931,9 +1041,12 @@ public class FullSelectionSearch {
         Iterator<Integer> it = remainingAxes.iterator();
         while (it.hasNext()) {
             int i = it.next();
-            int[] faces = getFaceAboutVertex.apply(i);
             boolean anyFaceUsed = false;
-            for (int f : faces) anyFaceUsed |= usedFaces.contains(f);
+            for (int[] cycle : getFacesForAxis(i)) {
+                for (int f : cycle) {
+                    anyFaceUsed |= usedFaces.contains(f);
+                }
+            }
             if (i <= maxAxisInCurrentGroup || anyFaceUsed) {
                 it.remove();
             }
@@ -946,6 +1059,25 @@ public class FullSelectionSearch {
             }
         }
         return remainingAxes;
+    }
+
+    private int[][] getFacesForAxis(int axis) {
+        if (getFacesAboutVertex != null) {
+            return getFacesAboutVertex.apply(axis);
+        }
+        return new int[][] { getFaceAboutVertex.apply(axis) };
+    }
+
+    private boolean isDisjointOperation(int[][] operation) {
+        HashSet<Integer> used = new HashSet<>();
+        for (int[] cycle : operation) {
+            for (int element : cycle) {
+                if (!used.add(element)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
 

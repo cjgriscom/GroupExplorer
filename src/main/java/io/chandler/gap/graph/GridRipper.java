@@ -184,11 +184,11 @@ public class GridRipper {
 	 */
 	public static void main(String[] args) {
 		// Default parameters
-		int parallelism = 16;
-		String filename = "PlanarStudyMulti/we7/l2-2-cycles-2-cycles-2-cycles_R1-filtered.txt";
+		int parallelism = 9;
+		String filename = "PlanarStudy/hs/torus-2-cycles-2-cycles-2-cycles_R1-filtered.txt";
 		int width = 12;
-		int height = 12;
-		long timeoutMS = 10000; // 30 seconds
+		int height = 14;
+		long timeoutMS = 5*60000; // 30 seconds
 		
 		// Parse command line arguments if provided
 		if (args.length >= 1) filename = args[0];

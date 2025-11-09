@@ -534,8 +534,13 @@ public class GroupExplorer implements AbstractGroupProperties {
             String[] cycles = part.split("\\)\\(");
             int[][] operation = new int[cycles.length][];
             for (int i = 0; i < cycles.length; i++) {
-                String[] elements = cycles[i].replaceAll("[()]", "").split(",");
-                operation[i] = Arrays.stream(elements).mapToInt(Integer::parseInt).toArray();
+                String cleaned = cycles[i].replaceAll("[()]", "");
+                if (cleaned.isEmpty()) {
+                    operation[i] = new int[0];
+                } else {
+                    String[] elements = cleaned.split(",");
+                    operation[i] = Arrays.stream(elements).mapToInt(Integer::parseInt).toArray();
+                }
             }
             operations.add(operation);
             //operations.add(reverseOperation(operation));

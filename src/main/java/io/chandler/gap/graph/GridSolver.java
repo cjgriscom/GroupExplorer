@@ -23,6 +23,18 @@ public class GridSolver {
 
 	boolean DONT_VALIDATE = true;
 	boolean DELETE_FILES = true;
+	
+	// When true, connect vertices that are two units apart horizontally/vertically
+	// e.g. 1 --- 3 in addition to the usual 1 - 2 - 3.
+	boolean LONG_LINES = true;
+	
+	// When true, add diagonal edges forming an "X" in each grid cell/box.
+	// That is, for each square with corners:
+	//   (x,y) -- (x+1,y)
+	//     |        |
+	//   (x,y+1)-(x+1,y+1)
+	// we also connect (x,y) to (x+1,y+1) and (x+1,y) to (x,y+1).
+	boolean CROSSED = true;
 
 	private final Graph<Integer, DefaultEdge> graph;
 
@@ -39,7 +51,9 @@ public class GridSolver {
 		// J2_2 - a known 12x9 solution
 		String genJ = "[(1,99)(2,86)(3,17)(5,23)(6,94)(8,47)(9,58)(10,45)(11,97)(13,18)(14,37)(15,81)(19,26)(21,62)(22,89)(25,69)(27,100)(28,49)(29,92)(30,75)(31,74)(33,84)(34,82)(35,71)(36,90)(39,54)(41,66)(42,67)(43,83)(44,91)(46,57)(48,53)(50,95)(51,77)(55,93)(56,76)(59,61)(63,65)(68,98)(70,79)(72,73)(78,85)(87,88),(1,90)(2,70)(3,73)(4,9)(5,7)(6,87)(8,96)(10,24)(11,42)(12,33)(13,100)(14,38)(15,27)(16,61)(17,95)(18,39)(19,29)(20,77)(21,71)(22,86)(23,43)(25,98)(26,47)(28,45)(30,84)(31,40)(32,69)(34,58)(35,88)(36,55)(37,72)(41,54)(44,82)(46,80)(48,76)(49,93)(50,68)(51,56)(52,66)(53,92)(57,99)(59,81)(60,64)(62,79)(63,83)(65,91)(67,74)(75,78)(85,97)(89,94),(1,92)(2,82)(3,33)(4,22)(6,52)(8,96)(9,86)(10,81)(12,73)(13,28)(14,38)(15,27)(17,95)(18,55)(19,80)(20,97)(21,75)(23,64)(24,59)(25,79)(29,46)(30,68)(31,74)(32,65)(34,58)(35,51)(36,39)(40,67)(41,76)(43,60)(44,70)(45,100)(48,54)(49,93)(50,84)(53,90)(56,88)(57,99)(62,98)(66,87)(69,91)(71,78)(77,85)]";
 		
-		String gen = gen_o2m2_2;
+		String genO2M2_2 = gen_o2m2_2;
+
+		String gen = "[(1,2)(3,4),(2,3)(1,4),(1,3)(2,4)]";
 
 
 
@@ -51,7 +65,7 @@ public class GridSolver {
 		List<Map<Integer, int[]>> coords;
 
 		List<int[]> areas = new ArrayList<>();
-		areas.add(new int[]{10, 13});
+		areas.add(new int[]{2, 2});
 		
 		for (int[] area : areas) {
 			// Try
@@ -89,15 +103,29 @@ public class GridSolver {
 		if (graph.vertexSet().size() >= 1) {
 			Graph<Integer, DefaultEdge> pattern = toUndirected(graph);
 			int n = pattern.vertexSet().size();
-			
+
 			// Quick prechecks
+			// 1) Degree bound: pattern max degree cannot exceed the maximum degree
+			//    available in the host grid, which depends on which extra edges we allow.
+			//
+			// Base grid: up, down, left, right -> max degree 4
+			// LONG_LINES: add +/-2 in each cardinal direction      -> +4
+			// CROSSED:   add two diagonals in each cell           -> +2
+			int hostMaxDeg = 4;
+			if (LONG_LINES) hostMaxDeg += 4;
+			if (CROSSED) hostMaxDeg += 2;
+
 			int maxDeg = 0;
 			for (Integer v : pattern.vertexSet()) {
 				int d = pattern.degreeOf(v);
 				if (d > maxDeg) maxDeg = d;
 			}
-			if (maxDeg > 4) return java.util.Collections.emptyList();
-			if (!isBipartite(pattern)) return java.util.Collections.emptyList();
+			if (maxDeg > hostMaxDeg) return java.util.Collections.emptyList();
+
+			// 2) Bipartiteness: only enforce when the host grid is bipartite,
+			// i.e., when we are using the plain 4-neighbor grid.
+			boolean hostIsBipartite = !LONG_LINES && !CROSSED;
+			if (hostIsBipartite && !isBipartite(pattern)) return java.util.Collections.emptyList();
 
 			System.out.println("Trying grid " + w + "x" + h + " for all solutions...");
 			java.util.List<Map<Integer, int[]>> solutions = tryVF3PAllSolutions(pattern, w, h, fixedPair, allSolutions);
@@ -434,8 +462,28 @@ public class GridSolver {
 		for (int y = 0; y < h; y++) {
 			for (int x = 0; x < w; x++) {
 				int id = y * w + x;
+
+				// Standard 4-neighbor grid edges (right and down)
 				if (x + 1 < w) grid.addEdge(id, id + 1);
 				if (y + 1 < h) grid.addEdge(id, id + w);
+
+				// Optional longer horizontal/vertical edges (distance 2)
+				if (LONG_LINES) {
+					if (x + 2 < w) grid.addEdge(id, id + 2);
+					if (y + 2 < h) grid.addEdge(id, id + 2 * w);
+				}
+
+				// Optional crossed diagonals in each 1x1 cell
+				if (CROSSED) {
+					if (x + 1 < w && y + 1 < h) {
+						int right = id + 1;
+						int down = id + w;
+						int downRight = id + w + 1;
+						// Diagonals forming an X inside the cell
+						grid.addEdge(id, downRight);   // top-left to bottom-right
+						grid.addEdge(right, down);     // top-right to bottom-left
+					}
+				}
 			}
 		}
 		return grid;
@@ -473,8 +521,28 @@ public class GridSolver {
 			int[] pa = placement.get(a);
 			int[] pb = placement.get(b);
 			if (pa == null || pb == null) return false;
-			int dist = Math.abs(pa[0] - pb[0]) + Math.abs(pa[1] - pb[1]);
-			if (dist != 1) return false;
+			int dx = Math.abs(pa[0] - pb[0]);
+			int dy = Math.abs(pa[1] - pb[1]);
+			int dist = dx + dy;
+
+			boolean ok = false;
+
+			// Standard 4-neighbor adjacency
+			if (dist == 1) {
+				ok = true;
+			}
+
+			// Long horizontal/vertical segments: distance 2 in a straight line
+			if (!ok && LONG_LINES && dist == 2 && (dx == 2 && dy == 0 || dx == 0 && dy == 2)) {
+				ok = true;
+			}
+
+			// Crossed diagonals: distance 2 but moving 1 step in x and 1 in y
+			if (!ok && CROSSED && dx == 1 && dy == 1) {
+				ok = true;
+			}
+
+			if (!ok) return false;
 		}
 
 		// this helps a tiny bit but it would be better to check reflection and rotation vs. other solutions

@@ -1,12 +1,11 @@
 package io.chandler.gap.graph;
 
 import java.io.ByteArrayOutputStream;
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,10 +38,10 @@ import io.chandler.gap.graph.genus.MultiGenus;
 
 public class PlanarStudy {
     private static final String DREADNAUT_PATH = 
-        "/home/cjgriscom/Programming/nauty/nauty2_9_1/dreadnaut";
+        "dreadnaut";
     // Switch between nauty (Ad) and Traces (At) when calling dreadnaut.
     // Traces cannot handle directed graphs. If enabled but a batch contains any directed graphs,
-    // we will fall back to nauty for that batch.
+    // fall back to nauty.
     private static final boolean USE_TRACES = true;
 
     public static void main(String[] args) throws IOException {
@@ -55,11 +54,13 @@ public class PlanarStudy {
         // --------------------------------------------------------
         int MAX_DUPLICATE_POLYGONS = 0; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
-        boolean requirePlanar = true; // Require the graphs to be planar / polyhedral
+        boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         boolean discardOverGenus1 = true; // If not requiring planar, this will discard graphs with genus > 1
         int enforceLoopMultiples = 1; // For planar grid stuff, set to 1 for normal operation
+        long minGeometryAutOrder = 1; // Minimum |Aut(geometry)|; 1 disables this filter
+        long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
-        int repetitions = 2; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
+        int repetitions = 6; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
 
@@ -69,14 +70,14 @@ public class PlanarStudy {
 
         // Either use a complete description like "6p 3-cycles" or a partial description like "5-cycles" for 5-cycles only
         String[] conj = new String[] {
-            "2-cycles",  "2-cycles"
+            "4-cycles",  "4-cycles"
         };
         // For phase 1, we use two different files (indices 0 and 1).
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.we8;
-        String groupName = "we8b";
+        String generator = Generators.m12; 
+        String groupName = "m12";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -88,6 +89,7 @@ public class PlanarStudy {
         System.out.println("Planar: " + requirePlanar);
         System.out.println("Toroidal: " + discardOverGenus1);
         System.out.println("Loop multiples: " + enforceLoopMultiples);
+        System.out.println("Min geometry Aut(G) order: " + minGeometryAutOrder);
         System.out.println("Directed: " + directed);
         System.out.println("Generate: " + generate);
 
@@ -107,6 +109,7 @@ public class PlanarStudy {
                       !groupName.startsWith("hs") &&
                       !groupName.startsWith("mcl") &&
                       !groupName.startsWith("co3") &&
+                      !generator.equals(Generators.tg) &&
                       !generator.equals(Generators.m24)) {
             boolean multithread = true;
             PrintStream[] filesOut = new PrintStream[conj.length];
@@ -172,13 +175,31 @@ public class PlanarStudy {
 
         // instantiate GAP to check group order.
         ThreadLocal<GapInterface> gapL = ThreadLocal.withInitial(() -> { try { return new GapInterface(); } catch (IOException e) { throw new RuntimeException("Failed to create GapInterface", e); } });
-        
+        ThreadLocal<DreadnautInterface> dreadnautL = ThreadLocal.withInitial(() -> new DreadnautInterface(DREADNAUT_PATH, USE_TRACES));
+
         // Create a list to save unique candidate pairs.
         List<int[][][]> candidatePairs = new ArrayList<>();
         List<Graph<Integer, DefaultEdge>> pairGraphs = new ArrayList<>();
         Set<String> canonicalGraphs = Collections.synchronizedSet(new HashSet<>());
         Object phase1Lock = new Object();
-        PrintStream phase1Out = new PrintStream(root.getAbsolutePath() + "/" + (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") + (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") + (requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") + conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt");
+        String geomAutTagCore = "";
+        if (minGeometryAutOrder > 1L) {
+            geomAutTagCore += "g" + minGeometryAutOrder;
+        }
+        if (geometryAutOrderModulus > 1L) {
+            if (!geomAutTagCore.isEmpty()) {
+                geomAutTagCore += "_";
+            }
+            geomAutTagCore += "gm" + geometryAutOrderModulus;
+        }
+        String geomAutTag = geomAutTagCore.isEmpty() ? "" : geomAutTagCore + "-";
+        PrintStream phase1Out = new PrintStream(
+            root.getAbsolutePath() + "/" +
+            (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") +
+            (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +
+            (requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") +
+            geomAutTag +
+            conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt");
         int[] found = new int[repetitions + 1];
 
         AtomicInteger p1_1_count = new AtomicInteger(0);
@@ -281,7 +302,7 @@ public class PlanarStudy {
                 Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, directed);
 
                 // Check for isomorphic duplicates.
-                String canonicalLabeling = getCanonicalGraphViaDreadnautFromCombinedGen(combinedPair, directed);
+                String canonicalLabeling = dreadnautL.get().getCanonicalLabeling(combinedPair, directed);
                 synchronized (canonicalGraphs) {
                     if (canonicalGraphs.contains(canonicalLabeling)) {
                         return;
@@ -294,14 +315,44 @@ public class PlanarStudy {
                 }
                 
                 //if (Math.random() < 0.01) Collections.shuffle(pairGraphs);
-                if (size == null) size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
-                
+                if (size == null) {
+                    size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
+                }
+
+                // Only apply the geometry automorphism filters to final results (full group order).
+                boolean passesGeometryFilter = true;
+                if (size.equals(String.valueOf(orderFinal)) &&
+                    (minGeometryAutOrder > 1L || geometryAutOrderModulus > 1L)) {
+                    try {
+                        BigInteger geomOrder = GraphSymm.automorphismGroupOrder(
+                            candGraph,
+                            false, // geometry is treated as undirected
+                            DREADNAUT_PATH,
+                            USE_TRACES
+                        );
+                        if (minGeometryAutOrder > 1L &&
+                            geomOrder.compareTo(BigInteger.valueOf(minGeometryAutOrder)) < 0) {
+                            passesGeometryFilter = false;
+                        }
+                        if (passesGeometryFilter && geometryAutOrderModulus > 1L) {
+                            BigInteger mod = BigInteger.valueOf(geometryAutOrderModulus);
+                            if (!geomOrder.mod(mod).equals(BigInteger.ZERO)) {
+                                passesGeometryFilter = false;
+                            }
+                        }
+                    } catch (RuntimeException e) {
+                        System.err.println("Failed to compute geometry automorphism order: " + e.getMessage());
+                        passesGeometryFilter = false;
+                    }
+                }
+                final boolean passesGeometryFilterFinal = passesGeometryFilter;
+
                 synchronized (phase1Lock) {
                     // Prevent duplicates while lock is released
                     if (!canonicalGraphs.add(canonicalLabeling)) return;
                     candidatePairs.add(combinedPair);
                     pairGraphs.add(candGraph);
-                    if (size.equals(String.valueOf(orderFinal))) {
+                    if (size.equals(String.valueOf(orderFinal)) && passesGeometryFilterFinal) {
                         phase1Out.println(GroupExplorer.generatorsToString(combinedPair));
                         found[0]++;
                     }
@@ -323,9 +374,16 @@ public class PlanarStudy {
         
         List<int[][][]> currentCandidates = new ArrayList<>(candidatePairs);
         // For output naming, build a base file name.
-        String baseFileName =(MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") + (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +(requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") + conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase2Indices[0]];
+        String baseFileName =
+            (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") +
+            (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +
+            (requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") +
+            geomAutTag +
+            conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase2Indices[0]];
         
         for (int r = 1; r <= repetitions; r++) {
+            final int rFinal = r;
+            final long orderFinal = order;
             System.out.println("Starting Phase 2, round " + r + "");
             List<int[][][]> newCandidates = new ArrayList<>();
             List<Graph<Integer, DefaultEdge>> newCandidateGraphs = new ArrayList<>();
@@ -335,31 +393,31 @@ public class PlanarStudy {
             // For each candidate from the previous round, combine with each line from file3.
             for (int i = 0; i < currentCandidates.size(); i++) {
                 int[][][] candidate = currentCandidates.get(i);
+                AtomicBoolean earlyTerminationP2 = new AtomicBoolean(false);
+                AtomicInteger roundCountAtomic = new AtomicInteger(0);
 
-                // Inner loop: iterate over individual lines from file3.
-                outerRoundLoop: for (String l : lines3) {
+                // Inner loop: iterate over individual lines from file3 in parallel.
+                lines3.parallelStream().forEach(l -> {
+                    if (earlyTerminationP2.get()) return;
                     // Key press listener for early termination of the inner loop.
                     try {
                         if (System.in.available() > 0) {
                             while (System.in.available() > 0) {
                                 char rr = (char) System.in.read();
-                                if (rr == '+' ) {
-                                    // Add 1 to repetitions.
-                                    repetitions++;
-                                } else if (!(""+rr).trim().isEmpty()) {
+                                if (!(""+rr).trim().isEmpty()) {
                                     System.out.println("Key press detected. Early termination of Phase 2 inner loop.");
-                                    break outerRoundLoop;
+                                    earlyTerminationP2.set(true);
                                 }
                             }
-                            break outerRoundLoop;
+                            earlyTerminationP2.set(true);
                         }
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
                     // Parse the line from file2 and use its generator (index 0).
                     int[][][] parsedGen = GroupExplorer.parseOperationsArr(l);
-                    if (Arrays.deepEquals(candidate[0], parsedGen[0])) continue;
-                    if (Arrays.deepEquals(candidate[1], parsedGen[0])) continue;
+                    if (Arrays.deepEquals(candidate[0], parsedGen[0])) return;
+                    if (Arrays.deepEquals(candidate[1], parsedGen[0])) return;
                     int[][] newGenerator = parsedGen[0];
                     // Build the new candidate by appending newGenerator to the current candidate.
                     int currentLen = candidate.length;
@@ -370,54 +428,89 @@ public class PlanarStudy {
                     newCandidate[currentLen] = newGenerator;
                     // Check for duplicate polygons in the new candidate.
                     if (hasDuplicatePolygon(newCandidate, MAX_DUPLICATE_POLYGONS)) {
-                        continue;
+                        return;
                     }
                     // Check planarity if required.
                     if (requirePlanar && !checkPlanarity(newCandidate)) {
-                        continue;
+                        return;
                     }
 
                     String size = null;
                     if (!allowSubgroups) {
                         size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
-                        if (!size.equals(String.valueOf(order))) {
-                            continue;
+                        if (!size.equals(String.valueOf(orderFinal))) {
+                            return;
                         }
                     }
 
                     Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, directed);
 
                     // Check for isomorphic duplicates.
-                    String canonicalLabeling = getCanonicalGraphViaDreadnautFromCombinedGen(newCandidate, directed);
-                    System.out.println(canonicalLabeling);
-                    if (canonicalGraphs.contains(canonicalLabeling)) {
-                        continue;
+                    String canonicalLabeling = dreadnautL.get().getCanonicalLabeling(newCandidate, directed);
+                    synchronized (canonicalGraphs) {
+                        if (canonicalGraphs.contains(canonicalLabeling)) {
+                            return;
+                        }
                     }
                     
                     // Enforce all simple cycles have length multiple of N (if enabled)
                     if (!allEdgeCyclesAreMultiples(candGraph, enforceLoopMultiples)) {
-                        continue;
+                        return;
                     }
 
                     // Check for genus 1 if required.
                     if (discardOverGenus1 && !(checkPlanarity(newCandidate) || checkGenus1(newCandidate))) {
-                        continue;
+                        return;
                     }
                     
-                    if (size == null) size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
-                    
-                    newCandidates.add(newCandidate);
-                    newCandidateGraphs.add(candGraph);
-                    canonicalGraphs.add(canonicalLabeling);
-                    if (size.equals(String.valueOf(order))) {
-                        phase2RoundOut.println(GroupExplorer.generatorsToString(newCandidate));
-                        found[r]++;
+                    if (size == null) {
+                        size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
                     }
-                    roundCount++;   
 
-                    System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[r] + " results and " + newCandidates.size() + " candidates");
+                    // Only apply the geometry automorphism filters to final results (full group order).
+                    boolean passesGeometryFilter = true;
+                    if (size.equals(String.valueOf(orderFinal)) &&
+                        (minGeometryAutOrder > 1L || geometryAutOrderModulus > 1L)) {
+                        try {
+                            BigInteger geomOrder = GraphSymm.automorphismGroupOrder(
+                                candGraph,
+                                false, // geometry is treated as undirected
+                                DREADNAUT_PATH,
+                                USE_TRACES
+                            );
+                            if (minGeometryAutOrder > 1L &&
+                                geomOrder.compareTo(BigInteger.valueOf(minGeometryAutOrder)) < 0) {
+                                passesGeometryFilter = false;
+                            }
+                            if (passesGeometryFilter && geometryAutOrderModulus > 1L) {
+                                BigInteger mod = BigInteger.valueOf(geometryAutOrderModulus);
+                                if (!geomOrder.mod(mod).equals(BigInteger.ZERO)) {
+                                    passesGeometryFilter = false;
+                                }
+                            }
+                        } catch (RuntimeException e) {
+                            System.err.println("Failed to compute geometry automorphism order: " + e.getMessage());
+                            passesGeometryFilter = false;
+                        }
+                    }
+                    final boolean passesGeometryFilterFinal = passesGeometryFilter;
 
-                }
+                    synchronized (phase1Lock) {
+                        // Prevent duplicates while lock is released
+                        if (!canonicalGraphs.add(canonicalLabeling)) return;
+                        //newCandidates.add(newCandidate);
+                        //newCandidateGraphs.add(candGraph);
+                        if (size.equals(String.valueOf(orderFinal)) && passesGeometryFilterFinal) {
+                            phase2RoundOut.println(GroupExplorer.generatorsToString(newCandidate));
+                            found[rFinal]++;
+                            System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[rFinal] + " results and " + newCandidates.size() + " candidates");
+
+                        }
+                        roundCountAtomic.incrementAndGet();
+
+                    }
+                });
+                roundCount += roundCountAtomic.get();
                 System.out.println("  Completed inner loop for candidate " + i + " of " + currentCandidates.size());
             }
             phase2RoundOut.close();
@@ -578,90 +671,6 @@ public class PlanarStudy {
         graph.relabel(canonicalLabeling).write_dot(ps);
         ps.flush();
         return new String(baos.toByteArray());
-    }
-
-    private static boolean allTwoCycles(int[][][] combinedGen) {
-        for (int[][] cycle : combinedGen) {
-            for (int[] polygon : cycle) {
-                if (polygon.length != 2) return false;
-            }
-        }
-        return true;
-    }
-
-    public static String getCanonicalGraphViaDreadnautFromCombinedGen(int[][][] combinedGen, boolean directed) {
-        boolean dir = directed && !allTwoCycles(combinedGen);
-        Graph<Integer, DefaultEdge> g = buildGraphFromCombinedGen(combinedGen, dir);
-        try {
-            return getCanonicalGraphViaDreadnaut(g, dir);
-        } catch (IOException | InterruptedException e) {
-            throw new RuntimeException("dreadnaut failed: " + e.getMessage(), e);
-        }
-    }
-
-    private static String getCanonicalGraphViaDreadnaut(Graph<Integer, DefaultEdge> graph, boolean directed)
-            throws IOException, InterruptedException {
-        java.util.List<Integer> verts = new java.util.ArrayList<>(graph.vertexSet());
-        java.util.Collections.sort(verts);
-        java.util.Map<Integer, Integer> v2i = new java.util.HashMap<>();
-        for (int i = 0; i < verts.size(); i++) v2i.put(verts.get(i), i);
-        int n = verts.size();
-
-        java.util.List<java.util.Set<Integer>> adj = new java.util.ArrayList<>();
-        for (int i = 0; i < n; i++) adj.add(new java.util.TreeSet<>());
-
-        for (DefaultEdge e : graph.edgeSet()) {
-            Integer u = graph.getEdgeSource(e);
-            Integer v = graph.getEdgeTarget(e);
-            int iu = v2i.get(u);
-            int iv = v2i.get(v);
-            if (directed) {
-                adj.get(iu).add(iv);
-            } else {
-                adj.get(iu).add(iv);
-                adj.get(iv).add(iu);
-            }
-        }
-
-        // Fallback to checksum if adjacency block not found
-        StringBuilder input2 = new StringBuilder();
-        input2.append("l=0\n-m\n"); // No wrapping, disable level markers
-        {
-            String modeCmd = USE_TRACES && !directed ? "At" : "Ad";
-            input2.append(modeCmd).append("\n");
-        }
-        if (directed) input2.append("d\n");
-        input2.append("n=").append(n).append(" g\n");
-        for (int i = 0; i < n; i++) {
-            input2.append(i).append(":");
-            java.util.Set<Integer> neigh = adj.get(i);
-            if (!neigh.isEmpty()) {
-                input2.append(" ");
-                boolean first = true;
-                for (int j : neigh) {
-                    if (!first) input2.append(" ");
-                    input2.append(j);
-                    first = false;
-                }
-            }
-            input2.append(i == n - 1 ? ".\n" : ";\n");
-        }
-        input2.append("c -a\nx\nz\nq\n");
-
-        ProcessBuilder pb2 = new ProcessBuilder(DREADNAUT_PATH);
-        pb2.redirectErrorStream(true);
-        Process p2 = pb2.start();
-        try (java.io.OutputStream os = p2.getOutputStream()) {
-            os.write(input2.toString().getBytes());
-            os.flush();
-        }
-        StringBuilder out2 = new StringBuilder();
-        try (BufferedReader br2 = new BufferedReader(new InputStreamReader(p2.getInputStream()))) {
-            String l;
-            while ((l = br2.readLine()) != null) if (l.trim().startsWith("[")) out2.append(l.trim()).append('\n');
-        }
-        p2.waitFor();
-        return out2.toString().trim();
     }
 
     private static boolean allEdgeCyclesAreMultiples(Graph<Integer, DefaultEdge> graph, int k) {

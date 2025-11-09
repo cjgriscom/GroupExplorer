@@ -5,6 +5,7 @@ import java.util.Scanner;
 import java.util.Stack;
 
 import io.chandler.gap.Trapentrix.Move;
+import io.chandler.gap.Trapentrix.SolveOpts;
 
 public class TrapentrixExplorer {
 	static LinkedList<String> moveList = new LinkedList<>();
@@ -136,8 +137,17 @@ public class TrapentrixExplorer {
 		case ("G2U"): t.move(Trapentrix.grip2Up); grip2Offset += 1; break;
 		case ("G2D"): t.move(Trapentrix.grip2Down); grip2Offset += 2; break;
 		default:
-			if (cmd.startsWith("SS")) {
-				t.trySolve(Integer.parseInt(cmd.substring(2)), (moves) -> {
+			if (cmd.startsWith("SS") || cmd.startsWith("S1") || cmd.startsWith("S2")) {
+				SolveOpts solveOpts;
+				switch (cmd.substring(0, 2)) {
+					case "S1": solveOpts = new SolveOpts(false, true, false); break;
+					case "S2": solveOpts = new SolveOpts(false, true, true); break;
+					case "S3": solveOpts = new SolveOpts(true, false, false); break;
+					default: solveOpts = new SolveOpts(false, false, false); break;
+				}
+				String nmvs = cmd.substring(2);
+				if (nmvs.isEmpty()) nmvs = "30";
+				t.trySolve(Integer.parseInt(nmvs), solveOpts, (moves) -> {
 					moves = (Stack<Move>) moves.clone();
 					int i = 0;
 					int o = 0;
