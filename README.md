@@ -11,9 +11,6 @@ This is a long list of generators for various groups.
 
 ### PlanarStudy.java
 
-A MinGW G++ installation (mingw32-gcc-g++) is required on Windows:
-https://sourceforge.net/projects/mingw/
-
 GAP is required:
  * Windows: https://www.gap-system.org/install/windows/
  * Linux: Available in most distro package managers
