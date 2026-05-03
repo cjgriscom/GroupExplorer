@@ -1,15 +1,22 @@
 package io.chandler.gap.graph.genus;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import io.chandler.gap.Generators;
 import io.chandler.gap.GroupExplorer;
@@ -29,6 +36,7 @@ public class MultiGenus {
     }
     public static enum MultiGenusOption {
         LIMIT_TO_GENUS_N, // Useful to keep things quick
+        USE_PAGE,         // Use PAGE (CalcGenus) algorithm instead of multi_genus
     }
 
 	public static void main(String[] args) {
@@ -100,6 +108,21 @@ public class MultiGenus {
     }
 
     public static List<Integer> computeGenus(List<int[][]> adjLists, ParameterizedMultiGenusOption... options) {
+        boolean usePage = false;
+        for (ParameterizedMultiGenusOption option : options) {
+            if (option.option == MultiGenusOption.USE_PAGE && option.value != 0) {
+                usePage = true;
+            }
+        }
+
+        if (usePage) {
+            return computeGenusPage(adjLists, options);
+        }
+
+        return computeGenusMultiGenus(adjLists, options);
+    }
+
+    private static List<Integer> computeGenusMultiGenus(List<int[][]> adjLists, ParameterizedMultiGenusOption... options) {
         int maxVertex = 0;
         for (int[][] adjList : adjLists) {
             for (int[] neighbors : adjList) {
@@ -196,6 +219,134 @@ public class MultiGenus {
             }
         }
         return null;
+    }
+
+    private static final String PAGE_BINARY = "../Genus/CalcGenus/CalcGenus";
+    private static final Pattern GENUS_PATTERN = Pattern.compile("\\(genus (\\d+)\\)");
+    private static final Pattern GENUS_FOUND_PATTERN = Pattern.compile("Genus found: (\\d+)");
+
+    private static List<Integer> computeGenusPage(List<int[][]> adjLists, ParameterizedMultiGenusOption... options) {
+        List<Integer> genusValues = new ArrayList<>();
+        for (int[][] adjList : adjLists) {
+            Integer genus = computeSingleGenusPage(adjList);
+            if (genus == null) return null;
+            genusValues.add(genus);
+        }
+        return genusValues;
+    }
+
+    private static Integer computeSingleGenusPage(int[][] adjList) {
+        int numVertices = 0;
+        int maxDegree = 0;
+        for (int i = 0; i < adjList.length; i++) {
+            if (adjList[i] == null || adjList[i].length == 0) continue;
+            numVertices++;
+            maxDegree = Math.max(maxDegree, adjList[i].length);
+        }
+
+        if (numVertices == 0 || maxDegree < 2) return null;
+
+        // Count undirected edges
+        HashSet<Long> edgeSet = new HashSet<>();
+        for (int i = 0; i < adjList.length; i++) {
+            if (adjList[i] == null) continue;
+            for (int j : adjList[i]) {
+                edgeSet.add(Math.min(i, j) * 65536L + Math.max(i, j));
+            }
+        }
+        int numEdges = edgeSet.size();
+
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("page_adj_", ".txt");
+            tempFile.deleteOnExit();
+
+            // Build vertex renumbering map for sparse adjacency lists
+            int[] oldToNew = new int[adjList.length];
+            Arrays.fill(oldToNew, -1);
+            int newIdx = 0;
+            for (int i = 0; i < adjList.length; i++) {
+                if (adjList[i] != null && adjList[i].length > 0) {
+                    oldToNew[i] = newIdx++;
+                }
+            }
+
+            try (PrintWriter pw = new PrintWriter(tempFile)) {
+                pw.println(numVertices + " " + numEdges);
+                for (int i = 0; i < adjList.length; i++) {
+                    if (adjList[i] == null || adjList[i].length == 0) continue;
+                    StringBuilder sb = new StringBuilder();
+                    for (int k = 0; k < maxDegree; k++) {
+                        if (k > 0) sb.append(" ");
+                        if (k < adjList[i].length) {
+                            sb.append(oldToNew[adjList[i][k]]);
+                        } else {
+                            sb.append(65535);
+                        }
+                    }
+                    pw.println(sb.toString());
+                }
+            }
+
+            ProcessBuilder pb = new ProcessBuilder(PAGE_BINARY);
+            Map<String, String> env = pb.environment();
+            env.put("S", "0");
+            env.put("DEG", String.valueOf(maxDegree));
+            env.put("ADJ", tempFile.getAbsolutePath());
+            env.put("STDOUT", "1");
+
+            if (DEBUG) {
+                System.out.println("PAGE: V=" + numVertices + " E=" + numEdges + " DEG=" + maxDegree);
+                System.out.println("PAGE: ADJ=" + tempFile.getAbsolutePath());
+            }
+
+            Process process = pb.start();
+
+            // Drain stderr in a separate thread to prevent deadlock
+            ByteArrayOutputStream stderrBuf = new ByteArrayOutputStream();
+            Thread stderrThread = new Thread(() -> {
+                try (InputStream is = process.getErrorStream()) {
+                    is.transferTo(stderrBuf);
+                } catch (IOException e) { /* ignore */ }
+            });
+            stderrThread.start();
+
+            // Read stdout line by line, looking for genus
+            Integer genus = null;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (DEBUG) System.out.println("PAGE stdout: " + line);
+
+                    Matcher m = GENUS_FOUND_PATTERN.matcher(line);
+                    if (m.find()) {
+                        genus = Integer.parseInt(m.group(1));
+                    }
+                    m = GENUS_PATTERN.matcher(line);
+                    if (m.find()) {
+                        genus = Integer.parseInt(m.group(1));
+                    }
+                }
+            }
+
+            stderrThread.join();
+            int exitCode = process.waitFor();
+
+            if (DEBUG) {
+                System.out.println("PAGE stderr: " + stderrBuf.toString());
+                System.out.println("PAGE exit code: " + exitCode);
+            }
+
+            return genus;
+        } catch (IOException | InterruptedException e) {
+            if (DEBUG) {
+                e.printStackTrace();
+                System.err.println("PAGE error: " + e.getMessage());
+            }
+            return null;
+        } finally {
+            if (tempFile != null) tempFile.delete();
+        }
     }
 
     private static byte[] toMultiCode(List<int[][]> adjLists, int numBytes) {
