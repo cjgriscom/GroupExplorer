@@ -18,8 +18,17 @@ public class MultiGenus {
     private static final boolean DEBUG = false;
     private static final boolean USE_320 = false;
 
+    public static class ParameterizedMultiGenusOption {
+        public final int value;
+        public final MultiGenusOption option;
+
+        public ParameterizedMultiGenusOption(MultiGenusOption option, int value) {
+            this.option = option;
+            this.value = value;
+        }
+    }
     public static enum MultiGenusOption {
-        LIMIT_TO_GENUS_1, // Useful to keep things quick
+        LIMIT_TO_GENUS_N, // Useful to keep things quick
     }
 
 	public static void main(String[] args) {
@@ -32,11 +41,11 @@ public class MultiGenus {
            // GroupExplorer.parseOperationsArr(Generators.j1),
             GroupExplorer.parseOperationsArr("[(1,214)(2,44)(3,182)(4,80)(5,173)(6,117)(7,75)(8,71)(9,153)(10,11)(12,261)(13,157)(14,85)(15,209)(16,31)(17,94)(18,197)(19,109)(20,76)(21,136)(22,108)(23,194)(24,87)(25,221)(26,48)(27,92)(28,247)(29,59)(30,193)(32,205)(33,203)(34,106)(35,259)(37,83)(38,174)(39,150)(40,104)(41,121)(43,222)(45,49)(46,51)(50,238)(52,53)(54,258)(55,107)(56,265)(57,143)(60,116)(61,187)(62,126)(63,231)(64,99)(65,130)(66,208)(67,140)(68,195)(69,133)(70,219)(72,138)(73,77)(74,165)(78,234)(79,207)(81,251)(82,167)(84,263)(86,223)(88,239)(89,170)(90,199)(91,113)(93,129)(95,218)(96,201)(97,172)(98,123)(100,148)(101,200)(102,135)(103,236)(105,233)(110,177)(111,128)(112,161)(114,131)(115,224)(118,144)(119,186)(120,139)(122,250)(124,230)(127,149)(132,253)(134,202)(137,164)(141,145)(142,245)(147,155)(151,189)(152,228)(154,190)(156,158)(159,184)(160,168)(162,264)(163,255)(166,256)(169,198)(171,216)(175,246)(176,185)(178,244)(179,227)(180,225)(181,220)(183,242)(188,213)(191,217)(192,252)(196,229)(204,212)(206,257)(211,241)(215,235)(232,260)(243,249)(248,266)(254,262),(1,30,226)(2,86,111)(3,214,115)(4,44,7)(5,54,212)(6,253,168)(8,161,63)(9,241,11)(10,101,224)(12,46,179)(13,242,60)(14,229,166)(15,85,48)(16,65,104)(17,193,80)(18,171,62)(19,113,252)(20,207,93)(21,163,257)(22,87,67)(23,92,183)(24,251,42)(25,240,43)(26,53,165)(27,250,239)(28,152,81)(29,154,158)(31,121,122)(32,157,164)(33,199,141)(34,127,74)(35,145,131)(36,73,143)(37,181,61)(39,189,133)(40,184,237)(41,162,64)(45,47,52)(49,117,236)(50,178,129)(51,194,97)(55,138,155)(56,123,220)(57,191,245)(58,107,114)(59,102,137)(66,170,238)(68,255,234)(69,211,75)(70,246,265)(71,151,202)(72,95,233)(76,235,259)(77,177,180)(78,208,186)(79,96,198)(82,247,160)(83,216,210)(84,103,108)(88,125,222)(89,192,176)(90,205,218)(91,112,244)(94,174,153)(98,124,156)(99,116,221)(100,169,249)(105,243,225)(106,263,139)(109,136,188)(110,248,142)(118,190,264)(119,148,135)(126,132,256)(128,173,175)(130,261,228)(134,196,215)(140,227,149)(144,159,254)(146,182,223)(147,217,201)(150,219,197)(167,187,262)(172,203,209)(195,230,260)(200,231,258)(204,213,232)]")
             ),
-            MultiGenusOption.LIMIT_TO_GENUS_1);
+            new ParameterizedMultiGenusOption(MultiGenusOption.LIMIT_TO_GENUS_N, 1));
 		System.out.println("Genus: " + genuses);
 	}
 
-	public static List<Integer> computeGenusFromGenerators(List<int[][][]> generators, MultiGenusOption... options) {
+	public static List<Integer> computeGenusFromGenerators(List<int[][][]> generators, ParameterizedMultiGenusOption... options) {
 		List<int[][]> adjLists = new ArrayList<>();
 		for (int[][][] generator : generators) {
             try {
@@ -90,7 +99,7 @@ public class MultiGenus {
 		return computeGenus(adjLists, options);
     }
 
-    public static List<Integer> computeGenus(List<int[][]> adjLists, MultiGenusOption... options) {
+    public static List<Integer> computeGenus(List<int[][]> adjLists, ParameterizedMultiGenusOption... options) {
         int maxVertex = 0;
         for (int[][] adjList : adjLists) {
             for (int[] neighbors : adjList) {
@@ -125,9 +134,9 @@ public class MultiGenus {
         ByteArrayOutputStream stdout = new ByteArrayOutputStream();
 
         int upperLimit = 9;
-        for (MultiGenusOption option : options) {
-            if (option == MultiGenusOption.LIMIT_TO_GENUS_1) {
-                upperLimit = 1;
+        for (ParameterizedMultiGenusOption option : options) {
+            if (option.option == MultiGenusOption.LIMIT_TO_GENUS_N) {
+                upperLimit = option.value;
             }
         }
         try {

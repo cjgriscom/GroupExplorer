@@ -44,6 +44,10 @@ public class PlanarStudy {
     // fall back to nauty.
     private static final boolean USE_TRACES = true;
 
+    // TODO figure out a way to 'quarantine' specific iterations that are taking too long (i.e. stuck on multi_genus),
+    // processing their results upon return but allowing the rest of the program to continue.
+    // CO3 - discardOverGenusN = 2 is taking too long with d40
+
     public static void main(String[] args) throws IOException {
         // --------------------------------------------------------
         // Preview mode.
@@ -52,15 +56,15 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS = 0; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS = 40; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
-        boolean discardOverGenus1 = true; // If not requiring planar, this will discard graphs with genus > 1
+        int discardOverGenusN = 2; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
         int enforceLoopMultiples = 1; // For planar grid stuff, set to 1 for normal operation
         long minGeometryAutOrder = 1; // Minimum |Aut(geometry)|; 1 disables this filter
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
-        int repetitions = 6; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
+        int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
 
@@ -70,14 +74,14 @@ public class PlanarStudy {
 
         // Either use a complete description like "6p 3-cycles" or a partial description like "5-cycles" for 5-cycles only
         String[] conj = new String[] {
-            "4-cycles",  "4-cycles"
+            "2-cycles",  "2-cycles"
         };
         // For phase 1, we use two different files (indices 0 and 1).
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.m12; 
-        String groupName = "m12";
+        String generator = Generators.co3; 
+        String groupName = "co3";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -87,7 +91,7 @@ public class PlanarStudy {
         System.out.println("    Phase 2 indices: " + Arrays.toString(phase2Indices));
         System.out.println("Max duplicate polygons: " + MAX_DUPLICATE_POLYGONS);
         System.out.println("Planar: " + requirePlanar);
-        System.out.println("Toroidal: " + discardOverGenus1);
+        if (!requirePlanar) System.out.println("Max genus: " + discardOverGenusN);
         System.out.println("Loop multiples: " + enforceLoopMultiples);
         System.out.println("Min geometry Aut(G) order: " + minGeometryAutOrder);
         System.out.println("Directed: " + directed);
@@ -197,7 +201,7 @@ public class PlanarStudy {
             root.getAbsolutePath() + "/" +
             (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") +
             (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +
-            (requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") +
+            (requirePlanar ? "" : discardOverGenusN == 1 ? "torus-" : (discardOverGenusN == 0 ? "np-" : "np" + discardOverGenusN + "-")) +
             geomAutTag +
             conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt");
         int[] found = new int[repetitions + 1];
@@ -295,7 +299,7 @@ public class PlanarStudy {
                 }
 
                 // Check for genus 1 if required.
-                if (discardOverGenus1 && !(checkPlanarity(combinedPair) || checkGenus1(combinedPair))) {
+                if (discardOverGenusN > 0 && !(checkPlanarity(combinedPair) || checkGenusN(discardOverGenusN, combinedPair))) {
                     return;
                 }
 
@@ -377,7 +381,7 @@ public class PlanarStudy {
         String baseFileName =
             (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") +
             (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +
-            (requirePlanar ? "" : discardOverGenus1 ? "torus-" : "np-") +
+            (requirePlanar ? "" : discardOverGenusN == 1 ? "torus-" : (discardOverGenusN == 0 ? "np-" : "np" + discardOverGenusN + "-")) +
             geomAutTag +
             conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase2Indices[0]];
         
@@ -459,7 +463,7 @@ public class PlanarStudy {
                     }
 
                     // Check for genus 1 if required.
-                    if (discardOverGenus1 && !(checkPlanarity(newCandidate) || checkGenus1(newCandidate))) {
+                    if (discardOverGenusN > 0 && !(checkPlanarity(newCandidate) || checkGenusN(discardOverGenusN, newCandidate))) {
                         return;
                     }
                     
@@ -587,10 +591,11 @@ public class PlanarStudy {
         return inspector.isPlanar();
     }
     
-    public static boolean checkGenus1(int[][][] combinedGen) {
+    public static boolean checkGenusN(int N, int[][][] combinedGen) {
+        if (N == 0) return true;
         String genus = MultiGenus.computeGenusFromGenerators(
-            Arrays.<int[][][]>asList(combinedGen),
-            MultiGenus.MultiGenusOption.LIMIT_TO_GENUS_1).get(0) + "";
+                Arrays.<int[][][]>asList(combinedGen),
+                new MultiGenus.ParameterizedMultiGenusOption(MultiGenus.MultiGenusOption.LIMIT_TO_GENUS_N, N)).get(0) + "";
         
         if (genus.equals("-1")) {
             return false;
