@@ -572,7 +572,7 @@ public class GraphVisualizer extends Application {
         // Compute genus range 0-1 if it's not a huge graph 
         if (maxVertex < 128) genus = MultiGenus.computeGenusFromGenerators(
             Arrays.<int[][][]>asList(generator),
-            MultiGenus.MultiGenusOption.LIMIT_TO_GENUS_1).get(0) + "";
+            new MultiGenus.ParameterizedMultiGenusOption(MultiGenus.MultiGenusOption.LIMIT_TO_GENUS_N, 1)).get(0) + "";
         
         genusButton.setText("Genus: " + (genus.equals("-1") ? ">= 2" : genus));
 

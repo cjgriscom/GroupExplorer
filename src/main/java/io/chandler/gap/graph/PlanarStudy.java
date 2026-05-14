@@ -56,12 +56,12 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS = 40; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS = 0; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
-        int discardOverGenusN = 2; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
+        int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
         int enforceLoopMultiples = 1; // For planar grid stuff, set to 1 for normal operation
-        long minGeometryAutOrder = 1; // Minimum |Aut(geometry)|; 1 disables this filter
+        long minGeometryAutOrder = 2; // Minimum |Aut(geometry)|; 1 disables this filter
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
@@ -80,8 +80,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.co3; 
-        String groupName = "co3";
+        String generator = Generators.j2; 
+        String groupName = "j2";
 
         // Print configuration
         System.out.println("Group: " + groupName);
