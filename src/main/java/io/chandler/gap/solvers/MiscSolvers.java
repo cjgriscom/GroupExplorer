@@ -18,7 +18,7 @@ import javafx.util.Pair;
 public class MiscSolvers {
 
 	public static void main(String[] args) {
-        trapentrixSimm();
+        whiskerCubeSimm();
 	}
 
 
@@ -643,6 +643,118 @@ public class MiscSolvers {
         // Zeroes should be ignored in comparison
        // int[] stateMatch = { 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14, 15,16,17, 18,19,20};
         int[] stateMatch =   { 6,14,11,13, 5, 1, 9,10, 7, 8, 3,12, 4, 2, 15,16,17, 18,19,20};
+        group.setTrackPath(true);
+        group.initIterativeExploration();
+
+        /*
+        group.applyOperation(0);
+        System.out.println(Arrays.toString(group.copyCurrentState()));
+        System.exit(0);*/
+
+        ArrayList<int[]> matchingStates = new ArrayList<>();
+
+        System.out.println(Arrays.toString(stateMatch));
+        System.out.println(Arrays.toString(group.copyCurrentState()));
+
+        HashMap<State, Pair<State, Integer>> backtrack = new HashMap<>();
+
+        while (matchingStates.size() < 1) {
+            if (group.getIteration() > 24) {
+                System.out.println("Match not found");
+                System.exit(0);
+            }
+
+            group.iterateExploration(false, 300_000_000, true, (states, depth) -> {
+                for (Object x : states) {
+                    PeekData data = (PeekData) x;
+                    backtrack.put(data.newState, new Pair<>(data.oldState, data.operation));
+                    int[] state = data.newState.state();
+                    boolean matches = true;
+                    for (int i = 0; i < state.length; i++) {
+                        if (stateMatch[i] != 0 && state[i] != stateMatch[i]) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (matches) {
+
+                        System.out.println(Arrays.toString(state));
+                        matchingStates.add(state);
+                        // Figure out path
+                        State current = State.of(state, group.nElements, group.mem);
+                        String op = "";
+                        String inverseOp = "";
+                        while (backtrack.containsKey(current)) {
+                            Pair<State, Integer> d = backtrack.get(current);
+                            op = namesLookup[d.getValue()] + " " + op;
+                            inverseOp = inverseOp + " " + inverseNamesLookup[d.getValue()];
+                            current = d.getKey();
+                        }
+                        System.out.println("Fwd: " + op);
+                        System.out.println("Inv: " + inverseOp);
+                        System.out.println(Arrays.toString(state));
+                    }
+                }
+            });
+            System.out.println(group.getIteration() + " " + group.order());
+        }
+
+    }
+
+    public static void whiskerCubeSimm() {
+        {
+        String turns = "[" +
+            "(1,10,7)(2,5,4)(3,12,9)(6,13,8)(17,16,15)," +   // A'
+            "(1,4,6)(3,14,7)(5,11,13)(8,12,10)(20,19,18),"+       // B'
+            "(1,7,10)(2,4,5)(3,9,12)(6,8,13)(15,16,17)," +   // A
+            "(1,6,4)(3,7,14)(5,13,11)(8,10,12)(18,19,20)]";      // B
+
+            GroupExplorer groudp = new GroupExplorer(turns, MemorySettings.COMPACT);
+            groudp.exploreStates(false, (states, depth) -> {
+                System.out.println("Depth " + depth + ": " + states.size() + " states");
+                if (depth == 15) {
+                    for (int[] x : states) {
+                        System.out.println(GroupExplorer.stateToNotation(x));
+                    }
+                }
+            });
+
+            System.out.println("Order: " + groudp.order());
+        }
+
+
+        
+        String gen = "[" +
+        "(1,10,7)(2,5,4)(3,12,9)(6,13,8)(17,16,15)," +   // A'
+        "(1,4,6)(3,14,7)(5,11,13)(8,12,10)(20,19,18),"+       // B'
+        "(1,7,10)(2,4,5)(3,9,12)(6,8,13)(15,16,17)," +   // A
+        "(1,6,4)(3,7,14)(5,13,11)(8,10,12)(18,19,20)]";      // B
+
+            GroupExplorer groudp = new GroupExplorer(gen, MemorySettings.COMPACT);
+            groudp.exploreStates(false, (states, depth) -> {
+                System.out.println("Depth " + depth + ": " + states.size() + " states");
+            });
+           // System.exit(0);
+
+        String[] namesLookup = new String[] {
+            "X'", "Y'", "X", "Y"
+        };
+        String[] inverseNamesLookup = new String[] {
+            "X", "Y", "X'", "Y'"
+        };
+
+        int[][][] g = GroupExplorer.parseOperationsArr(gen);
+
+        // Now g contains the full puzzle generator
+
+        GroupExplorer group = new GroupExplorer(
+            GroupExplorer.generatorsToString(g),
+            MemorySettings.COMPACT,
+            new HashSet<>(), new HashSet<>(), new HashSet<>(), true);
+        // I want to iteratively explore states until I find a match to this state:
+        // Zeroes should be ignored in comparison
+       // int[] stateMatch = { 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14, 15,16,17, 18,19,20};
+        int[] stateMatch =   { 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14, 16,17,15, 19,20,18};
         group.setTrackPath(true);
         group.initIterativeExploration();
 
