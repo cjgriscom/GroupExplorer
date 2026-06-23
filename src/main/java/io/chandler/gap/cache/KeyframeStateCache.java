@@ -3,6 +3,7 @@ package io.chandler.gap.cache;
 import java.util.Arrays;
 import java.util.List;
 
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 /**
@@ -11,7 +12,7 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
  */
 public class KeyframeStateCache {
 
-    public static final int KEYFRAME_INTERVAL = 22;
+    public static final int KEYFRAME_INTERVAL = 6;
 
     private final int prefixLen;
     private final int nElements;
@@ -78,7 +79,6 @@ public class KeyframeStateCache {
      * Register a newly discovered state. Returns the assigned state id, or -1 if duplicate.
      */
     public int tryAdd(int parentStateId, byte gen, int[] perm, int depth) {
-        short[] permShort = cvt(perm);
         long h = hash(perm);
         if (!hashes.add(h)) {
             return -1;
@@ -88,7 +88,7 @@ public class KeyframeStateCache {
         parentId[id] = parentStateId;
         genIndex[id] = gen;
         if (depth % KEYFRAME_INTERVAL == 0) {
-            keyframePerm[id] = permShort.clone();
+            keyframePerm[id] = cvt(perm);
         } else {
             keyframePerm[id] = null;
         }
@@ -115,6 +115,37 @@ public class KeyframeStateCache {
             resultInt[i] = result[i] & 0xffff;
         }
         return resultInt;
+    }
+
+    /**
+     * Returns the generator indices applied from the root to {@code stateId}, in
+     * forward (root -> state) order. Reconstructs the BFS path without a separate
+     * backtracking map by walking the stored parent/generator chain.
+     */
+    public int[] tracePath(int stateId) {
+        if (stateId < 0 || stateId >= size) {
+            throw new IllegalArgumentException("Invalid state id: " + stateId);
+        }
+        IntArrayList gens = new IntArrayList();
+        int id = stateId;
+        while (parentId[id] != -1) {
+            gens.add(genIndex[id] & 0xff);
+            id = parentId[id];
+        }
+        int n = gens.size();
+        int[] result = new int[n];
+        for (int i = 0; i < n; i++) {
+            result[i] = gens.getInt(n - 1 - i);
+        }
+        return result;
+    }
+
+    public int parentOf(int stateId) {
+        return parentId[stateId];
+    }
+
+    public int genOf(int stateId) {
+        return genIndex[stateId] & 0xff;
     }
 
     public void clear() {

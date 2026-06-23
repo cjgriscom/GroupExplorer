@@ -67,4 +67,39 @@ class StateHashTest {
         });
     }
 
+    @Test
+    void tracePathReproducesEveryState() {
+        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS);
+        compress.exploreStates(false, (states, depth) -> {});
+
+        KeyframeStateCache cache = compress.compressCache();
+        int n = compress.nElements;
+
+        int[] identity = new int[n];
+        for (int i = 0; i < n; i++) identity[i] = i + 1;
+
+        for (int id = 0; id < cache.size(); id++) {
+            int[] path = cache.tracePath(id);
+            // Replay the generator sequence from the identity.
+            int[] replay = identity.clone();
+            for (int g : path) {
+                replay = GroupExplorer.applyOperation(replay, compress.parsedOperations.get(g));
+            }
+            assertArrayEquals(cache.reconstruct(id), replay,
+                "tracePath replay must equal the cached state for id " + id);
+        }
+    }
+
+    @Test
+    void compressDoesNotAccumulateStateMap() {
+        // The visited set must live entirely in the hash cache; stateMap should stay
+        // empty so memory does not scale with the number of explored states.
+        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS);
+        compress.exploreStates(false, (states, depth) -> {});
+
+        assertEquals(5616, compress.order());
+        assertEquals(0, compress.visitedSetSize(),
+            "COMPRESS mode should not populate the legacy stateMap");
+    }
+
 }

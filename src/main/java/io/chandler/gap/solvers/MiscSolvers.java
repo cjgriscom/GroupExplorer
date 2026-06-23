@@ -11,7 +11,9 @@ import io.chandler.gap.Dodecahedron;
 import io.chandler.gap.GroupExplorer;
 import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.GroupExplorer.PeekData;
+import io.chandler.gap.cache.KeyframeStateCache;
 import io.chandler.gap.cache.State;
+import io.chandler.gap.cache.State.StateCompressed;
 import io.chandler.gap.render.Icosahedron;
 import javafx.util.Pair;
 
@@ -209,7 +211,7 @@ public class MiscSolvers {
         int matchNStates = 3;
 
         Integer order = 88704000;
-        Integer maxDepth = 84;
+        Integer maxDepth = 58;
 
         if (maxDepth == null || order == null || System.getProperty("debug") != null) {
             GroupExplorer groudp = new GroupExplorer(hs_2, MemorySettings.COMPRESS);
@@ -347,19 +349,26 @@ public class MiscSolvers {
         group.setTrackPath(true);
         group.initIterativeExploration();
 
+        KeyframeStateCache compressCache = group.compressCache();
+        final boolean compress = compressCache != null;
+
         ArrayList<int[]> matchingStates = new ArrayList<>();
 
         System.out.println(Arrays.toString(stateMatch));
         System.out.println(Arrays.toString(group.copyCurrentState()));
 
-        HashMap<State, Pair<State, Integer>> backtrack = new HashMap<>();
+        // In COMPRESS mode the parent/generator chain lives in the cache, so the
+        // per-state backtracking map (which dominated heap usage) is not needed.
+        HashMap<State, Pair<State, Integer>> backtrack = compress ? null : new HashMap<>();
 
         while (matchingStates.size() < matchNStates) {
 
             group.iterateExploration(false, order+1, true, (states, depth) -> {
                 for (Object x : states) {
                     PeekData data = (PeekData) x;
-                    backtrack.put(data.newState, new Pair<>(data.oldState, data.operation));
+                    if (!compress) {
+                        backtrack.put(data.newState, new Pair<>(data.oldState, data.operation));
+                    }
                     int[] state = data.newState.state();
                     boolean matches = true;
                     for (int i = 0; i < state.length; i++) {
@@ -368,21 +377,35 @@ public class MiscSolvers {
                             break;
                         }
                     }
-                    if (matches || depth >= maxDepth-1) {
+                    if (matches || depth >= maxDepth-2) {
 
                         System.out.println(Arrays.toString(state));
                         matchingStates.add(state);
                         System.out.println(GroupExplorer.describeState(13, state));
                         System.out.println(GroupExplorer.stateToNotation(state));
+
                         // Figure out path
-                        State current = State.of(state, group.nElements, group.mem);
                         String op = "";
                         String inverseOp = "";
-                        while (backtrack.containsKey(current)) {
-                            Pair<State, Integer> d = backtrack.get(current);
-                            op = namesLookup[d.getValue()] + " " + op;
-                            inverseOp = inverseOp + " " + namesLookup[d.getValue()];
-                            current = d.getKey();
+                        if (compress) {
+                            // Walk the cache's stored parent/generator chain (root -> state).
+                            int[] path = compressCache.tracePath(((StateCompressed) data.newState).getStateId());
+                            StringBuilder fwd = new StringBuilder();
+                            StringBuilder inv = new StringBuilder();
+                            for (int g : path) {
+                                fwd.append(namesLookup[g]).append(" ");
+                                inv.insert(0, namesLookup[g] + " ");
+                            }
+                            op = fwd.toString();
+                            inverseOp = inv.toString();
+                        } else {
+                            State current = State.of(state, group.nElements, group.mem);
+                            while (backtrack.containsKey(current)) {
+                                Pair<State, Integer> d = backtrack.get(current);
+                                op = namesLookup[d.getValue()] + " " + op;
+                                inverseOp = inverseOp + " " + namesLookup[d.getValue()];
+                                current = d.getKey();
+                            }
                         }
                         System.out.println("Fwd: " + op);
                         System.out.println("Inv: " + inverseOp);

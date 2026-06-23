@@ -175,6 +175,11 @@ public class GroupExplorer implements AbstractGroupProperties {
         return compressCache;
     }
 
+    /** Size of the legacy in-memory visited set. Expected to be 0 in COMPRESS mode. */
+    public int visitedSetSize() {
+        return stateMap.size();
+    }
+
     public void setMultithread(boolean multithread) {
         this.multithread = multithread;
     }
@@ -643,20 +648,20 @@ public class GroupExplorer implements AbstractGroupProperties {
         }
 
         int newCount = incompleteAdditions.size();
-        int preTransferCacheSize = compressCache.size() - newCount;
-        for (State s : stateMapIncomplete) {
-            if (s instanceof StateCompressed) {
-                ((StateCompressed) s).stripPerm();
-            }
-        }
-        stateMap.addAll(stateMapIncomplete);
 
-        if (compressCache.size() != preTransferCacheSize + newCount) {
+        // COMPRESS mode never accumulates the visited set in `stateMap`; membership
+        // and order are tracked entirely by the long-hash cache. Each new state grows
+        // the cache by exactly one entry, so verify that invariant here.
+        long expected = sizeInit + newCount;
+        if (compressCache.size() != expected) {
             throw new ParityStateCache.StateRejectedException(
                 "Compress cache size mismatch: " + compressCache.size()
-                + " != " + preTransferCacheSize + " + " + newCount);
+                + " != " + sizeInit + " + " + newCount);
         }
 
+        // Swap frontier buffers. The old frontier (now in stateMapTmp) is cleared,
+        // releasing its StateCompressed handles and their int[] perms for GC. The new
+        // frontier retains its perms so the next layer expands without reconstructing.
         Set<State> tmp = stateMapIncomplete;
         stateMapIncomplete = stateMapTmp;
         stateMapTmp = tmp;
