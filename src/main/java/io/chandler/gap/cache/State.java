@@ -7,7 +7,10 @@ import io.chandler.gap.GroupExplorer.MemorySettings;
 
 public abstract class State {
 	public static State of(int[] state, int maxElement, MemorySettings mem) {
-		if (mem == MemorySettings.COMPACT) {
+		if (mem == MemorySettings.COMPRESS) {
+			throw new IllegalStateException(
+				"COMPRESS mode uses KeyframeStateCache.tryAdd; do not call State.of directly");
+		} else if (mem == MemorySettings.COMPACT) {
 			return new StateFactorial(state, maxElement);
 		} else if (mem == MemorySettings.FASTEST) {
 			return new StateFast(state, maxElement);
@@ -21,6 +24,66 @@ public abstract class State {
 	}
 	
 	public abstract int[] state();
+
+	/**
+	 * Lightweight handle for COMPRESS mode. Frontier nodes retain {@code perm};
+	 * visited nodes drop it and reconstruct from {@link KeyframeStateCache} on demand.
+	 */
+	public static class StateCompressed extends State {
+		public final int stateId;
+		public final long hash;
+		private int[] perm;
+		private final KeyframeStateCache cache;
+
+		public StateCompressed(int stateId, long hash, int[] perm, KeyframeStateCache cache) {
+			this.stateId = stateId;
+			this.hash = hash;
+			this.perm = perm;
+			this.cache = cache;
+		}
+
+		public void stripPerm() {
+			this.perm = null;
+		}
+
+		public int getStateId() {
+			return stateId;
+		}
+
+		/** Returns the frontier permutation if present, otherwise reconstructs. */
+		public int[] frontierPerm() {
+			if (perm != null) {
+				return perm;
+			}
+			return cache.reconstruct(stateId);
+		}
+
+		public KeyframeStateCache cache() {
+			return cache;
+		}
+
+		@Override
+		public int[] state() {
+			if (perm != null) {
+				return perm;
+			}
+			return cache.reconstruct(stateId);
+		}
+
+		@Override
+		public int hashCode() {
+			return Long.hashCode(hash);
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj) return true;
+			if (obj instanceof StateCompressed) {
+				return hash == ((StateCompressed) obj).hash;
+			}
+			return false;
+		}
+	}
 
 
 	static class StateFactorial extends State {

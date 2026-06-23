@@ -15,8 +15,11 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+import io.chandler.gap.cache.KeyframeStateCache;
 import io.chandler.gap.cache.ParityStateCache;
 import io.chandler.gap.cache.State;
+import io.chandler.gap.cache.State.StateCompressed;
+import io.chandler.gap.cache.StateHash;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 
 public class GroupExplorer implements AbstractGroupProperties {
@@ -24,6 +27,8 @@ public class GroupExplorer implements AbstractGroupProperties {
     private final Set<State> stateMap;
     private Set<State> stateMapIncomplete;
     private Set<State> stateMapTmp;
+
+    private KeyframeStateCache compressCache;
 
     public int[] elements;
     public List<int[][]> parsedOperations;
@@ -138,6 +143,7 @@ public class GroupExplorer implements AbstractGroupProperties {
         this.stateMapTmp = stateMapTmp;
         elements = initializeElements(nElements);
         parsedOperations = parseOperations(cycleNotation);
+        initCompressCache();
     }
 
     public GroupExplorer(Generator g, int nElements, MemorySettings mem, Set<State> stateMap, Set<State> stateMapIncomplete, Set<State> stateMapTmp, boolean multithread) {
@@ -149,6 +155,24 @@ public class GroupExplorer implements AbstractGroupProperties {
         this.stateMapTmp = stateMapTmp;
         elements = initializeElements(nElements);
         parsedOperations = Arrays.asList(g.generator());
+        initCompressCache();
+    }
+
+    private void initCompressCache() {
+        if (mem == MemorySettings.COMPRESS) {
+            multithread = false;
+            int prefixLen = compressPrefixLength(nElements);
+            compressCache = new KeyframeStateCache(prefixLen, nElements, parsedOperations);
+        }
+    }
+
+    /** {@link StateHash#derivePrefixLength(int)} */
+    public static int compressPrefixLength(int nElements) {
+        return StateHash.derivePrefixLength(nElements);
+    }
+
+    public KeyframeStateCache compressCache() {
+        return compressCache;
     }
 
     public void setMultithread(boolean multithread) {
@@ -162,8 +186,19 @@ public class GroupExplorer implements AbstractGroupProperties {
     public void resetElements(boolean addInitialState) {
         elements = initializeElements(nElements);
         stateMap.clear();
+        stateMapIncomplete.clear();
+        stateMapTmp.clear();
+        if (compressCache != null) {
+            compressCache.clear();
+        }
         if (addInitialState) {
-            stateMap.add(State.of(elements.clone(), nElements, mem));
+            if (compressCache != null) {
+                int[] root = elements.clone();
+                int id = compressCache.registerRoot(root);
+                stateMapIncomplete.add(new StateCompressed(id, compressCache.hash(root), root, compressCache));
+            } else {
+                stateMap.add(State.of(elements.clone(), nElements, mem));
+            }
         }
     }
 
@@ -221,11 +256,19 @@ public class GroupExplorer implements AbstractGroupProperties {
     public void serialize(OutputStream out) throws IOException {
         try (DataOutputStream dos = new DataOutputStream(out)) {
             dos.writeInt(nElements);
-            dos.writeInt(stateMap.size());
-
-            for (State state : stateMap) {
-                for (int i : state.state()) {
-                    dos.writeInt(i);
+            if (compressCache != null) {
+                dos.writeInt(compressCache.size());
+                for (int i = 0; i < compressCache.size(); i++) {
+                    for (int v : compressCache.reconstruct(i)) {
+                        dos.writeInt(v);
+                    }
+                }
+            } else {
+                dos.writeInt(stateMap.size());
+                for (State state : stateMap) {
+                    for (int i : state.state()) {
+                        dos.writeInt(i);
+                    }
                 }
             }
         }
@@ -233,6 +276,9 @@ public class GroupExplorer implements AbstractGroupProperties {
         
     @Override
     public int order() {
+        if (compressCache != null) {
+            return compressCache.size();
+        }
         return stateMap.size();
     }
 
@@ -369,8 +415,17 @@ public class GroupExplorer implements AbstractGroupProperties {
     }
 
     public void initIterativeExploration() {
-        stateMapIncomplete.add(State.of(elements.clone(), nElements, mem));
-
+        stateMap.clear();
+        stateMapIncomplete.clear();
+        stateMapTmp.clear();
+        if (compressCache != null) {
+            compressCache.clear();
+            int[] root = elements.clone();
+            int id = compressCache.registerRoot(root);
+            stateMapIncomplete.add(new StateCompressed(id, compressCache.hash(root), root, compressCache));
+        } else {
+            stateMapIncomplete.add(State.of(elements.clone(), nElements, mem));
+        }
         lastSize = 0;
         iteration = 0;
     }
@@ -397,6 +452,10 @@ public class GroupExplorer implements AbstractGroupProperties {
     }
 
     public int iterateExploration(boolean debug, int stateLimit, boolean peekData, BiConsumer<List<?>, Integer> peekStateAndDepth) {
+        if (compressCache != null) {
+            return iterateExplorationCompress(debug, stateLimit, peekData, peekStateAndDepth);
+        }
+
         int size = stateMap.size() + stateMapIncomplete.size();
         if (debug) System.out.println("Depth: " + iteration + " - " + (size - lastSize) + " - " + size);
         lastSize = size;
@@ -510,6 +569,109 @@ public class GroupExplorer implements AbstractGroupProperties {
         return -2;
     }
 
+    private int iterateExplorationCompress(boolean debug, int stateLimit, boolean peekData,
+            BiConsumer<List<?>, Integer> peekStateAndDepth) {
+        if (multithread) {
+            throw new UnsupportedOperationException("COMPRESS mode does not support multithreaded exploration yet");
+        }
+
+        int size = compressCache.size();
+        if (debug) {
+            System.out.println("Depth: " + iteration + " - frontier " + stateMapIncomplete.size()
+                + " - total " + size);
+        }
+        lastSize = size;
+        iteration++;
+
+        long sizeInit = size;
+
+        Set<State> incompleteAdditions = stateMapTmp;
+        final List<?> peekList;
+        final List<PeekData> peekDataList;
+        final List<int[]> peekArrList;
+
+        if (peekData) {
+            peekDataList = new ArrayList<>();
+            peekArrList = null;
+            peekList = peekDataList;
+        } else {
+            peekArrList = new ArrayList<>();
+            peekDataList = null;
+            peekList = peekArrList;
+        }
+
+        for (State state : stateMapIncomplete) {
+            StateCompressed parent = (StateCompressed) state;
+            int[] currentState = parent.frontierPerm();
+
+            for (int i = 0; i < parsedOperations.size(); i++) {
+                int[] newState = applyOperation(currentState, parsedOperations.get(i));
+                long newHash = compressCache.hash(newState);
+
+                if (compressCache.containsHash(newHash)) {
+                    continue;
+                }
+
+                int newId = compressCache.tryAdd(parent.stateId, (byte) i, newState, iteration);
+                if (newId < 0) {
+                    continue;
+                }
+
+                StateCompressed s = new StateCompressed(newId, newHash, newState, compressCache);
+                incompleteAdditions.add(s);
+
+                if (peekStateAndDepth != null) {
+                    if (peekData) {
+                        if (trackPath) {
+                            peekDataList.add(new PeekData(i, parent, s));
+                        } else {
+                            peekDataList.add(new PeekData(s));
+                        }
+                    } else {
+                        peekArrList.add(newState);
+                        if (maxPeekSize > 0 && peekArrList.size() >= maxPeekSize) {
+                            peekStateAndDepth.accept(peekArrList, iteration);
+                            peekArrList.clear();
+                        }
+                    }
+                }
+            }
+        }
+
+        if (peekList.size() > 0 && peekStateAndDepth != null) {
+            peekStateAndDepth.accept(peekList, iteration);
+        }
+
+        int newCount = incompleteAdditions.size();
+        int preTransferCacheSize = compressCache.size() - newCount;
+        for (State s : stateMapIncomplete) {
+            if (s instanceof StateCompressed) {
+                ((StateCompressed) s).stripPerm();
+            }
+        }
+        stateMap.addAll(stateMapIncomplete);
+
+        if (compressCache.size() != preTransferCacheSize + newCount) {
+            throw new ParityStateCache.StateRejectedException(
+                "Compress cache size mismatch: " + compressCache.size()
+                + " != " + preTransferCacheSize + " + " + newCount);
+        }
+
+        Set<State> tmp = stateMapIncomplete;
+        stateMapIncomplete = stateMapTmp;
+        stateMapTmp = tmp;
+        stateMapTmp.clear();
+
+        long sizeEnd = compressCache.size();
+        if (sizeInit == sizeEnd) {
+            return iteration;
+        }
+        if (stateLimit > 0 && sizeEnd > stateLimit) {
+            return -1;
+        }
+        return -2;
+    }
+
     public int exploreStates(boolean debug, BiConsumer<List<int[]>, Integer> peekStateAndDepth) {
        return exploreStates(debug, -1, peekStateAndDepth);
     }
@@ -576,7 +738,7 @@ public class GroupExplorer implements AbstractGroupProperties {
         return result;
     }
 
-    private int[] applyOperation(int[] state, int[][] operation) {
+    public static int[] applyOperation(int[] state, int[][] operation) {
         int[] newState = Arrays.copyOf(state, state.length);
         for (int[] cycle : operation) {
             if (cycle.length > 1) {
