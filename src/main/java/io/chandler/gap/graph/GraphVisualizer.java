@@ -32,6 +32,7 @@ import io.chandler.gap.graph.layoutalgos.JavaNetworkx;
 import io.chandler.gap.graph.layoutalgos.JavaSpring;
 import io.chandler.gap.graph.layoutalgos.LayoutAlgo;
 import io.chandler.gap.graph.layoutalgos.LayoutAlgoArg;
+import io.chandler.gap.graph.layoutalgos.LayoutCongestion;
 import javafx.application.Application;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
@@ -44,6 +45,7 @@ import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.BorderPane;
@@ -482,8 +484,15 @@ public class GraphVisualizer extends Application {
         Button filterByFitButton = new Button("Filter by Fit");
         filterByFitButton.setOnAction(e -> showFilterByFitDialog(primaryStage, pageLabel));
 
+        Button filterByCongestionButton = new Button("Congestion...");
+        filterByCongestionButton.setOnAction(e -> showFilterByCongestionDialog(primaryStage, pageLabel));
+
+        Button showGeneratorButton = new Button("Show Generator");
+        showGeneratorButton.setOnAction(e -> showGeneratorDialog(primaryStage));
+
         paginator.getChildren().addAll(removeDupButton, removeFoldedButton, filterShareButton,
-                filterByFitButton, numSharedLinesLabel, genusButton, autButton, fitLabel);
+                filterByFitButton, filterByCongestionButton, showGeneratorButton,
+                numSharedLinesLabel, genusButton, autButton, fitLabel);
 
         root.setBottom(paginator);
 
@@ -1418,6 +1427,209 @@ public class GraphVisualizer extends Application {
                 hex.setStrokeWidth(0.5);
                 pane.getChildren().add(hex);
             }
+        }
+    }
+
+    private void showGeneratorDialog(Stage owner) {
+        if (graphLines == null || graphLines.isEmpty()) return;
+
+        String generator = graphLines.get(currentGraphIndex);
+
+        Stage dialog = new Stage();
+        dialog.initOwner(owner);
+        dialog.setTitle("Generator " + (currentGraphIndex + 1) + " / " + graphLines.size());
+
+        TextArea textArea = new TextArea(generator);
+        textArea.setWrapText(true);
+        textArea.setPrefRowCount(6);
+        textArea.setPrefColumnCount(80);
+
+        Button closeButton = new Button("Close");
+        closeButton.setOnAction(ev -> dialog.close());
+
+        VBox root = new VBox(10, textArea, closeButton);
+        root.setStyle("-fx-padding: 10;");
+        dialog.setScene(new Scene(root, 640, 180));
+        dialog.show();
+
+        textArea.requestFocus();
+        textArea.selectAll();
+    }
+
+    private static Graph<Integer, DefaultEdge> buildGraphFromLineStatic(String line) {
+        Graph<Integer, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
+        int[][][] combinedGen = GroupExplorer.parseOperationsArr(line);
+        for (int[][] cycle : combinedGen) {
+            for (int[] polygon : cycle) {
+                for (int vertex : polygon) {
+                    graph.addVertex(vertex);
+                }
+                for (int i = 0; i < polygon.length; i++) {
+                    int a = polygon[i];
+                    int b = polygon[(i + 1) % polygon.length];
+                    graph.addEdge(a, b);
+                }
+            }
+        }
+        return graph;
+    }
+
+    private static LayoutAlgo createFreshLayoutAlgo(String name) {
+        switch (name) {
+            case "Java Spring": return new JavaSpring();
+            case "Java 3D": return new Java3D();
+            case "Java Networkx": return new JavaNetworkx();
+            case "Axis Constrained": return new AxisConstrainedLayout();
+            case "Axis Constrained Multi": return new AxisConstrainedLayoutMulti();
+            case "SAT Layout": return new SATLayout();
+            case "Planar Puzzle": return new ConcentricConstrainedLayout();
+            case "Grid Solver": return new GridLayout();
+            default: return new JavaNetworkx();
+        }
+    }
+
+    private double computeCongestionForLine(String line, String layoutName,
+            EnumMap<LayoutAlgoArg, Double> args, double boxSize) {
+        Graph<Integer, DefaultEdge> graph = buildGraphFromLineStatic(line);
+        LayoutAlgo algo = createFreshLayoutAlgo(layoutName);
+        algo.performLayout(boxSize, line, graph, args);
+        return LayoutCongestion.compute(graph, algo.getResult());
+    }
+
+    private void showFilterByCongestionDialog(Stage owner, Label pageLabel) {
+        if (graphLines == null || graphLines.isEmpty()) return;
+
+        String layoutName = layoutChoiceBox.getValue();
+        LayoutAlgo templateAlgo = layoutAlgoMap.get(layoutName);
+        if (templateAlgo == null) return;
+        EnumMap<LayoutAlgoArg, Double> args = getArgs(templateAlgo);
+        double boxSize = Math.max(500.0, Math.min(graphPane.getWidth(), graphPane.getHeight()));
+
+        List<String> linesToProcess = new ArrayList<>(graphLines);
+        int total = linesToProcess.size();
+
+        Stage dialog = new Stage();
+        dialog.initOwner(owner);
+        dialog.setTitle("Congestion (" + layoutName + ", " + total + " generators)");
+
+        ObservableList<String> resultItems = FXCollections.observableArrayList();
+        ListView<String> listView = new ListView<>(resultItems);
+        listView.setPrefHeight(400);
+        listView.setPrefWidth(700);
+
+        Label progressLabel = new Label("0 / " + total + " completed");
+        Label statsLabel = new Label("Avg: - | Min: - | Max: -");
+        Button stopButton = new Button("Stop");
+        TextField maxCongestionField = new TextField("1.0");
+        maxCongestionField.setPrefWidth(80);
+        Button applyFilterButton = new Button("Keep Below");
+
+        HBox controlBar = new HBox(10, progressLabel, statsLabel, stopButton,
+                new Label("Max:"), maxCongestionField, applyFilterButton);
+        controlBar.setStyle("-fx-padding: 5; -fx-alignment: center-left;");
+
+        VBox dialogRoot = new VBox(5, controlBar, listView);
+        dialogRoot.setStyle("-fx-padding: 10;");
+
+        dialog.setScene(new Scene(dialogRoot, 720, 480));
+
+        List<double[]> congestionResults = Collections.synchronizedList(new ArrayList<>());
+
+        int nThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+        ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+        AtomicInteger completed = new AtomicInteger(0);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < total; i++) {
+            final int idx = i;
+            final String line = linesToProcess.get(i);
+            futures.add(executor.submit(() -> {
+                if (Thread.currentThread().isInterrupted()) return;
+                double congestion = computeCongestionForLine(line, layoutName, args, boxSize);
+                congestionResults.add(new double[]{congestion, idx});
+                int done = completed.incrementAndGet();
+                if (done % Math.max(1, total / 100) == 0 || done == total) {
+                    Platform.runLater(() -> refreshCongestionList(resultItems, congestionResults,
+                            linesToProcess, progressLabel, statsLabel, done, total));
+                }
+            }));
+        }
+
+        stopButton.setOnAction(ev -> {
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+            stopButton.setDisable(true);
+            stopButton.setText("Stopped");
+            Platform.runLater(() -> refreshCongestionList(resultItems, congestionResults,
+                    linesToProcess, progressLabel, statsLabel, completed.get(), total));
+        });
+
+        applyFilterButton.setOnAction(ev -> {
+            double threshold;
+            try {
+                threshold = Double.parseDouble(maxCongestionField.getText().trim());
+            } catch (NumberFormatException ex) {
+                return;
+            }
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+
+            List<double[]> snapshot;
+            synchronized (congestionResults) {
+                snapshot = new ArrayList<>(congestionResults);
+            }
+            snapshot.sort((a, b) -> Double.compare(a[0], b[0]));
+
+            List<String> filtered = new ArrayList<>();
+            for (double[] entry : snapshot) {
+                if (entry[0] <= threshold) {
+                    filtered.add(linesToProcess.get((int) entry[1]));
+                }
+            }
+            graphLines = filtered;
+            currentGraphIndex = 0;
+            if (!graphLines.isEmpty()) {
+                updateGraph(graphPane, pageLabel);
+                updateGraphInfo(graphLines.get(currentGraphIndex));
+            } else {
+                graphPane.getChildren().clear();
+            }
+            pageLabel.setText(" / " + graphLines.size());
+            pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
+            dialog.close();
+        });
+
+        dialog.setOnCloseRequest(ev -> {
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+        });
+
+        dialog.show();
+    }
+
+    private static void refreshCongestionList(ObservableList<String> items, List<double[]> congestionResults,
+            List<String> lines, Label progressLabel, Label statsLabel, int done, int total) {
+        List<double[]> snapshot;
+        synchronized (congestionResults) {
+            snapshot = new ArrayList<>(congestionResults);
+        }
+        snapshot.sort((a, b) -> Double.compare(a[0], b[0]));
+        List<String> display = new ArrayList<>(snapshot.size());
+        double sum = 0.0;
+        double min = Double.MAX_VALUE;
+        double max = Double.MIN_VALUE;
+        for (double[] entry : snapshot) {
+            double c = entry[0];
+            sum += c;
+            min = Math.min(min, c);
+            max = Math.max(max, c);
+            display.add(String.format("%.4f  |  %s", c, lines.get((int) entry[1])));
+        }
+        items.setAll(display);
+        progressLabel.setText(done + " / " + total + " completed");
+        if (!snapshot.isEmpty()) {
+            double avg = sum / snapshot.size();
+            statsLabel.setText(String.format("Avg: %.4f | Min: %.4f | Max: %.4f", avg, min, max));
         }
     }
 
