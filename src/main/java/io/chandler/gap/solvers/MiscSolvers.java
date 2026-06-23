@@ -377,11 +377,11 @@ public class MiscSolvers {
                             break;
                         }
                     }
-                    if (matches || depth >= maxDepth-2) {
+                    if (matches || depth >= maxDepth-1) {
 
-                        System.out.println(Arrays.toString(state));
-                        matchingStates.add(state);
-                        System.out.println(GroupExplorer.describeState(13, state));
+                        //System.out.println(Arrays.toString(state));
+                        if (matches) matchingStates.add(state);
+                        System.out.println(GroupExplorer.describeState(group.nElements, state));
                         System.out.println(GroupExplorer.stateToNotation(state));
 
                         // Figure out path
@@ -409,7 +409,7 @@ public class MiscSolvers {
                         }
                         System.out.println("Fwd: " + op);
                         System.out.println("Inv: " + inverseOp);
-                        System.out.println(Arrays.toString(state));
+                        //System.out.println(Arrays.toString(state));
                     }
                 }
             });

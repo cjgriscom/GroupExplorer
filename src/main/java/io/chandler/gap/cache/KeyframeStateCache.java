@@ -12,7 +12,7 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
  */
 public class KeyframeStateCache {
 
-    public static final int KEYFRAME_INTERVAL = 6;
+    public static final int KEYFRAME_INTERVAL = 4;
 
     private final int prefixLen;
     private final int nElements;
