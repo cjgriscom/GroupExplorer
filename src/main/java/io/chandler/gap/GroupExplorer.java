@@ -115,6 +115,7 @@ public class GroupExplorer implements AbstractGroupProperties {
         FASTEST,
         DEFAULT,
         COMPACT,
+        COMPRESS,
     }
     public GroupExplorer(String cycleNotation, MemorySettings mem) {
         this(cycleNotation, mem, new ObjectOpenHashSet<State>());

@@ -61,7 +61,7 @@ public class Java3D extends LayoutAlgo {
 
     @Override
     public Map<Integer, double[]> getResult() {
-        double[][] hardcodedArray = {
+        /*double[][] hardcodedArray = {
             {360.90859981719836, 515.7404984597775, 125.87484565231426},
             {463.6118896808394, 67.2, 203.47115590124963},
             {604.8000000000001, 379.5651192368765, 250.80036702331},
@@ -75,7 +75,7 @@ public class Java3D extends LayoutAlgo {
         Map<Integer, double[]> result = new HashMap<>();
         for (int i = 0; i < indices.length; i++) {
             result.put(indices[i], hardcodedArray[i]);
-        }
+        }*/
         return result;
     }
 
