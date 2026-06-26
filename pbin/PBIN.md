@@ -149,3 +149,12 @@ Encode options:
   -c MODE       Compression: 0=none, 1=zlib (default: 1)
   -b BLOCKSIZE  Generators per block (default: 16)
 ```
+
+Both the encoder and decoder are streaming: only one block of generators is
+held in memory at a time. The encoder makes two passes over the text input
+(count/scan, then encode). The decoder reads the header and directory, then
+seeks to each block in turn.
+
+In Java, use `PbinFile.open(path)` for random access without loading the
+entire file. `PbinFile.get(index)` decodes one generator on demand, caching
+the current block only.

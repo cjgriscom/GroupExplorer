@@ -2,6 +2,7 @@ package io.chandler.gap.graph;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -22,7 +23,7 @@ import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleGraph;
 
 import io.chandler.gap.GroupExplorer;
-import io.chandler.gap.PbinReader;
+import io.chandler.gap.PbinFile;
 import io.chandler.gap.graph.genus.MultiGenus;
 import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayout;
 import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayoutMulti;
@@ -78,6 +79,7 @@ public class GraphVisualizer extends Application {
 
     private String filePath;
     private List<String> graphLines = Collections.emptyList();
+    private PbinFile pbinFile;
     private int currentGraphIndex = 0;
     // Add a map to store edge frequencies; keys are in the form "min-max".
     private Map<String, Integer> edgeFrequencyMap;
@@ -163,11 +165,16 @@ public class GraphVisualizer extends Application {
     }
 
     @Override
+    public void stop() {
+        closeGraphSource();
+    }
+
+    @Override
     public void start(Stage primaryStage) {
         if (getParameters().getRaw().size() > 0) {
 
             filePath = getParameters().getRaw().get(0);
-            graphLines = readGraphLinesFromFile(filePath);
+            readGraphLinesFromFile(filePath);
         }
 
         // Create the main layout:
@@ -199,7 +206,7 @@ public class GraphVisualizer extends Application {
         // Editable index field followed by total count label: "k / n"
         pageIndexTextField = new TextField(String.valueOf(currentGraphIndex + 1));
         pageIndexTextField.setPrefWidth(60);
-        Label pageLabel = new Label(" / " + (graphLines == null ? 0 : graphLines.size()));
+        Label pageLabel = new Label(" / " + graphLineCount());
 
         // Create layout configuration controls.
         seedTextField = new TextField("0");
@@ -310,13 +317,13 @@ public class GraphVisualizer extends Application {
             );
             File selectedFile = fileChooser.showOpenDialog(primaryStage);
             if (selectedFile != null) {
-                graphLines = readGraphLinesFromFile(selectedFile.getAbsolutePath());
+                readGraphLinesFromFile(selectedFile.getAbsolutePath());
                 currentGraphIndex = 0;
                 // Update total label and index field
-                pageLabel.setText(" / " + graphLines.size());
+                pageLabel.setText(" / " + graphLineCount());
                 pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             }
         });
 
@@ -378,7 +385,7 @@ public class GraphVisualizer extends Application {
             if (!suppressRender && renderQueued) {
                 renderQueued = false;
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             }
         });
 
@@ -426,9 +433,9 @@ public class GraphVisualizer extends Application {
         removeDupButton.setOnAction(e -> {
             removeDuplicates();
             currentGraphIndex = 0;
-            if (graphLines.size() > 0) {
+            if (graphLineCount() > 0) {
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             } else {
                 // Clear the graphPane
                 graphPane.getChildren().clear();
@@ -440,16 +447,17 @@ public class GraphVisualizer extends Application {
         removeFoldedButton.setOnAction(e -> {
             // Filter the graphLines list: keep only those that do not have folded polygons.
             List<String> filteredLines = new ArrayList<>();
-            for (String line : graphLines) {
+            for (int i = 0; i < graphLineCount(); i++) {
+                String line = getGraphLine(i);
                 if (!hasFoldedPolygons(line)) {
                     filteredLines.add(line);
                 }
             }
-            graphLines = filteredLines;
+            setGraphLines(filteredLines);
             currentGraphIndex = 0;
-            if (graphLines.size() > 0) {
+            if (graphLineCount() > 0) {
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             } else {
                 // Clear the graphPane
                 graphPane.getChildren().clear();
@@ -470,7 +478,8 @@ public class GraphVisualizer extends Application {
                     int target = Integer.parseInt(input);
                     // Filter the graphLines list based on the shared line count.
                     List<String> filteredLines = new ArrayList<>();
-                    for (String line : graphLines) {
+                    for (int i = 0; i < graphLineCount(); i++) {
+                        String line = getGraphLine(i);
                         // Calling buildGraphFromLine will update the edgeFrequencyMap.
                         buildGraphFromLine(line);
                         int shared = countSharedLines();
@@ -478,11 +487,11 @@ public class GraphVisualizer extends Application {
                             filteredLines.add(line);
                         }
                     }
-                    graphLines = filteredLines;
+                    setGraphLines(filteredLines);
                     currentGraphIndex = 0;
-                    if (graphLines.size() > 0) {
+                    if (graphLineCount() > 0) {
                         updateGraph(graphPane, pageLabel);
-                        updateGraphInfo(graphLines.get(currentGraphIndex));
+                        updateGraphInfo(getGraphLine(currentGraphIndex));
                     } else {
                         // Clear the graphPane
                         graphPane.getChildren().clear();
@@ -513,15 +522,15 @@ public class GraphVisualizer extends Application {
             if (currentGraphIndex > 0) {
                 currentGraphIndex--;
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             }
         });
 
         nextButton.setOnAction(e -> {
-            if (currentGraphIndex < graphLines.size() - 1) {
+            if (currentGraphIndex < graphLineCount() - 1) {
                 currentGraphIndex++;
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             }
         });
 
@@ -530,10 +539,10 @@ public class GraphVisualizer extends Application {
             try {
                 int idx = Integer.parseInt(pageIndexTextField.getText().trim());
                 if (idx < 1) idx = 1;
-                if (idx > graphLines.size()) idx = graphLines.size();
+                if (idx > graphLineCount()) idx = graphLineCount();
                 currentGraphIndex = idx - 1;
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             } catch (NumberFormatException ex) {
                 // Reset to current on invalid input
                 //pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
@@ -548,7 +557,7 @@ public class GraphVisualizer extends Application {
                 if (newBounds.getWidth() > 100 && newBounds.getHeight() > 100) {
                     updateArgsVisibility();
                     updateGraph(graphPane, pageLabel);
-                    updateGraphInfo(graphLines.get(currentGraphIndex));
+                    updateGraphInfo(getGraphLine(currentGraphIndex));
                     graphPane.layoutBoundsProperty().removeListener(this);
                 }
             }
@@ -633,21 +642,60 @@ public class GraphVisualizer extends Application {
         });
     }
 
+    private void closeGraphSource() {
+        if (pbinFile != null) {
+            try {
+                pbinFile.close();
+            } catch (IOException ignored) {
+            }
+            pbinFile = null;
+        }
+    }
+
+    private void setGraphLines(List<String> lines) {
+        closeGraphSource();
+        graphLines = lines;
+    }
+
+    private void setPbinFile(PbinFile file) {
+        closeGraphSource();
+        graphLines = Collections.emptyList();
+        pbinFile = file;
+    }
+
+    private int graphLineCount() {
+        if (pbinFile != null) return pbinFile.size();
+        return graphLines.size();
+    }
+
+    private boolean graphLinesEmpty() {
+        return graphLineCount() == 0;
+    }
+
+    private String getGraphLine(int index) {
+        try {
+            if (pbinFile != null) return pbinFile.get(index);
+            return graphLines.get(index);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read generator " + index, e);
+        }
+    }
+
     /**
-     * Reads the input file and stores each non-empty line.
-     *
-     * @param filePath Path to the file containing graph data.
-     * @return List of input lines.
+     * Reads the input file. Text files are loaded into memory; PBIN files are
+     * opened for random access (one block in memory at a time).
      */
-    private List<String> readGraphLinesFromFile(String filePath) {
+    private void readGraphLinesFromFile(String filePath) {
         System.out.println("Reading file: " + filePath);
+        closeGraphSource();
+        graphLines = Collections.emptyList();
         if (filePath.endsWith(".pbin")) {
             try {
-                return PbinReader.readPbinFile(filePath);
+                setPbinFile(PbinFile.open(filePath));
             } catch (Exception e) {
                 System.err.println("Failed to read PBIN file: " + e.getMessage());
-                return new ArrayList<>();
             }
+            return;
         }
         List<String> lines = new ArrayList<>();
         try (Scanner scanner = new Scanner(new File(filePath))) {
@@ -660,11 +708,11 @@ public class GraphVisualizer extends Application {
         } catch (FileNotFoundException e) {
             System.err.println("File not found: " + filePath);
         }
-        return lines;
+        graphLines = lines;
     }
 
     private void exportGraphLines(Stage owner) {
-        if (graphLines == null || graphLines.isEmpty()) {
+        if (graphLinesEmpty()) {
             Alert alert = new Alert(Alert.AlertType.WARNING);
             alert.setTitle("Export");
             alert.setHeaderText(null);
@@ -703,8 +751,8 @@ public class GraphVisualizer extends Application {
         }
 
         try (PrintWriter writer = new PrintWriter(outputPath)) {
-            for (String line : graphLines) {
-                writer.println(line);
+            for (int i = 0; i < graphLineCount(); i++) {
+                writer.println(getGraphLine(i));
             }
         } catch (FileNotFoundException e) {
             Alert alert = new Alert(Alert.AlertType.ERROR);
@@ -718,7 +766,7 @@ public class GraphVisualizer extends Application {
         Alert alert = new Alert(Alert.AlertType.INFORMATION);
         alert.setTitle("Export");
         alert.setHeaderText(null);
-        alert.setContentText("Exported " + graphLines.size() + " graph(s) to:\n" + outputPath);
+        alert.setContentText("Exported " + graphLineCount() + " graph(s) to:\n" + outputPath);
         alert.showAndWait();
     }
 
@@ -877,7 +925,6 @@ public class GraphVisualizer extends Application {
         // Draw nodes with interactive dragging.
         Map<Integer, Circle> vertexCircleMap = new HashMap<>();
         Map<Integer, Text> vertexLabelMap = new HashMap<>();
-        int i = 0;
         for (Map.Entry<Integer, double[]> entry : positions.entrySet()) {
             int vertex = entry.getKey();
             double[] pos = entry.getValue();
@@ -949,7 +996,7 @@ public class GraphVisualizer extends Application {
             renderQueued = true;
             return;
         }
-        String currentLine = graphLines.get(currentGraphIndex);
+        String currentLine = getGraphLine(currentGraphIndex);
         Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(currentLine);
         Map<Integer, double[]> positions;
         String newCacheKey = buildLayoutCacheKey(currentLine);
@@ -1028,7 +1075,7 @@ public class GraphVisualizer extends Application {
             }
             // Printthe generator
             //System.out.println("Generator: " + currentLine);
-            pageLabel.setText(" / " + graphLines.size());
+            pageLabel.setText(" / " + graphLineCount());
             drawPlanarGraph(currentGraph, graphPane, currentLine, positions);
         }
     }
@@ -1068,7 +1115,8 @@ public class GraphVisualizer extends Application {
      */
     private void removeDuplicates() {
         List<String> uniqueLines = new ArrayList<>();
-        for (String line : graphLines) {
+        for (int i = 0; i < graphLineCount(); i++) {
+            String line = getGraphLine(i);
             Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(line);
             boolean duplicate = false;
             for (String uniqLine : uniqueLines) {
@@ -1084,7 +1132,7 @@ public class GraphVisualizer extends Application {
                 uniqueLines.add(line);
             }
         }
-        graphLines = uniqueLines;
+        setGraphLines(uniqueLines);
     }
 
     /**
@@ -1506,13 +1554,13 @@ public class GraphVisualizer extends Application {
     }
 
     private void showGeneratorDialog(Stage owner) {
-        if (graphLines == null || graphLines.isEmpty()) return;
+        if (graphLinesEmpty()) return;
 
-        String generator = graphLines.get(currentGraphIndex);
+        String generator = getGraphLine(currentGraphIndex);
 
         Stage dialog = new Stage();
         dialog.initOwner(owner);
-        dialog.setTitle("Generator " + (currentGraphIndex + 1) + " / " + graphLines.size());
+        dialog.setTitle("Generator " + (currentGraphIndex + 1) + " / " + graphLineCount());
 
         TextArea textArea = new TextArea(generator);
         textArea.setWrapText(true);
@@ -1532,7 +1580,7 @@ public class GraphVisualizer extends Application {
     }
 
     private void showEditCoordinatesDialog(Stage owner, Pane graphPane, Label pageLabel) {
-        if (graphLines == null || graphLines.isEmpty()) return;
+        if (graphLinesEmpty()) return;
         if (currentVertexCircleMap == null || currentVertexCircleMap.isEmpty()) {
             Alert alert = new Alert(Alert.AlertType.WARNING);
             alert.setTitle("Edit Coordinates");
@@ -1544,7 +1592,7 @@ public class GraphVisualizer extends Application {
 
         Stage dialog = new Stage();
         dialog.initOwner(owner);
-        dialog.setTitle("Coordinates " + (currentGraphIndex + 1) + " / " + graphLines.size());
+        dialog.setTitle("Coordinates " + (currentGraphIndex + 1) + " / " + graphLineCount());
 
         Label hintLabel = new Label("One vertex per line: vertex x y");
         TextArea textArea = new TextArea(formatCoordinatesText());
@@ -1556,7 +1604,7 @@ public class GraphVisualizer extends Application {
         Button cancelButton = new Button("Cancel");
         okButton.setOnAction(ev -> {
             try {
-                String currentLine = graphLines.get(currentGraphIndex);
+                String currentLine = getGraphLine(currentGraphIndex);
                 Map<Integer, double[]> parsed = parseCoordinatesText(textArea.getText());
                 validateCoordinates(parsed, currentLine);
                 manualPositions = parsed;
@@ -1701,7 +1749,7 @@ public class GraphVisualizer extends Application {
     }
 
     private void showFilterByCongestionDialog(Stage owner, Label pageLabel) {
-        if (graphLines == null || graphLines.isEmpty()) return;
+        if (graphLinesEmpty()) return;
 
         String layoutName = layoutChoiceBox.getValue();
         LayoutAlgo templateAlgo = layoutAlgoMap.get(layoutName);
@@ -1709,7 +1757,10 @@ public class GraphVisualizer extends Application {
         EnumMap<LayoutAlgoArg, Double> args = getArgs(templateAlgo);
         double boxSize = Math.max(500.0, Math.min(graphPane.getWidth(), graphPane.getHeight()));
 
-        List<String> linesToProcess = new ArrayList<>(graphLines);
+        List<String> linesToProcess = new ArrayList<>(graphLineCount());
+        for (int i = 0; i < graphLineCount(); i++) {
+            linesToProcess.add(getGraphLine(i));
+        }
         int total = linesToProcess.size();
 
         Stage dialog = new Stage();
@@ -1790,15 +1841,15 @@ public class GraphVisualizer extends Application {
                     filtered.add(linesToProcess.get((int) entry[1]));
                 }
             }
-            graphLines = filtered;
+            setGraphLines(filtered);
             currentGraphIndex = 0;
-            if (!graphLines.isEmpty()) {
+            if (!graphLinesEmpty()) {
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             } else {
                 graphPane.getChildren().clear();
             }
-            pageLabel.setText(" / " + graphLines.size());
+            pageLabel.setText(" / " + graphLineCount());
             pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
             dialog.close();
         });
@@ -1838,7 +1889,7 @@ public class GraphVisualizer extends Application {
     }
 
     private void showFilterByFitDialog(Stage owner, Label pageLabel) {
-        if (graphLines == null || graphLines.isEmpty()) return;
+        if (graphLinesEmpty()) return;
 
         LayoutAlgo satAlgo = layoutAlgoMap.get("SAT Layout");
         if (satAlgo == null) return;
@@ -1849,7 +1900,10 @@ public class GraphVisualizer extends Application {
         int initialIters = args.get(LayoutAlgoArg.INITIAL_ITERS).intValue();
         double repulsionFactor = args.get(LayoutAlgoArg.REPULSION_FACTOR);
 
-        List<String> linesToProcess = new ArrayList<>(graphLines);
+        List<String> linesToProcess = new ArrayList<>(graphLineCount());
+        for (int i = 0; i < graphLineCount(); i++) {
+            linesToProcess.add(getGraphLine(i));
+        }
         int total = linesToProcess.size();
 
         Stage dialog = new Stage();
@@ -1931,15 +1985,15 @@ public class GraphVisualizer extends Application {
                     filtered.add(linesToProcess.get((int) entry[1]));
                 }
             }
-            graphLines = filtered;
+            setGraphLines(filtered);
             currentGraphIndex = 0;
-            if (!graphLines.isEmpty()) {
+            if (!graphLinesEmpty()) {
                 updateGraph(graphPane, pageLabel);
-                updateGraphInfo(graphLines.get(currentGraphIndex));
+                updateGraphInfo(getGraphLine(currentGraphIndex));
             } else {
                 graphPane.getChildren().clear();
             }
-            pageLabel.setText(" / " + graphLines.size());
+            pageLabel.setText(" / " + graphLineCount());
             pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
             dialog.close();
         });

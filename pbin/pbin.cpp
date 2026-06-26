@@ -396,25 +396,66 @@ static std::vector<uint8_t> zlib_decompress(const uint8_t *data, size_t len) {
 static constexpr char     PBIN_MAGIC[4] = {'P','B','I','N'};
 static constexpr uint8_t  PBIN_VERSION  = 0x01;
 
-static void write_u32_le(std::vector<uint8_t> &buf, uint32_t v) {
-    buf.push_back( v        & 0xFF);
-    buf.push_back((v >>  8) & 0xFF);
-    buf.push_back((v >> 16) & 0xFF);
-    buf.push_back((v >> 24) & 0xFF);
-}
-
-static void put_u32_le(std::vector<uint8_t> &buf, size_t pos, uint32_t v) {
-    buf[pos + 0] =  v        & 0xFF;
-    buf[pos + 1] = (v >>  8) & 0xFF;
-    buf[pos + 2] = (v >> 16) & 0xFF;
-    buf[pos + 3] = (v >> 24) & 0xFF;
-}
-
 static uint32_t read_u32_le(const uint8_t *p) {
     return static_cast<uint32_t>(p[0])       |
           (static_cast<uint32_t>(p[1]) << 8) |
           (static_cast<uint32_t>(p[2]) << 16)|
           (static_cast<uint32_t>(p[3]) << 24);
+}
+
+static void write_u32_le(std::ostream &os, uint32_t v) {
+    char b[4] = {
+        static_cast<char>( v        & 0xFF),
+        static_cast<char>((v >>  8) & 0xFF),
+        static_cast<char>((v >> 16) & 0xFF),
+        static_cast<char>((v >> 24) & 0xFF),
+    };
+    os.write(b, 4);
+}
+
+static void write_varint(std::ostream &os, uint32_t val) {
+    do {
+        uint8_t b = val & 0x7F;
+        val >>= 7;
+        if (val) b |= 0x80;
+        os.put(static_cast<char>(b));
+    } while (val);
+}
+
+static void trim_line(std::string &line) {
+    while (!line.empty() &&
+           std::isspace(static_cast<unsigned char>(line.back())))
+        line.pop_back();
+}
+
+static void update_max_point(const Generator &gen, int &max_point) {
+    for (auto &cs : gen.cycle_sets)
+        for (auto &cyc : cs.cycles)
+            for (int p : cyc)
+                if (p > max_point) max_point = p;
+}
+
+// Read varints from an ifstream at the current position.
+static uint32_t read_varint_stream(std::ifstream &ifs) {
+    uint32_t val = 0;
+    unsigned shift = 0;
+    for (;;) {
+        char c;
+        if (!ifs.get(c)) throw std::runtime_error("truncated varint");
+        uint32_t b = static_cast<uint8_t>(c);
+        val |= (b & 0x7F) << shift;
+        if (!(b & 0x80)) break;
+        shift += 7;
+        if (shift >= 35) throw std::runtime_error("varint overflow");
+    }
+    return val;
+}
+
+static uint32_t read_u32_le_stream(std::ifstream &ifs) {
+    char b[4];
+    ifs.read(b, 4);
+    if (ifs.gcount() != 4) throw std::runtime_error("truncated u32");
+    return read_u32_le(reinterpret_cast<uint8_t *>(b));
 }
 
 // Optionally compress a payload according to compression mode
@@ -433,167 +474,172 @@ static std::vector<uint8_t> maybe_decompress(const uint8_t *data, size_t len,
     return {data, data + len};
 }
 
-// ── v2 encode ───────────────────────────────────────────────
+// ── encode (two-pass, one block in memory) ──────────────────
 
 static void encode_file(const std::string &in_path,
                          const std::string &out_path,
                          uint8_t compression,
                          uint32_t block_size) {
-    std::ifstream ifs(in_path);
-    if (!ifs) throw std::runtime_error("cannot open " + in_path);
-    std::vector<std::string> lines;
-    {
-        std::string line;
-        while (std::getline(ifs, line)) {
-            while (!line.empty() &&
-                   std::isspace(static_cast<unsigned char>(line.back())))
-                line.pop_back();
-            if (!line.empty()) lines.push_back(std::move(line));
-        }
-    }
-    ifs.close();
-    if (lines.empty()) throw std::runtime_error("input file is empty");
-
-    std::vector<Generator> gens;
-    gens.reserve(lines.size());
+    // Pass 1: count generators and find N
     int max_point = 0;
     bool all_bare = true;
-    for (auto &l : lines) {
-        if (!l.empty() && l.front() == '[') all_bare = false;
-        auto gen = parse_generator(l);
-        for (auto &cs : gen.cycle_sets)
-            for (auto &cyc : cs.cycles)
-                for (int p : cyc)
-                    if (p > max_point) max_point = p;
-        gens.push_back(std::move(gen));
+    uint32_t M = 0;
+    {
+        std::ifstream ifs(in_path);
+        if (!ifs) throw std::runtime_error("cannot open " + in_path);
+        std::string line;
+        while (std::getline(ifs, line)) {
+            trim_line(line);
+            if (line.empty()) continue;
+            ++M;
+            if (!line.empty() && line.front() == '[') all_bare = false;
+            update_max_point(parse_generator(line), max_point);
+        }
     }
+    if (M == 0) throw std::runtime_error("input file is empty");
 
     int N = max_point;
-    uint32_t M = static_cast<uint32_t>(gens.size());
-
-    // Encode each generator to raw bytes
-    std::vector<std::vector<uint8_t>> raw_gens(M);
-    for (uint32_t i = 0; i < M; ++i)
-        raw_gens[i] = encode_generator(gens[i], N);
-
-    // Group into blocks and compress
     uint32_t num_blocks = (M + block_size - 1) / block_size;
-    std::vector<std::vector<uint8_t>> block_blobs(num_blocks);
-
-    for (uint32_t b = 0; b < num_blocks; ++b) {
-        uint32_t start = b * block_size;
-        uint32_t end   = std::min(start + block_size, M);
-        uint32_t count = end - start;
-
-        // Build block payload: count + sizes[] + concatenated gen data
-        std::vector<uint8_t> payload;
-        write_varint(payload, count);
-        for (uint32_t i = start; i < end; ++i)
-            write_varint(payload, static_cast<uint32_t>(raw_gens[i].size()));
-        for (uint32_t i = start; i < end; ++i)
-            payload.insert(payload.end(),
-                           raw_gens[i].begin(), raw_gens[i].end());
-
-        block_blobs[b] = maybe_compress(payload, compression);
-    }
-
-    // Assemble file
-    std::vector<uint8_t> file;
-    file.insert(file.end(), PBIN_MAGIC, PBIN_MAGIC + 4);
-    file.push_back(PBIN_VERSION);
-    file.push_back(all_bare ? 0x01 : 0x00);
-    file.push_back(compression);
-    write_varint(file, block_size);
-    write_varint(file, static_cast<uint32_t>(N));
-    write_varint(file, M);
-
-    // Directory placeholder
-    size_t dir_off = file.size();
-    for (uint32_t b = 0; b < num_blocks; ++b) write_u32_le(file, 0);
-
-    // Append blocks, fill directory
-    for (uint32_t b = 0; b < num_blocks; ++b) {
-        put_u32_le(file, dir_off + b * 4,
-                   static_cast<uint32_t>(file.size()));
-        file.insert(file.end(),
-                    block_blobs[b].begin(), block_blobs[b].end());
-    }
 
     std::ofstream ofs(out_path, std::ios::binary);
     if (!ofs) throw std::runtime_error("cannot create " + out_path);
-    ofs.write(reinterpret_cast<const char *>(file.data()),
-              static_cast<std::streamsize>(file.size()));
+
+    ofs.write(PBIN_MAGIC, 4);
+    ofs.put(static_cast<char>(PBIN_VERSION));
+    ofs.put(static_cast<char>(all_bare ? 0x01 : 0x00));
+    ofs.put(static_cast<char>(compression));
+    write_varint(ofs, block_size);
+    write_varint(ofs, static_cast<uint32_t>(N));
+    write_varint(ofs, M);
+
+    const std::streampos dir_off = ofs.tellp();
+    for (uint32_t b = 0; b < num_blocks; ++b)
+        write_u32_le(ofs, 0);
+
+    // Pass 2: encode and write blocks
+    std::ifstream ifs(in_path);
+    if (!ifs) throw std::runtime_error("cannot reopen " + in_path);
+
+    std::vector<std::vector<uint8_t>> block_raw;
+    block_raw.reserve(block_size);
+    uint32_t block_idx = 0;
+
+    auto flush_block = [&]() {
+        if (block_raw.empty()) return;
+
+        std::vector<uint8_t> payload;
+        write_varint(payload, static_cast<uint32_t>(block_raw.size()));
+        for (auto &raw : block_raw)
+            write_varint(payload, static_cast<uint32_t>(raw.size()));
+        for (auto &raw : block_raw)
+            payload.insert(payload.end(), raw.begin(), raw.end());
+
+        std::vector<uint8_t> blob = maybe_compress(payload, compression);
+        const uint32_t off = static_cast<uint32_t>(ofs.tellp());
+        ofs.seekp(dir_off + static_cast<std::streamoff>(block_idx) * 4);
+        write_u32_le(ofs, off);
+        ofs.seekp(off);
+        ofs.write(reinterpret_cast<const char *>(blob.data()),
+                  static_cast<std::streamsize>(blob.size()));
+
+        block_raw.clear();
+        ++block_idx;
+    };
+
+    std::string line;
+    while (std::getline(ifs, line)) {
+        trim_line(line);
+        if (line.empty()) continue;
+
+        block_raw.push_back(encode_generator(parse_generator(line), N));
+        if (block_raw.size() >= block_size)
+            flush_block();
+    }
+    flush_block();
+
     ofs.close();
+    ifs.close();
 
     std::ifstream sz_ifs(in_path, std::ios::binary | std::ios::ate);
     auto in_size = sz_ifs.tellg();
     sz_ifs.close();
+    std::ifstream out_sz(out_path, std::ios::binary | std::ios::ate);
+    auto out_size = out_sz.tellg();
+    out_sz.close();
 
     const char *comp_name[] = {"none", "zlib"};
     std::cerr << "Encoded " << M << " generators (N=" << N
               << ", block=" << block_size
               << ", compression=" << comp_name[compression] << ")\n"
               << "  " << in_path << " (" << in_size << " B) -> "
-              << out_path << " (" << file.size() << " B)\n";
+              << out_path << " (" << out_size << " B)\n";
 }
 
 static void decode_file(const std::string &in_path,
                          const std::string &out_path) {
-    std::ifstream ifs(in_path, std::ios::binary | std::ios::ate);
+    std::ifstream ifs(in_path, std::ios::binary);
     if (!ifs) throw std::runtime_error("cannot open " + in_path);
-    size_t file_size = static_cast<size_t>(ifs.tellg());
+
+    ifs.seekg(0, std::ios::end);
+    const auto file_size = static_cast<uint64_t>(ifs.tellg());
     ifs.seekg(0);
-    std::vector<uint8_t> file(file_size);
-    ifs.read(reinterpret_cast<char *>(file.data()),
-             static_cast<std::streamsize>(file_size));
-    ifs.close();
 
-    const uint8_t *p   = file.data();
-    const uint8_t *end = file.data() + file_size;
-
-    if (file_size < 7 || std::memcmp(p, PBIN_MAGIC, 4) != 0)
+    char magic[4];
+    ifs.read(magic, 4);
+    if (ifs.gcount() != 4 || std::memcmp(magic, PBIN_MAGIC, 4) != 0)
         throw std::runtime_error("not a PBIN file");
-    p += 4;
 
-    uint8_t version = *p++;
+    char version_c;
+    ifs.get(version_c);
+    const uint8_t version = static_cast<uint8_t>(version_c);
     if (version != PBIN_VERSION)
         throw std::runtime_error("unsupported PBIN version " +
                                  std::to_string(version));
 
-    uint8_t flags       = *p++;
-    uint8_t compression = *p++;
-    bool bare = (flags & 0x01) != 0;
+    char flags_c, compression_c;
+    ifs.get(flags_c);
+    ifs.get(compression_c);
+    const bool bare = (static_cast<uint8_t>(flags_c) & 0x01) != 0;
+    const uint8_t compression = static_cast<uint8_t>(compression_c);
 
-    uint32_t block_size = read_varint(p, end);
-    uint32_t N          = read_varint(p, end);
-    uint32_t M          = read_varint(p, end);
-    uint32_t num_blocks = (M + block_size - 1) / block_size;
+    const uint32_t block_size = read_varint_stream(ifs);
+    const uint32_t N          = read_varint_stream(ifs);
+    const uint32_t M          = read_varint_stream(ifs);
+    const uint32_t num_blocks = (M + block_size - 1) / block_size;
 
-    if (p + num_blocks * 4 > end)
-        throw std::runtime_error("truncated v2 directory");
+    const auto dir_start = ifs.tellg();
+    ifs.seekg(dir_start + static_cast<std::streamoff>(num_blocks) * 4);
+    if (static_cast<uint64_t>(ifs.tellg()) > file_size)
+        throw std::runtime_error("truncated directory");
+
+    ifs.seekg(dir_start);
     std::vector<uint32_t> offsets(num_blocks);
-    for (uint32_t b = 0; b < num_blocks; ++b) {
-        offsets[b] = read_u32_le(p);
-        p += 4;
-    }
+    for (uint32_t b = 0; b < num_blocks; ++b)
+        offsets[b] = read_u32_le_stream(ifs);
 
     std::ofstream ofs(out_path);
     if (!ofs) throw std::runtime_error("cannot create " + out_path);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        const uint8_t *bs = file.data() + offsets[b];
-        const uint8_t *be = (b + 1 < num_blocks)
-            ? file.data() + offsets[b + 1] : end;
-        if (bs > end || be > end || bs >= be)
-            throw std::runtime_error("bad v2 block offset at " +
-                                     std::to_string(b));
+        const uint64_t b_start = offsets[b];
+        const uint64_t b_end   = (b + 1 < num_blocks)
+            ? offsets[b + 1] : file_size;
+        if (b_start >= b_end || b_end > file_size)
+            throw std::runtime_error("bad block offset at " + std::to_string(b));
 
-        auto payload = maybe_decompress(bs, static_cast<size_t>(be - bs),
-                                        compression);
+        ifs.seekg(static_cast<std::streamoff>(b_start));
+        const size_t blen = static_cast<size_t>(b_end - b_start);
+        std::vector<uint8_t> block_data(blen);
+        ifs.read(reinterpret_cast<char *>(block_data.data()),
+                 static_cast<std::streamsize>(blen));
+        if (static_cast<size_t>(ifs.gcount()) != blen)
+            throw std::runtime_error("truncated block " + std::to_string(b));
+
+        auto payload = maybe_decompress(block_data.data(), blen, compression);
         const uint8_t *bp   = payload.data();
         const uint8_t *bend = payload.data() + payload.size();
 
-        uint32_t count = read_varint(bp, bend);
+        const uint32_t count = read_varint(bp, bend);
         std::vector<uint32_t> sizes(count);
         for (uint32_t i = 0; i < count; ++i)
             sizes[i] = read_varint(bp, bend);
@@ -602,14 +648,14 @@ static void decode_file(const std::string &in_path,
             if (bp + sizes[i] > bend)
                 throw std::runtime_error("truncated generator in block " +
                                          std::to_string(b));
-            auto gen = decode_generator(bp, sizes[i],
-                                        static_cast<int>(N));
+            auto gen = decode_generator(bp, sizes[i], static_cast<int>(N));
             bp += sizes[i];
-            bool use_bare = bare && gen.cycle_sets.size() == 1;
+            const bool use_bare = bare && gen.cycle_sets.size() == 1;
             ofs << generator_to_string(gen, use_bare) << '\n';
         }
     }
     ofs.close();
+    ifs.close();
 
     const char *comp_name[] = {"none", "zlib"};
     std::cerr << "Decoded " << M << " generators (N=" << N
