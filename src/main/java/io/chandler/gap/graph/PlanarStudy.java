@@ -56,11 +56,11 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS =0; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS =30; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
-        boolean requirePlanar = true; // Require the graphs to be planar / polyhedral
-        int discardOverGenusN = 1; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
-        int enforceLoopMultiples = 1; // For planar grid stuff, set to 1 for normal operation
+        boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
+        int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
+        int enforceLoopMultiples = 0; // For planar grid stuff, set to 1 for normal operation
         long minGeometryAutOrder = 1; // Minimum |Aut(geometry)|; 1 disables this filter
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
@@ -74,14 +74,14 @@ public class PlanarStudy {
 
         // Either use a complete description like "6p 3-cycles" or a partial description like "5-cycles" for 5-cycles only
         String[] conj = new String[] {
-            "4-cycles",  "2-cycles"
+            "2-cycles",  "2-cycles"
         };
         // For phase 1, we use two different files (indices 0 and 1).
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.j2_2; 
-        String groupName = "j2_2";
+        String generator = Generators.co3; 
+        String groupName = "co3";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -375,7 +375,7 @@ public class PlanarStudy {
         // If repetitions == 1, then we generate triple candidates (as before).
         // If repetitions > 1, then we iteratively combine the candidates with new generators (from lines2)
         // without checking group order until the final round.
-        
+        AtomicInteger errors = new AtomicInteger(0);
         List<int[][][]> currentCandidates = new ArrayList<>(candidatePairs);
         // For output naming, build a base file name.
         String baseFileName =
@@ -396,6 +396,8 @@ public class PlanarStudy {
             int roundCount = 0;
             // For each candidate from the previous round, combine with each line from file3.
             for (int i = 0; i < currentCandidates.size(); i++) {
+                final int iDisp = i;
+                final int sizeDisp = currentCandidates.size();
                 int[][][] candidate = currentCandidates.get(i);
                 AtomicBoolean earlyTerminationP2 = new AtomicBoolean(false);
                 AtomicInteger roundCountAtomic = new AtomicInteger(0);
@@ -450,11 +452,18 @@ public class PlanarStudy {
                     Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, directed);
 
                     // Check for isomorphic duplicates.
-                    String canonicalLabeling = dreadnautL.get().getCanonicalLabeling(newCandidate, directed);
-                    synchronized (canonicalGraphs) {
-                        if (canonicalGraphs.contains(canonicalLabeling)) {
-                            return;
+                    String canonicalLabeling;
+                    try {
+                        canonicalLabeling = dreadnautL.get().getCanonicalLabeling(newCandidate, directed);
+                        synchronized (canonicalGraphs) {
+                            if (canonicalGraphs.contains(canonicalLabeling)) {
+                                return;
+                            }
                         }
+                    } catch (RuntimeException e) {
+                        System.err.println("Failed to compute canonical labeling: " + e.getMessage());
+                        errors.incrementAndGet();
+                        return;
                     }
                     
                     // Enforce all simple cycles have length multiple of N (if enabled)
@@ -507,7 +516,7 @@ public class PlanarStudy {
                         if (size.equals(String.valueOf(orderFinal)) && passesGeometryFilterFinal) {
                             phase2RoundOut.println(GroupExplorer.generatorsToString(newCandidate));
                             found[rFinal]++;
-                            System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[rFinal] + " results and " + newCandidates.size() + " candidates");
+                            System.out.println("    ("+(iDisp)+"/"+sizeDisp+") Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[rFinal] + " results and " + newCandidates.size() + " candidates");
 
                         }
                         roundCountAtomic.incrementAndGet();
@@ -522,6 +531,7 @@ public class PlanarStudy {
             currentCandidates = newCandidates;
         }
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + order + " found: " + Arrays.toString(found));
+        System.out.println("Errors: " + errors);
     }
 
     private static boolean conjMatches(String conj, String description) {

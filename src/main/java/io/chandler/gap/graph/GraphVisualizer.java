@@ -2,6 +2,7 @@ package io.chandler.gap.graph;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.PrintWriter;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -111,6 +112,8 @@ public class GraphVisualizer extends Application {
     // Variables for caching the base coordinates using a composite key.
     private String cachedGraphKey = null;
     private Map<Integer, double[]> cachedBasePositions = new HashMap<>();
+    private Map<Integer, double[]> manualPositions = null;
+    private String manualPositionsCacheKey = null;
 
     private CheckBox showDirectionCheckBox;
 
@@ -314,6 +317,12 @@ public class GraphVisualizer extends Application {
             }
         });
 
+        Button exportButton = new Button("Export");
+        exportButton.setOnAction(e -> exportGraphLines(primaryStage));
+
+        Button editCoordinatesButton = new Button("Edit Coordinates");
+        editCoordinatesButton.setOnAction(e -> showEditCoordinatesDialog(primaryStage, graphPane, pageLabel));
+
         Button controlsButton = new Button("Controls");
         controlsButton.setOnAction(e -> {
             Alert alert = new Alert(Alert.AlertType.INFORMATION);
@@ -371,7 +380,7 @@ public class GraphVisualizer extends Application {
         });
 
         // Create a top-bar HBox for the remaining controls.
-        HBox topControls = new HBox(10, randomizeButton, loadButton, controlsButton);
+        HBox topControls = new HBox(10, randomizeButton, loadButton, exportButton, editCoordinatesButton, controlsButton);
         topControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
         root.setTop(topControls);
 
@@ -643,6 +652,65 @@ public class GraphVisualizer extends Application {
         return lines;
     }
 
+    private void exportGraphLines(Stage owner) {
+        if (graphLines == null || graphLines.isEmpty()) {
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("Export");
+            alert.setHeaderText(null);
+            alert.setContentText("No graphs to export.");
+            alert.showAndWait();
+            return;
+        }
+
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.getExtensionFilters().add(
+            new FileChooser.ExtensionFilter("Text Files", "*.txt")
+        );
+        if (filePath != null) {
+            File source = new File(filePath);
+            if (source.getParentFile() != null) {
+                fileChooser.setInitialDirectory(source.getParentFile());
+            }
+            String baseName = source.getName();
+            int dot = baseName.lastIndexOf('.');
+            if (dot > 0) {
+                baseName = baseName.substring(0, dot);
+            }
+            fileChooser.setInitialFileName(baseName + "-exported.txt");
+        } else {
+            fileChooser.setInitialFileName("graphs-exported.txt");
+        }
+
+        File selectedFile = fileChooser.showSaveDialog(owner);
+        if (selectedFile == null) {
+            return;
+        }
+
+        String outputPath = selectedFile.getAbsolutePath();
+        if (!outputPath.toLowerCase().endsWith(".txt")) {
+            outputPath += ".txt";
+        }
+
+        try (PrintWriter writer = new PrintWriter(outputPath)) {
+            for (String line : graphLines) {
+                writer.println(line);
+            }
+        } catch (FileNotFoundException e) {
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle("Export Failed");
+            alert.setHeaderText(null);
+            alert.setContentText("Could not write to file: " + outputPath);
+            alert.showAndWait();
+            return;
+        }
+
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle("Export");
+        alert.setHeaderText(null);
+        alert.setContentText("Exported " + graphLines.size() + " graph(s) to:\n" + outputPath);
+        alert.showAndWait();
+    }
+
     /**
      * Builds a graph from a single line of input.
      *
@@ -873,68 +941,64 @@ public class GraphVisualizer extends Application {
         String currentLine = graphLines.get(currentGraphIndex);
         Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(currentLine);
         Map<Integer, double[]> positions;
-        // Build a composite key based on the current line and all layout parameters.
-        String newCacheKey = currentLine + "_" + seedTextField.getText() + "_" + itersTextField.getText() 
-                             + "_" + thetaTextField.getText() + "_" + normTextField.getText()
-                             + "_" + layoutChoiceBox.getValue() + "_" + triesTextField.getText()
-                             + "_" + initialItersTextField.getText() + "_" + showFittedNodesCheckBox.isSelected()
-                             + "_" + repulsionFactorTextField.getText() + "_" + wTextField.getText()
-                             + "_" + hTextField.getText() + "_" + solutionTextField.getText()
-                             + "_" + allSolutionsCheckBox.isSelected();
-        if (cachedGraphKey == null || !cachedGraphKey.equals(newCacheKey)) {
+        String newCacheKey = buildLayoutCacheKey(currentLine);
 
-            String method = layoutChoiceBox.getValue();
-            LayoutAlgo algo = layoutAlgoMap.get(method);
-            algo.performLayout(Math.min(graphPane.getWidth(), graphPane.getHeight()), currentLine, currentGraph, getArgs(algo));
-            Double fit = algo.getFitOut();
-
-            cachedBasePositions = algo.getResult();
-            cachedGraphKey = newCacheKey;
-            if (fit != null) {
-                fitLabel.setText("Fit: " + String.format("%.5f", fit.doubleValue()));
-            } else {
-                fitLabel.setText("");
+        if (manualPositions != null && newCacheKey.equals(manualPositionsCacheKey)) {
+            positions = copyPositions(manualPositions);
+        } else {
+            if (!newCacheKey.equals(manualPositionsCacheKey)) {
+                manualPositions = null;
+                manualPositionsCacheKey = null;
             }
-        }
-        // Make a fresh copy of the cached base coordinates.
-        positions = new HashMap<>();
-        for (Map.Entry<Integer, double[]> entry : cachedBasePositions.entrySet()) {
-            double[] coord = entry.getValue();
-            double[] copy = new double[coord.length];
-            System.arraycopy(coord, 0, copy, 0, coord.length);
-            positions.put(entry.getKey(), copy);
-        }
+            if (cachedGraphKey == null || !cachedGraphKey.equals(newCacheKey)) {
 
-        // If positions are 3D, apply the trackball rotation matrix then re-center.
-        if (!positions.isEmpty()) {
-            int dim = positions.values().iterator().next().length;
-            if (dim == 3) {
-                for (Map.Entry<Integer, double[]> entry : positions.entrySet()) {
-                    double[] pos = entry.getValue();
-                    double x = pos[0], y = pos[1], z = pos[2];
-                    double rx = trackballRotation[0][0]*x + trackballRotation[0][1]*y + trackballRotation[0][2]*z;
-                    double ry = trackballRotation[1][0]*x + trackballRotation[1][1]*y + trackballRotation[1][2]*z;
-                    // double rz = trackballRotation[2][0]*x + trackballRotation[2][1]*y + trackballRotation[2][2]*z; // not used for 2D projection
-                    pos[0] = rx;
-                    pos[1] = ry;
+                String method = layoutChoiceBox.getValue();
+                LayoutAlgo algo = layoutAlgoMap.get(method);
+                algo.performLayout(Math.min(graphPane.getWidth(), graphPane.getHeight()), currentLine, currentGraph, getArgs(algo));
+                Double fit = algo.getFitOut();
+
+                cachedBasePositions = algo.getResult();
+                cachedGraphKey = newCacheKey;
+                if (fit != null) {
+                    fitLabel.setText("Fit: " + String.format("%.5f", fit.doubleValue()));
+                } else {
+                    fitLabel.setText("");
                 }
+            }
+            // Make a fresh copy of the cached base coordinates.
+            positions = copyPositions(cachedBasePositions);
 
-                // Compute the average x and y to center the graph.
-                double sumX = 0, sumY = 0;
-                int count = positions.size();
-                for (double[] pos : positions.values()){
-                    sumX += pos[0];
-                    sumY += pos[1];
-                }
-                double avgX = sumX / count;
-                double avgY = sumY / count;
+            // If positions are 3D, apply the trackball rotation matrix then re-center.
+            if (!positions.isEmpty()) {
+                int dim = positions.values().iterator().next().length;
+                if (dim == 3) {
+                    for (Map.Entry<Integer, double[]> entry : positions.entrySet()) {
+                        double[] pos = entry.getValue();
+                        double x = pos[0], y = pos[1], z = pos[2];
+                        double rx = trackballRotation[0][0]*x + trackballRotation[0][1]*y + trackballRotation[0][2]*z;
+                        double ry = trackballRotation[1][0]*x + trackballRotation[1][1]*y + trackballRotation[1][2]*z;
+                        // double rz = trackballRotation[2][0]*x + trackballRotation[2][1]*y + trackballRotation[2][2]*z; // not used for 2D projection
+                        pos[0] = rx;
+                        pos[1] = ry;
+                    }
 
-                // Calculate the translation offset to center the graph in the pane.
-                double offsetX = graphPane.getWidth() / 2.0 - avgX;
-                double offsetY = graphPane.getHeight() / 2.0 - avgY;
-                for (double[] pos : positions.values()){
-                    pos[0] += offsetX;
-                    pos[1] += offsetY;
+                    // Compute the average x and y to center the graph.
+                    double sumX = 0, sumY = 0;
+                    int count = positions.size();
+                    for (double[] pos : positions.values()){
+                        sumX += pos[0];
+                        sumY += pos[1];
+                    }
+                    double avgX = sumX / count;
+                    double avgY = sumY / count;
+
+                    // Calculate the translation offset to center the graph in the pane.
+                    double offsetX = graphPane.getWidth() / 2.0 - avgX;
+                    double offsetY = graphPane.getHeight() / 2.0 - avgY;
+                    for (double[] pos : positions.values()){
+                        pos[0] += offsetX;
+                        pos[1] += offsetY;
+                    }
                 }
             }
         }
@@ -1454,6 +1518,135 @@ public class GraphVisualizer extends Application {
 
         textArea.requestFocus();
         textArea.selectAll();
+    }
+
+    private void showEditCoordinatesDialog(Stage owner, Pane graphPane, Label pageLabel) {
+        if (graphLines == null || graphLines.isEmpty()) return;
+        if (currentVertexCircleMap == null || currentVertexCircleMap.isEmpty()) {
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("Edit Coordinates");
+            alert.setHeaderText(null);
+            alert.setContentText("No coordinates available yet. Wait for the graph to render first.");
+            alert.showAndWait();
+            return;
+        }
+
+        Stage dialog = new Stage();
+        dialog.initOwner(owner);
+        dialog.setTitle("Coordinates " + (currentGraphIndex + 1) + " / " + graphLines.size());
+
+        Label hintLabel = new Label("One vertex per line: vertex x y");
+        TextArea textArea = new TextArea(formatCoordinatesText());
+        textArea.setWrapText(false);
+        textArea.setPrefRowCount(12);
+        textArea.setPrefColumnCount(40);
+
+        Button okButton = new Button("OK");
+        Button cancelButton = new Button("Cancel");
+        okButton.setOnAction(ev -> {
+            try {
+                String currentLine = graphLines.get(currentGraphIndex);
+                Map<Integer, double[]> parsed = parseCoordinatesText(textArea.getText());
+                validateCoordinates(parsed, currentLine);
+                manualPositions = parsed;
+                manualPositionsCacheKey = buildLayoutCacheKey(currentLine);
+                updateGraph(graphPane, pageLabel);
+                dialog.close();
+            } catch (IllegalArgumentException ex) {
+                Alert alert = new Alert(Alert.AlertType.ERROR);
+                alert.setTitle("Invalid Coordinates");
+                alert.setHeaderText(null);
+                alert.setContentText(ex.getMessage());
+                alert.showAndWait();
+            }
+        });
+        cancelButton.setOnAction(ev -> dialog.close());
+
+        HBox buttonBar = new HBox(10, okButton, cancelButton);
+        VBox root = new VBox(10, hintLabel, textArea, buttonBar);
+        root.setStyle("-fx-padding: 10;");
+        dialog.setScene(new Scene(root, 420, 360));
+        dialog.show();
+
+        textArea.requestFocus();
+        textArea.selectAll();
+    }
+
+    private String buildLayoutCacheKey(String currentLine) {
+        return currentLine + "_" + seedTextField.getText() + "_" + itersTextField.getText()
+                + "_" + thetaTextField.getText() + "_" + normTextField.getText()
+                + "_" + layoutChoiceBox.getValue() + "_" + triesTextField.getText()
+                + "_" + initialItersTextField.getText() + "_" + showFittedNodesCheckBox.isSelected()
+                + "_" + repulsionFactorTextField.getText() + "_" + wTextField.getText()
+                + "_" + hTextField.getText() + "_" + solutionTextField.getText()
+                + "_" + allSolutionsCheckBox.isSelected();
+    }
+
+    private Map<Integer, double[]> copyPositions(Map<Integer, double[]> source) {
+        Map<Integer, double[]> copy = new HashMap<>();
+        for (Map.Entry<Integer, double[]> entry : source.entrySet()) {
+            double[] coord = entry.getValue();
+            double[] coordCopy = new double[coord.length];
+            System.arraycopy(coord, 0, coordCopy, 0, coord.length);
+            copy.put(entry.getKey(), coordCopy);
+        }
+        return copy;
+    }
+
+    private String formatCoordinatesText() {
+        List<Integer> vertices = new ArrayList<>(currentVertexCircleMap.keySet());
+        Collections.sort(vertices);
+        StringBuilder sb = new StringBuilder();
+        for (int vertex : vertices) {
+            Circle circle = currentVertexCircleMap.get(vertex);
+            sb.append(vertex)
+              .append(' ')
+              .append(String.format("%.2f", circle.getCenterX()))
+              .append(' ')
+              .append(String.format("%.2f", circle.getCenterY()))
+              .append('\n');
+        }
+        return sb.toString();
+    }
+
+    private Map<Integer, double[]> parseCoordinatesText(String text) {
+        Map<Integer, double[]> result = new HashMap<>();
+        for (String rawLine : text.split("\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty() || line.startsWith("#")) {
+                continue;
+            }
+            line = line.replace(':', ' ');
+            String[] parts = line.split("[,\\s]+");
+            if (parts.length < 3) {
+                throw new IllegalArgumentException("Expected 'vertex x y' on each line: " + rawLine);
+            }
+            int vertex = Integer.parseInt(parts[0]);
+            double x = Double.parseDouble(parts[1]);
+            double y = Double.parseDouble(parts[2]);
+            if (result.containsKey(vertex)) {
+                throw new IllegalArgumentException("Duplicate vertex: " + vertex);
+            }
+            result.put(vertex, new double[] { x, y });
+        }
+        if (result.isEmpty()) {
+            throw new IllegalArgumentException("No coordinates found.");
+        }
+        return result;
+    }
+
+    private void validateCoordinates(Map<Integer, double[]> coordinates, String line) {
+        Graph<Integer, DefaultEdge> graph = buildGraphFromLine(line);
+        for (Integer vertex : graph.vertexSet()) {
+            if (!coordinates.containsKey(vertex)) {
+                throw new IllegalArgumentException("Missing coordinates for vertex " + vertex);
+            }
+        }
+        for (Integer vertex : coordinates.keySet()) {
+            if (!graph.containsVertex(vertex)) {
+                throw new IllegalArgumentException("Unknown vertex " + vertex);
+            }
+        }
     }
 
     private static Graph<Integer, DefaultEdge> buildGraphFromLineStatic(String line) {
