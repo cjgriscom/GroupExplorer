@@ -22,6 +22,7 @@ import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleGraph;
 
 import io.chandler.gap.GroupExplorer;
+import io.chandler.gap.PbinReader;
 import io.chandler.gap.graph.genus.MultiGenus;
 import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayout;
 import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayoutMulti;
@@ -302,8 +303,10 @@ public class GraphVisualizer extends Application {
         Button loadButton = new Button("Load");
         loadButton.setOnAction(e -> {
             FileChooser fileChooser = new FileChooser();
-            fileChooser.getExtensionFilters().add(
-                new FileChooser.ExtensionFilter("Text Files", "*.txt")
+            fileChooser.getExtensionFilters().addAll(
+                new FileChooser.ExtensionFilter("Generator Files", "*.txt", "*.pbin"),
+                new FileChooser.ExtensionFilter("Text Files", "*.txt"),
+                new FileChooser.ExtensionFilter("PBIN Files", "*.pbin")
             );
             File selectedFile = fileChooser.showOpenDialog(primaryStage);
             if (selectedFile != null) {
@@ -638,6 +641,14 @@ public class GraphVisualizer extends Application {
      */
     private List<String> readGraphLinesFromFile(String filePath) {
         System.out.println("Reading file: " + filePath);
+        if (filePath.endsWith(".pbin")) {
+            try {
+                return PbinReader.readPbinFile(filePath);
+            } catch (Exception e) {
+                System.err.println("Failed to read PBIN file: " + e.getMessage());
+                return new ArrayList<>();
+            }
+        }
         List<String> lines = new ArrayList<>();
         try (Scanner scanner = new Scanner(new File(filePath))) {
             while (scanner.hasNextLine()) {
