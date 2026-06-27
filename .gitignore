@@ -12,3 +12,7 @@
 *.txt
 cache.*
 PlanarStudy/
+results.csv
+assets/number_templates/
+assets/ocr_output/
+**/__pycache__/
