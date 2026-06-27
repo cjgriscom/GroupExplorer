@@ -53,16 +53,19 @@ public class SpringLayout {
 
     private static final double EPS = 0.01; // small value to avoid division by zero
     private static final double THRESHOLD = 1e-4;
+    private static final double EPS_SQ = EPS * EPS;
 
     /**
      * Mutable spring-layout state for incremental checkpointed iteration.
      */
     public static final class SpringLayoutState {
-        private final Graph graph;
         private final List<Integer> nodes;
         private final Map<Integer, Integer> nodeIndex;
         private final double[][] pos;
         private final double[][] disp;
+        private final int[] edgeI;
+        private final int[] edgeJ;
+        private final int edgeCount;
         private final int n;
         private final int dim;
         private final double k;
@@ -73,7 +76,6 @@ public class SpringLayout {
         private boolean converged;
 
         private SpringLayoutState(Graph g, int dim, long seed, int totalIterations) {
-            this.graph = g;
             this.dim = dim;
             this.totalIterations = totalIterations;
             Set<Integer> nodeSet = g.getNodes();
@@ -90,6 +92,15 @@ public class SpringLayout {
                 for (int d = 0; d < dim; d++) {
                     pos[i][d] = random.nextDouble();
                 }
+            }
+            List<Graph.Edge> edges = new ArrayList<>(g.getEdges());
+            this.edgeCount = edges.size();
+            this.edgeI = new int[edgeCount];
+            this.edgeJ = new int[edgeCount];
+            for (int e = 0; e < edgeCount; e++) {
+                Graph.Edge edge = edges.get(e);
+                edgeI[e] = nodeIndex.get(edge.u);
+                edgeJ[e] = nodeIndex.get(edge.v);
             }
             this.k = 1.0 / Math.sqrt(n);
             this.t = 0.1;
@@ -126,6 +137,16 @@ public class SpringLayout {
         }
     }
 
+    public static List<Integer> getNodeIds(SpringLayoutState state) {
+        return state.nodes;
+    }
+
+    public static void copyPositions(SpringLayoutState state, double[][] dest) {
+        for (int i = 0; i < state.n; i++) {
+            System.arraycopy(state.pos[i], 0, dest[i], 0, state.dim);
+        }
+    }
+
     public static Map<Integer, double[]> getPositions(SpringLayoutState state) {
         Map<Integer, double[]> positions = new HashMap<>();
         for (int i = 0; i < state.n; i++) {
@@ -145,76 +166,80 @@ public class SpringLayout {
     }
 
     private static void runOneIteration(SpringLayoutState state) {
-        Graph g = state.graph;
         int n = state.n;
         int dim = state.dim;
         double k = state.k;
+        double kSq = k * k;
         double[][] pos = state.pos;
         double[][] disp = state.disp;
-        Map<Integer, Integer> nodeIndex = state.nodeIndex;
+        double[] delta = new double[dim];
 
         for (int i = 0; i < n; i++) {
             Arrays.fill(disp[i], 0.0);
         }
 
         for (int i = 0; i < n; i++) {
+            double[] posi = pos[i];
+            double[] dispi = disp[i];
             for (int j = i + 1; j < n; j++) {
-                double[] delta = new double[dim];
-                double distance = 0.0;
+                double[] posj = pos[j];
+                double distSq = 0.0;
                 for (int d = 0; d < dim; d++) {
-                    delta[d] = pos[i][d] - pos[j][d];
-                    distance += delta[d] * delta[d];
+                    delta[d] = posi[d] - posj[d];
+                    distSq += delta[d] * delta[d];
                 }
-                distance = Math.sqrt(distance);
-                if (distance < EPS) {
-                    distance = EPS;
+                if (distSq < EPS_SQ) {
+                    distSq = EPS_SQ;
                 }
-                double force = (k * k) / distance;
+                double factor = kSq / distSq;
                 for (int d = 0; d < dim; d++) {
-                    double repForce = (delta[d] / distance) * force;
-                    disp[i][d] += repForce;
+                    double repForce = delta[d] * factor;
+                    dispi[d] += repForce;
                     disp[j][d] -= repForce;
                 }
             }
         }
 
-        for (Graph.Edge edge : g.getEdges()) {
-            int u = edge.u;
-            int v = edge.v;
-            int i = nodeIndex.get(u);
-            int j = nodeIndex.get(v);
-            double[] delta = new double[dim];
-            double distance = 0.0;
+        for (int e = 0; e < state.edgeCount; e++) {
+            int i = state.edgeI[e];
+            int j = state.edgeJ[e];
+            double[] posi = pos[i];
+            double[] posj = pos[j];
+            double[] dispi = disp[i];
+            double[] dispj = disp[j];
+            double distSq = 0.0;
             for (int d = 0; d < dim; d++) {
-                delta[d] = pos[i][d] - pos[j][d];
-                distance += delta[d] * delta[d];
+                delta[d] = posi[d] - posj[d];
+                distSq += delta[d] * delta[d];
             }
-            distance = Math.sqrt(distance);
+            double distance = Math.sqrt(distSq);
             if (distance < EPS) {
                 distance = EPS;
             }
-            double force = (distance * distance) / k;
+            double factor = distance / k;
             for (int d = 0; d < dim; d++) {
-                double attrForce = (delta[d] / distance) * force;
-                disp[i][d] -= attrForce;
-                disp[j][d] += attrForce;
+                double attrForce = delta[d] * factor;
+                dispi[d] -= attrForce;
+                dispj[d] += attrForce;
             }
         }
 
         double totalDisp = 0.0;
         double t = state.t;
         for (int i = 0; i < n; i++) {
-            double dispLength = 0.0;
+            double[] dispi = disp[i];
+            double dispLengthSq = 0.0;
             for (int d = 0; d < dim; d++) {
-                dispLength += disp[i][d] * disp[i][d];
+                dispLengthSq += dispi[d] * dispi[d];
             }
-            dispLength = Math.sqrt(dispLength);
+            double dispLength = Math.sqrt(dispLengthSq);
             if (dispLength < EPS) {
                 dispLength = EPS;
             }
+            double scale = Math.min(dispLength, t) / dispLength;
+            double[] posi = pos[i];
             for (int d = 0; d < dim; d++) {
-                double deltaDisp = (disp[i][d] / dispLength) * Math.min(dispLength, t);
-                pos[i][d] += deltaDisp;
+                posi[d] += dispi[d] * scale;
             }
             totalDisp += dispLength;
         }
@@ -224,4 +249,4 @@ public class SpringLayout {
             state.converged = true;
         }
     }
-} 
+}

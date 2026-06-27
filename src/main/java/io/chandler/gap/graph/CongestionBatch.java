@@ -468,10 +468,17 @@ public class CongestionBatch {
     private GeneratorResult processGenerator(int index, String line) {
         Graph<Integer, DefaultEdge> graph = buildGraphFromLine(line);
         networkx.Graph nxGraph = buildNetworkxGraph(graph);
+        int vertexCount = graph.vertexSet().size();
+        double[][] positions3d = new double[vertexCount][LAYOUT_DIM];
+        double[][] projected2d = new double[vertexCount][2];
 
         SpringLayoutState[] layoutStates = new SpringLayoutState[seeds.length];
+        List<Integer> nodeIds = null;
         for (int s = 0; s < seeds.length; s++) {
             layoutStates[s] = SpringLayout.createState(nxGraph, LAYOUT_DIM, seeds[s], maxCheckpoint);
+            if (s == 0) {
+                nodeIds = SpringLayout.getNodeIds(layoutStates[s]);
+            }
         }
 
         String[] cells = new String[checkpoints.length];
@@ -488,12 +495,12 @@ public class CongestionBatch {
 
             for (int s = 0; s < seeds.length; s++) {
                 SpringLayout.advance(layoutStates[s], checkpoint);
-                Map<Integer, double[]> positions3d = SpringLayout.getPositions(layoutStates[s]);
-                norm3D(positions3d, BOX_SIZE);
+                SpringLayout.copyPositions(layoutStates[s], positions3d);
+                norm3DArray(positions3d, BOX_SIZE);
 
                 for (int r = 0; r < nRotations; r++) {
-                    Map<Integer, double[]> projected = projectRotated(positions3d, rotationMatrices[r]);
-                    double score = LayoutCongestion.compute(graph, projected) * SCORE_SCALE;
+                    projectRotated(positions3d, projected2d, rotationMatrices[r]);
+                    double score = LayoutCongestion.compute(graph, nodeIds, projected2d) * SCORE_SCALE;
                     scores.add(score);
                 }
             }
@@ -575,11 +582,11 @@ public class CongestionBatch {
         return nxGraph;
     }
 
-    private static void norm3D(Map<Integer, double[]> positions, double boxSize) {
+    private static void norm3DArray(double[][] positions, double boxSize) {
         double minX = Double.MAX_VALUE, maxX = Double.MIN_VALUE;
         double minY = Double.MAX_VALUE, maxY = Double.MIN_VALUE;
         double minZ = Double.MAX_VALUE, maxZ = Double.MIN_VALUE;
-        for (double[] pos : positions.values()) {
+        for (double[] pos : positions) {
             minX = Math.min(minX, pos[0]);
             maxX = Math.max(maxX, pos[0]);
             minY = Math.min(minY, pos[1]);
@@ -588,7 +595,7 @@ public class CongestionBatch {
             maxZ = Math.max(maxZ, pos[2]);
         }
         double maxScale = Math.max(maxX - minX, Math.max(maxY - minY, maxZ - minZ));
-        for (double[] pos : positions.values()) {
+        for (double[] pos : positions) {
             if (maxX - minX > 0) {
                 pos[0] = (pos[0] - minX) / maxScale * 0.8 * boxSize + 0.1 * boxSize;
             } else {
@@ -607,17 +614,14 @@ public class CongestionBatch {
         }
     }
 
-    private static Map<Integer, double[]> projectRotated(Map<Integer, double[]> positions3d, double[][] rotation) {
-        Map<Integer, double[]> projected = new HashMap<>();
-        for (Map.Entry<Integer, double[]> entry : positions3d.entrySet()) {
-            double x = entry.getValue()[0];
-            double y = entry.getValue()[1];
-            double z = entry.getValue()[2];
-            double rx = rotation[0][0] * x + rotation[0][1] * y + rotation[0][2] * z;
-            double ry = rotation[1][0] * x + rotation[1][1] * y + rotation[1][2] * z;
-            projected.put(entry.getKey(), new double[]{rx, ry});
+    private static void projectRotated(double[][] positions3d, double[][] projected2d, double[][] rotation) {
+        for (int i = 0; i < positions3d.length; i++) {
+            double x = positions3d[i][0];
+            double y = positions3d[i][1];
+            double z = positions3d[i][2];
+            projected2d[i][0] = rotation[0][0] * x + rotation[0][1] * y + rotation[0][2] * z;
+            projected2d[i][1] = rotation[1][0] * x + rotation[1][1] * y + rotation[1][2] * z;
         }
-        return projected;
     }
 
     private static double[][][] generateRotationMatrices(int count) {
