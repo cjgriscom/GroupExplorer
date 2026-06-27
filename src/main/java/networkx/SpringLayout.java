@@ -166,12 +166,117 @@ public class SpringLayout {
     }
 
     private static void runOneIteration(SpringLayoutState state) {
+        if (state.dim == 3) {
+            runOneIteration3D(state);
+        } else {
+            runOneIterationGeneric(state);
+        }
+    }
+
+    private static void runOneIteration3D(SpringLayoutState state) {
+        int n = state.n;
+        double kSq = state.k * state.k;
+        double invK = 1.0 / state.k;
+        double[][] pos = state.pos;
+        double[][] disp = state.disp;
+        int[] edgeI = state.edgeI;
+        int[] edgeJ = state.edgeJ;
+        int edgeCount = state.edgeCount;
+
+        for (int i = 0; i < n; i++) {
+            disp[i][0] = 0.0;
+            disp[i][1] = 0.0;
+            disp[i][2] = 0.0;
+        }
+
+        for (int i = 0; i < n; i++) {
+            double[] posi = pos[i];
+            double pix = posi[0], piy = posi[1], piz = posi[2];
+            double dix = 0.0, diy = 0.0, diz = 0.0;
+            for (int j = i + 1; j < n; j++) {
+                double[] posj = pos[j];
+                double dx = pix - posj[0];
+                double dy = piy - posj[1];
+                double dz = piz - posj[2];
+                double distSq = dx * dx + dy * dy + dz * dz;
+                if (distSq < EPS_SQ) {
+                    distSq = EPS_SQ;
+                }
+                double factor = kSq / distSq;
+                double fx = dx * factor;
+                double fy = dy * factor;
+                double fz = dz * factor;
+                dix += fx;
+                diy += fy;
+                diz += fz;
+                double[] dispj = disp[j];
+                dispj[0] -= fx;
+                dispj[1] -= fy;
+                dispj[2] -= fz;
+            }
+            double[] dispi = disp[i];
+            dispi[0] += dix;
+            dispi[1] += diy;
+            dispi[2] += diz;
+        }
+
+        for (int e = 0; e < edgeCount; e++) {
+            double[] posi = pos[edgeI[e]];
+            double[] posj = pos[edgeJ[e]];
+            double dx = posi[0] - posj[0];
+            double dy = posi[1] - posj[1];
+            double dz = posi[2] - posj[2];
+            double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (distance < EPS) {
+                distance = EPS;
+            }
+            double factor = distance * invK;
+            double fx = dx * factor;
+            double fy = dy * factor;
+            double fz = dz * factor;
+            double[] dispi = disp[edgeI[e]];
+            double[] dispj = disp[edgeJ[e]];
+            dispi[0] -= fx;
+            dispi[1] -= fy;
+            dispi[2] -= fz;
+            dispj[0] += fx;
+            dispj[1] += fy;
+            dispj[2] += fz;
+        }
+
+        double totalDisp = 0.0;
+        double t = state.t;
+        for (int i = 0; i < n; i++) {
+            double[] dispi = disp[i];
+            double d0 = dispi[0], d1 = dispi[1], d2 = dispi[2];
+            double dispLength = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+            if (dispLength < EPS) {
+                dispLength = EPS;
+            }
+            double scale = Math.min(dispLength, t) / dispLength;
+            double[] posi = pos[i];
+            posi[0] += d0 * scale;
+            posi[1] += d1 * scale;
+            posi[2] += d2 * scale;
+            totalDisp += dispLength;
+        }
+
+        state.t = t - state.dt;
+        if (totalDisp / n < THRESHOLD) {
+            state.converged = true;
+        }
+    }
+
+    private static void runOneIterationGeneric(SpringLayoutState state) {
         int n = state.n;
         int dim = state.dim;
         double k = state.k;
         double kSq = k * k;
         double[][] pos = state.pos;
         double[][] disp = state.disp;
+        int[] edgeI = state.edgeI;
+        int[] edgeJ = state.edgeJ;
+        int edgeCount = state.edgeCount;
         double[] delta = new double[dim];
 
         for (int i = 0; i < n; i++) {
@@ -192,17 +297,18 @@ public class SpringLayout {
                     distSq = EPS_SQ;
                 }
                 double factor = kSq / distSq;
+                double[] dispj = disp[j];
                 for (int d = 0; d < dim; d++) {
                     double repForce = delta[d] * factor;
                     dispi[d] += repForce;
-                    disp[j][d] -= repForce;
+                    dispj[d] -= repForce;
                 }
             }
         }
 
-        for (int e = 0; e < state.edgeCount; e++) {
-            int i = state.edgeI[e];
-            int j = state.edgeJ[e];
+        for (int e = 0; e < edgeCount; e++) {
+            int i = edgeI[e];
+            int j = edgeJ[e];
             double[] posi = pos[i];
             double[] posj = pos[j];
             double[] dispi = disp[i];
