@@ -48,6 +48,7 @@ public class CongestionBatch {
 
     private final String inputFile;
     private final int batchSize;
+    private final int threads;
     private final long[] seeds;
     private final int[] checkpoints;
     private final Double[] thresholds;
@@ -70,11 +71,12 @@ public class CongestionBatch {
     private long runStartTimeMs;
     private int survivorCount;
 
-    public CongestionBatch(String inputFile, int batchSize, long[] seeds, int[] checkpoints,
+    public CongestionBatch(String inputFile, int batchSize, int threads, long[] seeds, int[] checkpoints,
             Double[] thresholds, int nRotations, String plotFile, String outputFile,
             boolean randomize, long shuffleSeed) {
         this.inputFile = inputFile;
         this.batchSize = batchSize;
+        this.threads = threads;
         this.seeds = seeds;
         this.checkpoints = checkpoints;
         this.thresholds = thresholds;
@@ -91,6 +93,7 @@ public class CongestionBatch {
         System.out.println("CongestionBatch starting...");
         System.out.println("  Input: " + inputFile);
         System.out.println("  Batch size: " + batchSize);
+        System.out.println("  Threads: " + threads);
         System.out.println("  Seeds: " + Arrays.toString(seeds));
         System.out.println("  Checkpoints: " + Arrays.toString(checkpoints));
         if (thresholds != null) {
@@ -138,21 +141,15 @@ public class CongestionBatch {
             ensureScoreCapacity(total);
 
             List<Integer> order = buildProcessingOrder(total);
-            ExecutorService executor = Executors.newFixedThreadPool(batchSize);
+            int prefetch = Math.max(batchSize, threads * 4);
+            ExecutorService executor = Executors.newFixedThreadPool(threads);
             try {
-                int processed = 0;
-                for (int batchStart = 0; batchStart < total; batchStart += batchSize) {
-                    int batchEnd = Math.min(batchStart + batchSize, total);
-                    List<BatchEntry> batch = new ArrayList<>(batchEnd - batchStart);
-                    for (int pos = batchStart; pos < batchEnd; pos++) {
-                        int index = order.get(pos);
-                        batch.add(new BatchEntry(index, pbin.get(index)));
-                    }
-
-                    List<GeneratorResult> results = processBatch(executor, batch);
-                    processed += batch.size();
-                    flushBatchResults(results, processed, total);
-                }
+                slidingWindowProcess(executor, total, prefetch,
+                        pos -> {
+                            int index = order.get(pos);
+                            String line = pbin.get(index);
+                            return executor.submit(() -> processGenerator(index, line));
+                        });
             } finally {
                 executor.shutdown();
                 executor.awaitTermination(365, TimeUnit.DAYS);
@@ -180,34 +177,19 @@ public class CongestionBatch {
             return;
         }
 
-        ExecutorService executor = Executors.newFixedThreadPool(batchSize);
-        try (BufferedReader reader = new BufferedReader(new FileReader(inputFile))) {
-            List<BatchEntry> batch = new ArrayList<>(batchSize);
-            int index = 0;
-            int processed = 0;
-            String line;
+        List<BatchEntry> allEntries = loadAllTextEntries();
+        int total = allEntries.size();
+        System.out.println("  Generators: " + total);
+        ensureScoreCapacity(total);
 
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
-                batch.add(new BatchEntry(index, line));
-                index++;
-
-                if (batch.size() >= batchSize) {
-                    List<GeneratorResult> results = processBatch(executor, batch);
-                    processed += batch.size();
-                    flushBatchResults(results, processed, -1);
-                    batch.clear();
-                }
-            }
-
-            if (!batch.isEmpty()) {
-                List<GeneratorResult> results = processBatch(executor, batch);
-                processed += batch.size();
-                flushBatchResults(results, processed, -1);
-            }
+        int prefetch = Math.max(batchSize, threads * 4);
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        try {
+            slidingWindowProcess(executor, total, prefetch,
+                    pos -> {
+                        BatchEntry entry = allEntries.get(pos);
+                        return executor.submit(() -> processGenerator(entry.index, entry.line));
+                    });
         } finally {
             executor.shutdown();
             try {
@@ -225,19 +207,16 @@ public class CongestionBatch {
         ensureScoreCapacity(allEntries.size());
 
         List<BatchEntry> orderedEntries = orderEntries(allEntries);
+        int total = orderedEntries.size();
 
-        ExecutorService executor = Executors.newFixedThreadPool(batchSize);
+        int prefetch = Math.max(batchSize, threads * 4);
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
         try {
-            int processed = 0;
-            int total = orderedEntries.size();
-            for (int batchStart = 0; batchStart < total; batchStart += batchSize) {
-                int batchEnd = Math.min(batchStart + batchSize, total);
-                List<BatchEntry> batch = new ArrayList<>(orderedEntries.subList(batchStart, batchEnd));
-
-                List<GeneratorResult> results = processBatch(executor, batch);
-                processed += batch.size();
-                flushBatchResults(results, processed, total);
-            }
+            slidingWindowProcess(executor, total, prefetch,
+                    pos -> {
+                        BatchEntry entry = orderedEntries.get(pos);
+                        return executor.submit(() -> processGenerator(entry.index, entry.line));
+                    });
         } finally {
             executor.shutdown();
             try {
@@ -275,23 +254,48 @@ public class CongestionBatch {
         return copy;
     }
 
-    private List<GeneratorResult> processBatch(ExecutorService executor, List<BatchEntry> batch)
-            throws IOException {
-        List<Future<GeneratorResult>> futures = new ArrayList<>(batch.size());
-        for (BatchEntry entry : batch) {
-            futures.add(executor.submit(() -> processGenerator(entry.index, entry.line)));
+    @FunctionalInterface
+    private interface TaskSubmitter {
+        Future<GeneratorResult> submit(int position) throws IOException;
+    }
+
+    /**
+     * Maintains a sliding window of in-flight futures so the thread pool
+     * is always saturated. Tasks are submitted via the supplier as window
+     * slots open up, and results are drained/flushed in batchSize chunks.
+     */
+    private void slidingWindowProcess(ExecutorService executor, int total,
+            int prefetch, TaskSubmitter submitter) throws IOException {
+        List<Future<GeneratorResult>> window = new ArrayList<>(prefetch);
+        int nextSubmit = 0;
+        int processed = 0;
+
+        int initialFill = Math.min(total, prefetch);
+        for (int i = 0; i < initialFill; i++) {
+            window.add(submitter.submit(nextSubmit++));
         }
 
-        List<GeneratorResult> results = new ArrayList<>(batch.size());
-        for (Future<GeneratorResult> future : futures) {
-            try {
-                results.add(future.get());
-            } catch (Exception e) {
-                throw new IOException("Batch processing failed", e);
+        int drainCursor = 0;
+        while (drainCursor < window.size()) {
+            int chunkEnd = Math.min(drainCursor + batchSize, window.size());
+            List<GeneratorResult> chunk = new ArrayList<>(chunkEnd - drainCursor);
+            for (int i = drainCursor; i < chunkEnd; i++) {
+                try {
+                    chunk.add(window.get(i).get());
+                } catch (Exception e) {
+                    throw new IOException("Batch processing failed", e);
+                }
+                window.set(i, null);
+            }
+            Collections.sort(chunk, (a, b) -> Integer.compare(a.index, b.index));
+            processed += chunk.size();
+            flushBatchResults(chunk, processed, total);
+            drainCursor = chunkEnd;
+
+            while (nextSubmit < total && (window.size() - drainCursor) < prefetch) {
+                window.add(submitter.submit(nextSubmit++));
             }
         }
-        Collections.sort(results, (a, b) -> Integer.compare(a.index, b.index));
-        return results;
     }
 
     private void flushBatchResults(List<GeneratorResult> results, int processed, int total)
@@ -481,6 +485,8 @@ public class CongestionBatch {
             }
         }
 
+        int scoresPerCheckpoint = seeds.length * nRotations;
+        double[] scores = new double[scoresPerCheckpoint];
         String[] cells = new String[checkpoints.length];
         boolean pruned = false;
         double bestScore = Double.NaN;
@@ -491,7 +497,7 @@ public class CongestionBatch {
             }
 
             int checkpoint = checkpoints[c];
-            List<Double> scores = new ArrayList<>(seeds.length * nRotations);
+            int si = 0;
 
             for (int s = 0; s < seeds.length; s++) {
                 SpringLayout.advance(layoutStates[s], checkpoint);
@@ -500,13 +506,15 @@ public class CongestionBatch {
 
                 for (int r = 0; r < nRotations; r++) {
                     projectRotated(positions3d, projected2d, rotationMatrices[r]);
-                    double score = LayoutCongestion.compute(graph, nodeIds, projected2d) * SCORE_SCALE;
-                    scores.add(score);
+                    scores[si++] = LayoutCongestion.compute(graph, nodeIds, projected2d) * SCORE_SCALE;
                 }
             }
 
-            cells[c] = formatScores(scores);
-            bestScore = scores.stream().mapToDouble(Double::doubleValue).min().orElse(Double.NaN);
+            cells[c] = formatScores(scores, si);
+            bestScore = scores[0];
+            for (int i = 1; i < si; i++) {
+                if (scores[i] < bestScore) bestScore = scores[i];
+            }
 
             Double threshold = (thresholds != null && c < thresholds.length) ? thresholds[c] : null;
             if (threshold != null) {
@@ -545,13 +553,13 @@ public class CongestionBatch {
         }
     }
 
-    private static String formatScores(List<Double> scores) {
+    private static String formatScores(double[] scores, int count) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < scores.size(); i++) {
+        for (int i = 0; i < count; i++) {
             if (i > 0) {
                 sb.append(' ');
             }
-            sb.append(String.format("%.6f", scores.get(i)));
+            sb.append(String.format("%.6f", scores[i]));
         }
         return sb.toString();
     }
@@ -695,7 +703,8 @@ public class CongestionBatch {
         System.err.println("Usage: CongestionBatch [options] <input.pbin|input.txt>");
         System.err.println();
         System.err.println("Options:");
-        System.err.println("  --batch-size N       Generators per batch (default: 32)");
+        System.err.println("  --batch-size N       Generators per reporting batch (default: 32)");
+        System.err.println("  --threads N          Worker thread count (default: available processors)");
         System.err.println("  --seeds a,b,c        Layout seeds (default: 0)");
         System.err.println("  --checkpoints a,b,c  Iteration checkpoints (default: 500)");
         System.err.println("  --thresholds a,b,c   Prune thresholds per checkpoint (same units as CSV scores)");
@@ -708,6 +717,7 @@ public class CongestionBatch {
 
     public static void main(String[] args) {
         int batchSize = 32;
+        int threads = Runtime.getRuntime().availableProcessors();
         long[] seeds = new long[]{0L};
         int[] checkpoints = new int[]{500};
         Double[] thresholds = null;
@@ -723,6 +733,9 @@ public class CongestionBatch {
             switch (arg) {
                 case "--batch-size":
                     batchSize = Integer.parseInt(requireArg(args, ++i, arg));
+                    break;
+                case "--threads":
+                    threads = Integer.parseInt(requireArg(args, ++i, arg));
                     break;
                 case "--seeds":
                     seeds = parseLongList(requireArg(args, ++i, arg));
@@ -776,6 +789,10 @@ public class CongestionBatch {
             System.err.println("--batch-size must be >= 1");
             System.exit(1);
         }
+        if (threads < 1) {
+            System.err.println("--threads must be >= 1");
+            System.exit(1);
+        }
         if (nRotations < 1) {
             System.err.println("--n-rotations must be >= 1");
             System.exit(1);
@@ -798,7 +815,7 @@ public class CongestionBatch {
         }
 
         CongestionBatch batch = new CongestionBatch(
-                inputFile, batchSize, seeds, checkpoints, thresholds, nRotations, plotFile, outputFile,
+                inputFile, batchSize, threads, seeds, checkpoints, thresholds, nRotations, plotFile, outputFile,
                 randomize, shuffleSeed);
         try {
             batch.run();
