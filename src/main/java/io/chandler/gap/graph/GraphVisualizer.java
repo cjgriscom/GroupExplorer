@@ -10,11 +10,13 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Scanner;
+import java.util.Set;
 
 import org.jgrapht.Graph;
 import org.jgrapht.alg.drawing.IndexedFRLayoutAlgorithm2D;
@@ -56,8 +58,11 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
+import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Text;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
@@ -101,6 +106,8 @@ public class GraphVisualizer extends Application {
     private CheckBox showCirclesCheckBox;
     private CheckBox showFittedNodesCheckBox;
     private CheckBox allSolutionsCheckBox;
+    private CheckBox snapToGridCheckBox;
+    private CheckBox lockRotationCheckBox;
     private CheckBox showSquareGridCheckBox;
     private CheckBox showHexGridCheckBox; // triangular lattice of points
     private CheckBox showHoneycombGridCheckBox; // hexagonal honeycomb outlines
@@ -122,6 +129,15 @@ public class GraphVisualizer extends Application {
 
     private List<DirectedArrow> directedArrows = new ArrayList<>();
     private Map<Integer, Circle> currentVertexCircleMap = new HashMap<>();
+    private Map<Integer, Text> currentVertexLabelMap = new HashMap<>();
+    private Map<DefaultEdge, Line> currentEdgeLineMap = new HashMap<>();
+    private Graph<Integer, DefaultEdge> currentGraph;
+    private List<ShadedPolygonWrapper> currentShadedPolygons = new ArrayList<>();
+    private Set<Integer> selectedVertices = new HashSet<>();
+    private Rectangle marqueeRectangle;
+    private double marqueeStartX;
+    private double marqueeStartY;
+    private boolean marqueeActive = false;
 
     private CheckBox suppressRenderCheckBox;
     private boolean suppressRender = false;
@@ -241,6 +257,11 @@ public class GraphVisualizer extends Application {
 
         // Create a trackball control for full 3D rotation.
         graphPane.setOnMousePressed(e -> {
+            if (lockRotationCheckBox != null && lockRotationCheckBox.isSelected()) {
+                lastMouseX = null;
+                lastMouseY = null;
+                return;
+            }
             if (!e.isSecondaryButtonDown()) {
                 lastMouseX = null;
                 lastMouseY = null;
@@ -252,6 +273,9 @@ public class GraphVisualizer extends Application {
             }
         });
         graphPane.setOnMouseDragged(e -> {
+            if (lockRotationCheckBox != null && lockRotationCheckBox.isSelected()) {
+                return;
+            }
             if (lastMouseX == null || lastMouseY == null) {
                 return;
             }
@@ -269,6 +293,65 @@ public class GraphVisualizer extends Application {
             trackballRotation = multiply3(Rx, multiply3(Ry, trackballRotation));
 
             updateGraph(graphPane, pageLabel);
+        });
+
+        graphPane.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+            if (e.isPrimaryButtonDown() && e.isShiftDown()) {
+                marqueeActive = true;
+                javafx.geometry.Point2D local = graphPane.sceneToLocal(e.getSceneX(), e.getSceneY());
+                marqueeStartX = local.getX();
+                marqueeStartY = local.getY();
+                if (marqueeRectangle == null) {
+                    marqueeRectangle = new Rectangle();
+                    marqueeRectangle.setFill(Color.DODGERBLUE.deriveColor(0, 1, 1, 0.15));
+                    marqueeRectangle.setStroke(Color.DODGERBLUE);
+                    marqueeRectangle.setStrokeWidth(1.5);
+                    marqueeRectangle.setMouseTransparent(true);
+                }
+                marqueeRectangle.setX(marqueeStartX);
+                marqueeRectangle.setY(marqueeStartY);
+                marqueeRectangle.setWidth(0);
+                marqueeRectangle.setHeight(0);
+                if (!graphPane.getChildren().contains(marqueeRectangle)) {
+                    graphPane.getChildren().add(marqueeRectangle);
+                }
+                marqueeRectangle.toFront();
+                e.consume();
+                return;
+            }
+            if (e.isPrimaryButtonDown() && !e.isShiftDown()) {
+                Node target = e.getTarget() instanceof Node ? (Node) e.getTarget() : null;
+                if (target instanceof Circle) {
+                    Circle c = (Circle) target;
+                    if (isInteractiveVertexCircle(c)) {
+                        Integer vertex = findVertexForCircle(c);
+                        if (vertex != null && selectedVertices.contains(vertex)) {
+                            return;
+                        }
+                    }
+                }
+                selectedVertices.clear();
+                refreshVertexHighlights();
+            }
+        });
+        graphPane.addEventFilter(MouseEvent.MOUSE_DRAGGED, e -> {
+            if (!marqueeActive || marqueeRectangle == null) {
+                return;
+            }
+            javafx.geometry.Point2D local = graphPane.sceneToLocal(e.getSceneX(), e.getSceneY());
+            double x = Math.min(marqueeStartX, local.getX());
+            double y = Math.min(marqueeStartY, local.getY());
+            marqueeRectangle.setX(x);
+            marqueeRectangle.setY(y);
+            marqueeRectangle.setWidth(Math.abs(local.getX() - marqueeStartX));
+            marqueeRectangle.setHeight(Math.abs(local.getY() - marqueeStartY));
+            e.consume();
+        });
+        graphPane.addEventFilter(MouseEvent.MOUSE_RELEASED, e -> {
+            if (marqueeActive && e.getButton() == MouseButton.PRIMARY) {
+                finishMarqueeSelection();
+                e.consume();
+            }
         });
                 
         // Create solution navigation buttons
@@ -338,7 +421,7 @@ public class GraphVisualizer extends Application {
             Alert alert = new Alert(Alert.AlertType.INFORMATION);
             alert.setTitle("Controls");
             alert.setHeaderText(null);
-            alert.setContentText("Left Click + Drag: Adjust Graph Points\nRight Click + Drag: Rotate 3D view");
+            alert.setContentText("Left Click + Drag: Adjust Graph Points\nShift + Left Click + Drag: Select Multiple Points\nRight Click + Drag: Rotate 3D view (disabled when Lock Rotation is on)");
             alert.showAndWait();
         });
 
@@ -353,6 +436,26 @@ public class GraphVisualizer extends Application {
 
         showCirclesCheckBox = new CheckBox("Show Circles");
         showCirclesCheckBox.setSelected(true);
+
+        snapToGridCheckBox = new CheckBox("Snap to Grid");
+        snapToGridCheckBox.setSelected(false);
+
+        lockRotationCheckBox = new CheckBox("Lock Rotation");
+        lockRotationCheckBox.setSelected(false);
+        lockRotationCheckBox.setOnAction(e -> {
+            String currentLine = getGraphLine(currentGraphIndex);
+            if (lockRotationCheckBox.isSelected()) {
+                if (circlesMatchGraph(buildGraphFromLine(currentLine))) {
+                    syncLockedPositions(currentLine);
+                }
+            } else if (manualPositions != null && manualPositionsCacheKey != null
+                    && manualPositionsCacheKey.startsWith("lock:")) {
+                if (circlesMatchGraph(buildGraphFromLine(currentLine))) {
+                    manualPositions = capturePositionsFromCircles();
+                }
+                manualPositionsCacheKey = buildLayoutCacheKey(currentLine);
+            }
+        });
 
         showSquareGridCheckBox = new CheckBox("Show Square Grid");
         showSquareGridCheckBox.setSelected(false);
@@ -412,6 +515,8 @@ public class GraphVisualizer extends Application {
             hLabel, hTextField,
             solutionLabel, solutionBox,
             showCirclesCheckBox,
+            snapToGridCheckBox,
+            lockRotationCheckBox,
             showSquareGridCheckBox,
             showHexGridCheckBox,
             showHoneycombGridCheckBox,
@@ -930,59 +1035,92 @@ public class GraphVisualizer extends Application {
             double[] pos = entry.getValue();
             Circle circle = new Circle(pos[0], pos[1], NODE_RADIUS);
             circle.visibleProperty().bind(showCirclesCheckBox.selectedProperty());
-            // Color the vertex based on its frequency.
-            int freq = vertexFrequencyMap.getOrDefault(vertex, 1);
-			Color color = getVertexColor(freq);
-			// Set opacity
-			color = Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.5);
-            circle.setFill(color);
-            // Show the vertex label inside the circle.
-            Text text = new Text(pos[0] - NODE_RADIUS/2, pos[1] + NODE_RADIUS/2, String.valueOf(vertex));
             vertexCircleMap.put(vertex, circle);
+            Text text = new Text(pos[0] - NODE_RADIUS/2, pos[1] + NODE_RADIUS/2, String.valueOf(vertex));
             vertexLabelMap.put(vertex, text);
+            applyVertexAppearance(vertex, circle);
 
-            final int v = vertex; // capture vertex id
-            // Store offset between the mouse position and circle center.
+            final int v = vertex;
             circle.setOnMousePressed(e -> {
-                circle.setUserData(new double[] { circle.getCenterX() - e.getSceneX(), 
-                                                     circle.getCenterY() - e.getSceneY() });
-            });
+                if (e.isSecondaryButtonDown() || e.isShiftDown()) {
+                    return;
+                }
+                Set<Integer> dragVertices = new HashSet<>();
+                if (selectedVertices.contains(v) && selectedVertices.size() > 1) {
+                    dragVertices.addAll(selectedVertices);
+                } else {
+                    dragVertices.add(v);
+                }
 
-            circle.setOnMouseDragged(e -> {
-                double[] offset = (double[]) circle.getUserData();
-                double newX = e.getSceneX() + offset[0];
-                double newY = e.getSceneY() + offset[1];
-                circle.setCenterX(newX);
-                circle.setCenterY(newY);
-                text.setX(newX - NODE_RADIUS/2);
-                text.setY(newY + NODE_RADIUS/2);
-
-                // Update connected edges.
-                for (DefaultEdge edge : graph.edgeSet()) {
-                    int source = graph.getEdgeSource(edge);
-                    int target = graph.getEdgeTarget(edge);
-                    if (source == v) {
-                        Line l = edgeLineMap.get(edge);
-                        l.setStartX(newX);
-                        l.setStartY(newY);
-                    }
-                    if (target == v) {
-                        Line l = edgeLineMap.get(edge);
-                        l.setEndX(newX);
-                        l.setEndY(newY);
+                Map<Integer, double[]> startPositions = new HashMap<>();
+                for (int dragVertex : dragVertices) {
+                    Circle dragCircle = vertexCircleMap.get(dragVertex);
+                    if (dragCircle != null) {
+                        startPositions.put(dragVertex, new double[] {
+                            dragCircle.getCenterX(), dragCircle.getCenterY()
+                        });
                     }
                 }
 
-                // Update shaded polygons.
-                updateShadedPolygons(vertexCircleMap, shadedPolygons);
-                // Now update directed arrows.
-                updateDirectedArrows();
+                circle.setUserData(new VertexDragContext(
+                    circle.getCenterX() - e.getSceneX(),
+                    circle.getCenterY() - e.getSceneY(),
+                    e.getSceneX(),
+                    e.getSceneY(),
+                    startPositions,
+                    dragVertices
+                ));
+            });
+
+            circle.setOnMouseDragged(e -> {
+                if (e.isShiftDown()) {
+                    return;
+                }
+                VertexDragContext ctx = (VertexDragContext) circle.getUserData();
+                if (ctx == null) {
+                    return;
+                }
+
+                if (ctx.dragVertices.size() > 1) {
+                    double deltaX = e.getSceneX() - ctx.startSceneX;
+                    double deltaY = e.getSceneY() - ctx.startSceneY;
+                    for (int dragVertex : ctx.dragVertices) {
+                        double[] start = ctx.startPositions.get(dragVertex);
+                        if (start != null) {
+                            setVertexPosition(dragVertex, start[0] + deltaX, start[1] + deltaY);
+                        }
+                    }
+                } else {
+                    int dragVertex = ctx.dragVertices.iterator().next();
+                    setVertexPosition(
+                        dragVertex,
+                        e.getSceneX() + ctx.offsetX,
+                        e.getSceneY() + ctx.offsetY
+                    );
+                }
+                updateVertexVisualsAfterMove();
+            });
+
+            circle.setOnMouseReleased(e -> {
+                if (e.isShiftDown()) {
+                    return;
+                }
+                VertexDragContext ctx = (VertexDragContext) circle.getUserData();
+                if (ctx == null) {
+                    return;
+                }
+                snapVerticesToGrid(ctx.dragVertices);
+                circle.setUserData(null);
             });
 
             pane.getChildren().addAll(text, circle);
         }
-        // Cache the current vertex circle mapping for arrow updates.
         currentVertexCircleMap = vertexCircleMap;
+        currentVertexLabelMap = vertexLabelMap;
+        currentEdgeLineMap = edgeLineMap;
+        currentGraph = graph;
+        currentShadedPolygons = shadedPolygons;
+        refreshVertexHighlights();
     }
 
     /**
@@ -1000,11 +1138,29 @@ public class GraphVisualizer extends Application {
         Graph<Integer, DefaultEdge> currentGraph = buildGraphFromLine(currentLine);
         Map<Integer, double[]> positions;
         String newCacheKey = buildLayoutCacheKey(currentLine);
+        String positionLockKey = buildPositionLockKey(currentLine);
+        boolean positionLockActive = lockRotationCheckBox != null && lockRotationCheckBox.isSelected();
 
-        if (manualPositions != null && newCacheKey.equals(manualPositionsCacheKey)) {
+        if (positionLockActive) {
+            if (manualPositions != null && !positionLockKey.equals(manualPositionsCacheKey)) {
+                manualPositions = null;
+                manualPositionsCacheKey = null;
+            }
+            if (circlesMatchGraph(currentGraph)) {
+                syncLockedPositions(currentLine);
+            }
+        }
+
+        boolean useLockedPositions = positionLockActive
+            && manualPositions != null
+            && positionLockKey.equals(manualPositionsCacheKey);
+
+        if (useLockedPositions) {
+            positions = copyPositions(manualPositions);
+        } else if (manualPositions != null && newCacheKey.equals(manualPositionsCacheKey)) {
             positions = copyPositions(manualPositions);
         } else {
-            if (!newCacheKey.equals(manualPositionsCacheKey)) {
+            if (!positionLockActive && !newCacheKey.equals(manualPositionsCacheKey)) {
                 manualPositions = null;
                 manualPositionsCacheKey = null;
             }
@@ -1062,6 +1218,8 @@ public class GraphVisualizer extends Application {
         }
         
         if (positions != null) {
+            selectedVertices.retainAll(positions.keySet());
+            marqueeActive = false;
             graphPane.getChildren().clear();
             // Draw background grid (if enabled) behind all other elements.
             drawBackgroundGrid(graphPane);
@@ -1429,6 +1587,233 @@ public class GraphVisualizer extends Application {
         requiredArgs.setAll(algo.getArgs());
     }
 
+    private static class VertexDragContext {
+        final double offsetX;
+        final double offsetY;
+        final double startSceneX;
+        final double startSceneY;
+        final Map<Integer, double[]> startPositions;
+        final Set<Integer> dragVertices;
+
+        VertexDragContext(double offsetX, double offsetY, double startSceneX, double startSceneY,
+                          Map<Integer, double[]> startPositions, Set<Integer> dragVertices) {
+            this.offsetX = offsetX;
+            this.offsetY = offsetY;
+            this.startSceneX = startSceneX;
+            this.startSceneY = startSceneY;
+            this.startPositions = startPositions;
+            this.dragVertices = dragVertices;
+        }
+    }
+
+    private boolean isInteractiveVertexCircle(Circle circle) {
+        return currentVertexCircleMap.containsValue(circle);
+    }
+
+    private Integer findVertexForCircle(Circle circle) {
+        for (Map.Entry<Integer, Circle> entry : currentVertexCircleMap.entrySet()) {
+            if (entry.getValue() == circle) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
+    private void finishMarqueeSelection() {
+        if (marqueeRectangle != null) {
+            Bounds bounds = marqueeRectangle.getBoundsInParent();
+            selectedVertices.clear();
+            for (Map.Entry<Integer, Circle> entry : currentVertexCircleMap.entrySet()) {
+                Circle circle = entry.getValue();
+                if (bounds.contains(circle.getCenterX(), circle.getCenterY())) {
+                    selectedVertices.add(entry.getKey());
+                }
+            }
+            graphPane.getChildren().remove(marqueeRectangle);
+        }
+        marqueeActive = false;
+        refreshVertexHighlights();
+    }
+
+    private void applyVertexAppearance(int vertex, Circle circle) {
+        if (selectedVertices.contains(vertex)) {
+            circle.setFill(Color.DODGERBLUE.deriveColor(0, 1, 1, 0.6));
+            circle.setStroke(Color.DODGERBLUE);
+            circle.setStrokeWidth(2.5);
+        } else {
+            int freq = vertexFrequencyMap.getOrDefault(vertex, 1);
+            Color color = getVertexColor(freq);
+            color = Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.5);
+            circle.setFill(color);
+            circle.setStroke(null);
+            circle.setStrokeWidth(0);
+        }
+    }
+
+    private void refreshVertexHighlights() {
+        for (Map.Entry<Integer, Circle> entry : currentVertexCircleMap.entrySet()) {
+            applyVertexAppearance(entry.getKey(), entry.getValue());
+        }
+    }
+
+    private void setVertexPosition(int vertex, double x, double y) {
+        Circle circle = currentVertexCircleMap.get(vertex);
+        Text text = currentVertexLabelMap.get(vertex);
+        if (circle == null || currentGraph == null) {
+            return;
+        }
+        circle.setCenterX(x);
+        circle.setCenterY(y);
+        if (text != null) {
+            text.setX(x - NODE_RADIUS / 2);
+            text.setY(y + NODE_RADIUS / 2);
+        }
+        for (DefaultEdge edge : currentGraph.edgeSet()) {
+            int source = currentGraph.getEdgeSource(edge);
+            int target = currentGraph.getEdgeTarget(edge);
+            Line line = currentEdgeLineMap.get(edge);
+            if (line == null) {
+                continue;
+            }
+            if (source == vertex) {
+                line.setStartX(x);
+                line.setStartY(y);
+            }
+            if (target == vertex) {
+                line.setEndX(x);
+                line.setEndY(y);
+            }
+        }
+    }
+
+    private void updateVertexVisualsAfterMove() {
+        updateShadedPolygons(currentVertexCircleMap, currentShadedPolygons);
+        updateDirectedArrows();
+    }
+
+    private void snapVerticesToGrid(Set<Integer> vertices) {
+        if (snapToGridCheckBox == null || !snapToGridCheckBox.isSelected() || graphPane == null) {
+            return;
+        }
+        for (int vertex : vertices) {
+            Circle circle = currentVertexCircleMap.get(vertex);
+            if (circle == null) {
+                continue;
+            }
+            double[] snapped = snapToNearestGridPoint(circle.getCenterX(), circle.getCenterY(), graphPane);
+            setVertexPosition(vertex, snapped[0], snapped[1]);
+        }
+        updateVertexVisualsAfterMove();
+    }
+
+    private double computeGridSpacing(Pane pane) {
+        double width = pane.getWidth();
+        double height = pane.getHeight();
+        if (width <= 0 || height <= 0) {
+            return 40.0;
+        }
+        double targetPoints = 400.0;
+        double area = width * height;
+        double baseSpacing = Math.sqrt(area / targetPoints);
+        return clamp(baseSpacing, 15.0, 80.0);
+    }
+
+    private double[] snapToNearestGridPoint(double x, double y, Pane pane) {
+        List<double[]> gridPoints = collectSnapGridPoints(pane);
+        if (gridPoints.isEmpty()) {
+            return new double[] { x, y };
+        }
+        double bestDistSq = Double.MAX_VALUE;
+        double bestX = x;
+        double bestY = y;
+        for (double[] point : gridPoints) {
+            double dx = point[0] - x;
+            double dy = point[1] - y;
+            double distSq = dx * dx + dy * dy;
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                bestX = point[0];
+                bestY = point[1];
+            }
+        }
+        return new double[] { bestX, bestY };
+    }
+
+    private List<double[]> collectSnapGridPoints(Pane pane) {
+        List<double[]> points = new ArrayList<>();
+        if ((showSquareGridCheckBox == null || !showSquareGridCheckBox.isSelected()) &&
+            (showHexGridCheckBox == null || !showHexGridCheckBox.isSelected()) &&
+            (showHoneycombGridCheckBox == null || !showHoneycombGridCheckBox.isSelected())) {
+            return points;
+        }
+
+        double width = pane.getWidth();
+        double height = pane.getHeight();
+        if (width <= 0 || height <= 0) {
+            return points;
+        }
+
+        double spacing = computeGridSpacing(pane);
+        if (showSquareGridCheckBox != null && showSquareGridCheckBox.isSelected()) {
+            collectSquareGridPoints(points, width, height, spacing);
+        }
+        if (showHexGridCheckBox != null && showHexGridCheckBox.isSelected()) {
+            collectTriangularGridPoints(points, width, height, spacing);
+        }
+        if (showHoneycombGridCheckBox != null && showHoneycombGridCheckBox.isSelected()) {
+            collectHoneycombGridPoints(points, width, height, spacing);
+        }
+        return points;
+    }
+
+    private void collectSquareGridPoints(List<double[]> points, double width, double height, double spacing) {
+        int cols = (int) Math.ceil(width / spacing);
+        int rows = (int) Math.ceil(height / spacing);
+        for (int i = 0; i <= cols; i++) {
+            double x = i * spacing;
+            for (int j = 0; j <= rows; j++) {
+                points.add(new double[] { x, j * spacing });
+            }
+        }
+    }
+
+    private void collectTriangularGridPoints(List<double[]> points, double width, double height, double spacing) {
+        double rowHeight = spacing * Math.sqrt(3) / 2.0;
+        int rows = (int) Math.ceil(height / rowHeight) + 1;
+        int cols = (int) Math.ceil(width / spacing) + 1;
+        for (int row = 0; row <= rows; row++) {
+            double y = row * rowHeight;
+            double xOffset = (row % 2 == 0) ? 0.0 : spacing / 2.0;
+            for (int col = 0; col <= cols; col++) {
+                double x = xOffset + col * spacing;
+                if (x > width + spacing) {
+                    break;
+                }
+                points.add(new double[] { x, y });
+            }
+        }
+    }
+
+    private void collectHoneycombGridPoints(List<double[]> points, double width, double height, double spacing) {
+        double r = spacing / 2.0;
+        double sqrt3 = Math.sqrt(3.0);
+        int qMax = (int) Math.ceil(width / (r * sqrt3)) + 2;
+        int rMax = (int) Math.ceil(height / (r * 1.5)) + 2;
+
+        for (int rIdx = -rMax; rIdx <= rMax; rIdx++) {
+            for (int qIdx = -qMax; qIdx <= qMax; qIdx++) {
+                double cx = r * sqrt3 * (qIdx + rIdx / 2.0) + width / 2.0;
+                double cy = r * 1.5 * rIdx + height / 2.0;
+                double margin = r;
+                if (cx + margin < 0 || cx - margin > width ||
+                    cy + margin < 0 || cy - margin > height) {
+                    continue;
+                }
+                points.add(new double[] { cx, cy });
+            }
+        }
+    }
+
     /**
      * Draws a faint background grid (square and/or hexagonal) behind the graph.
      * The grid density is chosen so that there are at least roughly 300 grid points
@@ -1447,13 +1832,7 @@ public class GraphVisualizer extends Application {
             return;
         }
 
-        // Target number of visible grid points; overshoot a bit to stay safely above 300.
-        double targetPoints = 400.0;
-        double area = width * height;
-        // Base spacing estimate assuming a square grid: area / spacing^2 ≈ targetPoints.
-        double baseSpacing = Math.sqrt(area / targetPoints);
-        // Keep spacing within a reasonable pixel range.
-        double spacing = clamp(baseSpacing, 15.0, 80.0);
+        double spacing = computeGridSpacing(pane);
 
         if (showSquareGridCheckBox != null && showSquareGridCheckBox.isSelected()) {
             drawSquareGrid(pane, width, height, spacing);
@@ -1639,6 +2018,29 @@ public class GraphVisualizer extends Application {
                 + "_" + repulsionFactorTextField.getText() + "_" + wTextField.getText()
                 + "_" + hTextField.getText() + "_" + solutionTextField.getText()
                 + "_" + allSolutionsCheckBox.isSelected();
+    }
+
+    private String buildPositionLockKey(String currentLine) {
+        return "lock:" + currentLine;
+    }
+
+    private Map<Integer, double[]> capturePositionsFromCircles() {
+        Map<Integer, double[]> positions = new HashMap<>();
+        for (Map.Entry<Integer, Circle> entry : currentVertexCircleMap.entrySet()) {
+            Circle circle = entry.getValue();
+            positions.put(entry.getKey(), new double[] { circle.getCenterX(), circle.getCenterY() });
+        }
+        return positions;
+    }
+
+    private void syncLockedPositions(String currentLine) {
+        manualPositions = capturePositionsFromCircles();
+        manualPositionsCacheKey = buildPositionLockKey(currentLine);
+    }
+
+    private boolean circlesMatchGraph(Graph<Integer, DefaultEdge> graph) {
+        return !currentVertexCircleMap.isEmpty()
+            && currentVertexCircleMap.keySet().equals(graph.vertexSet());
     }
 
     private Map<Integer, double[]> copyPositions(Map<Integer, double[]> source) {
