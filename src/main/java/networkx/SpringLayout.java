@@ -53,73 +53,112 @@ public class SpringLayout {
 
     private static final double EPS = 0.01; // small value to avoid division by zero
     private static final double THRESHOLD = 1e-4;
+
+    /**
+     * Mutable spring-layout state for incremental checkpointed iteration.
+     */
+    public static final class SpringLayoutState {
+        private final Graph graph;
+        private final List<Integer> nodes;
+        private final Map<Integer, Integer> nodeIndex;
+        private final double[][] pos;
+        private final double[][] disp;
+        private final int n;
+        private final int dim;
+        private final double k;
+        private final double dt;
+        private final int totalIterations;
+        private double t;
+        private int currentIteration;
+        private boolean converged;
+
+        private SpringLayoutState(Graph g, int dim, long seed, int totalIterations) {
+            this.graph = g;
+            this.dim = dim;
+            this.totalIterations = totalIterations;
+            Set<Integer> nodeSet = g.getNodes();
+            this.n = nodeSet.size();
+            this.nodes = new ArrayList<>(nodeSet);
+            this.nodeIndex = new HashMap<>();
+            for (int i = 0; i < nodes.size(); i++) {
+                nodeIndex.put(nodes.get(i), i);
+            }
+            this.pos = new double[n][dim];
+            this.disp = new double[n][dim];
+            Random random = new Random(seed);
+            for (int i = 0; i < n; i++) {
+                for (int d = 0; d < dim; d++) {
+                    pos[i][d] = random.nextDouble();
+                }
+            }
+            this.k = 1.0 / Math.sqrt(n);
+            this.t = 0.1;
+            this.dt = t / (totalIterations + 1);
+            this.currentIteration = 0;
+            this.converged = false;
+        }
+
+        public int getCurrentIteration() {
+            return currentIteration;
+        }
+
+        public boolean isConverged() {
+            return converged;
+        }
+    }
+
+    public static SpringLayoutState createState(Graph g, int dim, long seed, int totalIterations) {
+        return new SpringLayoutState(g, dim, seed, totalIterations);
+    }
+
+    public static void advance(SpringLayoutState state, int targetIteration) {
+        if (state.converged) {
+            state.currentIteration = Math.max(state.currentIteration, targetIteration);
+            return;
+        }
+        int target = Math.min(targetIteration, state.totalIterations);
+        while (state.currentIteration < target && !state.converged) {
+            runOneIteration(state);
+            state.currentIteration++;
+        }
+        if (state.currentIteration < targetIteration) {
+            state.currentIteration = targetIteration;
+        }
+    }
+
+    public static Map<Integer, double[]> getPositions(SpringLayoutState state) {
+        Map<Integer, double[]> positions = new HashMap<>();
+        for (int i = 0; i < state.n; i++) {
+            positions.put(state.nodes.get(i), Arrays.copyOf(state.pos[i], state.dim));
+        }
+        return positions;
+    }
+
     // Computes a spring (force-directed) layout using a simple Fruchterman-Reingold algorithm.
     // - It computes repulsive and attractive forces per standard formulas.
     // - It calculates an initial temperature (t) based on the position range,
     //   decrements t by dt each iteration, and breaks early if average movement < threshold.
     public static Map<Integer, double[]> springLayout(Graph g, int iterations, int dim, long seed) {
-        Set<Integer> nodeSet = g.getNodes();
-        int n = nodeSet.size();
-        Map<Integer, Integer> nodeIndex = new HashMap<>();
-        List<Integer> nodes = new ArrayList<>(nodeSet);
-        for (int i = 0; i < nodes.size(); i++) {
-            nodeIndex.put(nodes.get(i), i);
+        SpringLayoutState state = createState(g, dim, seed, iterations);
+        advance(state, iterations);
+        return getPositions(state);
+    }
+
+    private static void runOneIteration(SpringLayoutState state) {
+        Graph g = state.graph;
+        int n = state.n;
+        int dim = state.dim;
+        double k = state.k;
+        double[][] pos = state.pos;
+        double[][] disp = state.disp;
+        Map<Integer, Integer> nodeIndex = state.nodeIndex;
+
+        for (int i = 0; i < n; i++) {
+            Arrays.fill(disp[i], 0.0);
         }
 
-        // positions and displacements arrays (each row is a node's position vector)
-        double[][] pos = new double[n][dim];
-        double[][] disp = new double[n][dim];
-        Random random = new Random(seed);
-        // Initialize positions to random values in [0,1)
         for (int i = 0; i < n; i++) {
-            for (int d = 0; d < dim; d++) {
-                pos[i][d] = random.nextDouble();
-            }
-        }
-        
-        // Set optimal distance between nodes: k = 1/sqrt(n)
-        double k = 1.0 / Math.sqrt(n);        // optimal distance between nodes (as in networkx: k = 1/sqrt(n))
-        
-        // Compute initial temperature t as 10% of the max range of positions (for 2D, range=1 typically)
-        double t = 0.1;
-        double dt = t / (iterations + 1);
-        
-        // Iterative force computation.
-        for (int iter = 0; iter < iterations; iter++) {
-            // Reset displacements.
-            for (int i = 0; i < n; i++) {
-                Arrays.fill(disp[i], 0.0);
-            }
-            
-            // Repulsive forces: for each pair (i, j)
-            for (int i = 0; i < n; i++) {
-                for (int j = i + 1; j < n; j++) {
-                    double[] delta = new double[dim];
-                    double distance = 0.0;
-                    for (int d = 0; d < dim; d++) {
-                        delta[d] = pos[i][d] - pos[j][d];
-                        distance += delta[d] * delta[d];
-                    }
-                    distance = Math.sqrt(distance);
-                    if (distance < EPS) {
-                        distance = EPS;
-                    }
-                    // Repulsive force: f_r(d) = k^2 / d.
-                    double force = (k * k) / distance;
-                    for (int d = 0; d < dim; d++) {
-                        double repForce = (delta[d] / distance) * force;
-                        disp[i][d] += repForce;
-                        disp[j][d] -= repForce;
-                    }
-                }
-            }
-            
-            // Attractive forces: for each edge, pull connected nodes closer.
-            for (Graph.Edge edge : g.getEdges()) {
-                int u = edge.u;
-                int v = edge.v;
-                int i = nodeIndex.get(u);
-                int j = nodeIndex.get(v);
+            for (int j = i + 1; j < n; j++) {
                 double[] delta = new double[dim];
                 double distance = 0.0;
                 for (int d = 0; d < dim; d++) {
@@ -130,48 +169,59 @@ public class SpringLayout {
                 if (distance < EPS) {
                     distance = EPS;
                 }
-                // Attractive force: f_a(d) = d^2 / k.
-                double force = (distance * distance) / k;
+                double force = (k * k) / distance;
                 for (int d = 0; d < dim; d++) {
-                    double attrForce = (delta[d] / distance) * force;
-                    disp[i][d] -= attrForce;
-                    disp[j][d] += attrForce;
+                    double repForce = (delta[d] / distance) * force;
+                    disp[i][d] += repForce;
+                    disp[j][d] -= repForce;
                 }
-            }
-            
-            // Update positions; compute total displacement to check for convergence.
-            double totalDisp = 0.0;
-            for (int i = 0; i < n; i++) {
-                double dispLength = 0.0;
-                for (int d = 0; d < dim; d++) {
-                    dispLength += disp[i][d] * disp[i][d];
-                }
-                dispLength = Math.sqrt(dispLength);
-                // Enforce minimum displacement to avoid division by zero.
-                if (dispLength < EPS) {
-                    dispLength = EPS;
-                }
-                // Move the node by (t/dispLength) * displacement, but not more than the displacement itself.
-                for (int d = 0; d < dim; d++) {
-                    double deltaDisp = (disp[i][d] / dispLength) * Math.min(dispLength, t);
-                    pos[i][d] += deltaDisp;
-                }
-                totalDisp += dispLength;
-            }
-            
-            // Decrease temperature.
-            t = t - dt;
-            // Average displacement.
-            if (totalDisp / n < THRESHOLD) {
-                break;
             }
         }
-        
-        // Build result map: Map each node id to its position vector.
-        Map<Integer, double[]> positions = new HashMap<>();
+
+        for (Graph.Edge edge : g.getEdges()) {
+            int u = edge.u;
+            int v = edge.v;
+            int i = nodeIndex.get(u);
+            int j = nodeIndex.get(v);
+            double[] delta = new double[dim];
+            double distance = 0.0;
+            for (int d = 0; d < dim; d++) {
+                delta[d] = pos[i][d] - pos[j][d];
+                distance += delta[d] * delta[d];
+            }
+            distance = Math.sqrt(distance);
+            if (distance < EPS) {
+                distance = EPS;
+            }
+            double force = (distance * distance) / k;
+            for (int d = 0; d < dim; d++) {
+                double attrForce = (delta[d] / distance) * force;
+                disp[i][d] -= attrForce;
+                disp[j][d] += attrForce;
+            }
+        }
+
+        double totalDisp = 0.0;
+        double t = state.t;
         for (int i = 0; i < n; i++) {
-            positions.put(nodes.get(i), pos[i]);
+            double dispLength = 0.0;
+            for (int d = 0; d < dim; d++) {
+                dispLength += disp[i][d] * disp[i][d];
+            }
+            dispLength = Math.sqrt(dispLength);
+            if (dispLength < EPS) {
+                dispLength = EPS;
+            }
+            for (int d = 0; d < dim; d++) {
+                double deltaDisp = (disp[i][d] / dispLength) * Math.min(dispLength, t);
+                pos[i][d] += deltaDisp;
+            }
+            totalDisp += dispLength;
         }
-        return positions;
+
+        state.t = t - state.dt;
+        if (totalDisp / n < THRESHOLD) {
+            state.converged = true;
+        }
     }
 } 
