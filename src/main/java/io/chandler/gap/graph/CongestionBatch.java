@@ -143,12 +143,34 @@ public class CongestionBatch {
             List<Integer> order = buildProcessingOrder(total);
             int prefetch = Math.max(batchSize, threads * 4);
             ExecutorService executor = Executors.newFixedThreadPool(threads);
+
+            // Producer-side 1-block raw cache. The serial RandomAccessFile read
+            // is the only part that must stay on this thread; caching the last
+            // block keeps the sequential path from re-reading the same block
+            // once per generator. Raw blocks are immutable once read, so they
+            // can be shared read-only with the worker that decodes them.
+            int[] cachedRawBlock = { -1 };
+            byte[][] cachedRawBytes = { null };
+
             try {
                 slidingWindowProcess(executor, total, prefetch,
                         pos -> {
                             int index = order.get(pos);
-                            String line = pbin.get(index);
-                            return executor.submit(() -> processGenerator(index, line));
+                            int b = pbin.blockOf(index);
+                            int off = pbin.offsetInBlock(index);
+                            if (b != cachedRawBlock[0]) {
+                                cachedRawBytes[0] = pbin.readRawBlock(b);
+                                cachedRawBlock[0] = b;
+                            }
+                            byte[] raw = cachedRawBytes[0];
+                            // Expensive work (zlib decompress + single-entry
+                            // BigInteger decode) runs on the worker thread, in
+                            // parallel, instead of on this producer thread.
+                            return executor.submit(() -> {
+                                byte[] payload = pbin.decompressBlock(raw);
+                                String line = pbin.decodeEntry(payload, off);
+                                return processGenerator(index, line);
+                            });
                         });
             } finally {
                 executor.shutdown();

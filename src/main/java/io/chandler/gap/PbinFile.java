@@ -97,6 +97,74 @@ public final class PbinFile implements Closeable {
         return cachedLines[off];
     }
 
+    // ── Parallel-friendly access ────────────────────────────
+    //
+    // The single-block cache used by get() forces every random-access read to
+    // decompress an entire block and decode ALL of its generators (each via an
+    // expensive BigInteger factorial decode) just to return one line. The
+    // methods below split that work so a caller can do the cheap, inherently
+    // serial part (the RandomAccessFile read) on one thread and farm out the
+    // expensive decompress + single-entry decode to worker threads.
+
+    public int blockOf(int index) {
+        if (index < 0 || index >= M)
+            throw new IndexOutOfBoundsException("index " + index + ", size " + M);
+        return index / blockSize;
+    }
+
+    public int offsetInBlock(int index) {
+        if (index < 0 || index >= M)
+            throw new IndexOutOfBoundsException("index " + index + ", size " + M);
+        return index % blockSize;
+    }
+
+    /**
+     * Reads the raw (still-compressed) bytes for block {@code b}. This is the
+     * only part that touches the shared {@link RandomAccessFile}, so it is NOT
+     * thread-safe and must be called from a single thread. The returned array
+     * is freshly allocated and never mutated afterwards, so it may be shared
+     * read-only with worker threads.
+     */
+    public byte[] readRawBlock(int b) throws IOException {
+        if (b < 0 || b >= numBlocks)
+            throw new IndexOutOfBoundsException("block " + b + ", numBlocks " + numBlocks);
+        int bStart = offsets[b];
+        int bEnd   = (b + 1 < numBlocks) ? offsets[b + 1] : (int) fileLen;
+        raf.seek(bStart);
+        byte[] blockData = new byte[bEnd - bStart];
+        raf.readFully(blockData);
+        return blockData;
+    }
+
+    /**
+     * Decompresses raw block bytes into the decoded payload. Pure / thread-safe:
+     * reads only {@code rawBlock} plus immutable fields and allocates fresh
+     * output, so it may be called concurrently from many threads.
+     */
+    public byte[] decompressBlock(byte[] rawBlock) throws IOException {
+        return (compression == 1) ? zlibDecompress(rawBlock) : rawBlock;
+    }
+
+    /**
+     * Decodes a single generator (entry {@code off}) from a decompressed
+     * payload produced by {@link #decompressBlock}. Pure / thread-safe.
+     * Produces byte-for-byte the same string as {@link #get} would for the
+     * corresponding index.
+     */
+    public String decodeEntry(byte[] payload, int off) {
+        int[] bp = {0};
+        int count = readVarint(payload, bp);
+        if (off < 0 || off >= count)
+            throw new IndexOutOfBoundsException("entry " + off + ", count " + count);
+        int[] sizes = new int[count];
+        for (int i = 0; i < count; i++)
+            sizes[i] = readVarint(payload, bp);
+        int start = bp[0];
+        for (int i = 0; i < off; i++)
+            start += sizes[i];
+        return decodeGenerator(payload, start, sizes[off], N, bare);
+    }
+
     private void loadBlock(int b) throws IOException {
         int bStart = offsets[b];
         int bEnd   = (b + 1 < numBlocks) ? offsets[b + 1] : (int) fileLen;
