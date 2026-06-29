@@ -58,6 +58,10 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.shape.Circle;
@@ -416,6 +420,9 @@ public class GraphVisualizer extends Application {
         Button editCoordinatesButton = new Button("Edit Coordinates");
         editCoordinatesButton.setOnAction(e -> showEditCoordinatesDialog(primaryStage, graphPane, pageLabel));
 
+        Button copy3DCoordinatesButton = new Button("3D Coordinates");
+        copy3DCoordinatesButton.setOnAction(e -> show3DCoordinatesDialog(primaryStage));
+
         Button controlsButton = new Button("Controls");
         controlsButton.setOnAction(e -> {
             Alert alert = new Alert(Alert.AlertType.INFORMATION);
@@ -493,7 +500,7 @@ public class GraphVisualizer extends Application {
         });
 
         // Create a top-bar HBox for the remaining controls.
-        HBox topControls = new HBox(10, randomizeButton, loadButton, exportButton, editCoordinatesButton, controlsButton);
+        HBox topControls = new HBox(10, randomizeButton, loadButton, exportButton, editCoordinatesButton, copy3DCoordinatesButton, controlsButton);
         topControls.setStyle("-fx-padding: 10; -fx-alignment: center;");
         root.setTop(topControls);
 
@@ -685,6 +692,14 @@ public class GraphVisualizer extends Application {
         bindVisibility(LayoutAlgoArg.ALL_SOLUTIONS, allSolutionsCheckBox);
 
         Scene scene = new Scene(root, 1024, 768);
+
+        scene.addEventFilter(KeyEvent.KEY_PRESSED, e -> {
+            if (e.getCode() == KeyCode.SPACE && selectedVertices.size() >= 2 && currentGraph != null) {
+                runForceDirectedOnSelection();
+                e.consume();
+            }
+        });
+
         primaryStage.setTitle("Planar Graph Visualizer");
         primaryStage.setScene(scene);
         primaryStage.show();
@@ -1656,6 +1671,46 @@ public class GraphVisualizer extends Application {
         }
     }
 
+    private void runForceDirectedOnSelection() {
+        // Collect edges that have at least one endpoint in the selection
+        networkx.Graph subgraph = new networkx.Graph();
+        Set<Integer> involvedVertices = new HashSet<>(selectedVertices);
+        for (DefaultEdge edge : currentGraph.edgeSet()) {
+            int source = currentGraph.getEdgeSource(edge);
+            int target = currentGraph.getEdgeTarget(edge);
+            if (selectedVertices.contains(source) || selectedVertices.contains(target)) {
+                subgraph.addEdge(source, target);
+                involvedVertices.add(source);
+                involvedVertices.add(target);
+            }
+        }
+
+        // Build initial positions from current circle positions
+        Map<Integer, double[]> initialPos = new HashMap<>();
+        for (int v : involvedVertices) {
+            Circle c = currentVertexCircleMap.get(v);
+            if (c != null) {
+                initialPos.put(v, new double[]{ c.getCenterX(), c.getCenterY() });
+            }
+        }
+
+        // Fixed nodes = all involved vertices that are NOT selected
+        Set<Integer> fixedNodes = new HashSet<>(involvedVertices);
+        fixedNodes.removeAll(selectedVertices);
+
+        Map<Integer, double[]> result = networkx.SpringLayout.springLayoutPartial(
+            subgraph, initialPos, fixedNodes, 100, 2);
+
+        // Apply new positions only to the selected vertices
+        for (int v : selectedVertices) {
+            double[] newPos = result.get(v);
+            if (newPos != null) {
+                setVertexPosition(v, newPos[0], newPos[1]);
+            }
+        }
+        updateVertexVisualsAfterMove();
+    }
+
     private void setVertexPosition(int vertex, double x, double y) {
         Circle circle = currentVertexCircleMap.get(vertex);
         Text text = currentVertexLabelMap.get(vertex);
@@ -1958,6 +2013,57 @@ public class GraphVisualizer extends Application {
         textArea.selectAll();
     }
 
+    private void show3DCoordinatesDialog(Stage owner) {
+        if (graphLinesEmpty()) return;
+        if (cachedBasePositions == null || cachedBasePositions.isEmpty()) {
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("3D Coordinates");
+            alert.setHeaderText(null);
+            alert.setContentText("No coordinates available yet. Wait for the graph to render first.");
+            alert.showAndWait();
+            return;
+        }
+        int dim = cachedBasePositions.values().iterator().next().length;
+        if (dim != 3) {
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("3D Coordinates");
+            alert.setHeaderText(null);
+            alert.setContentText("The current layout does not produce 3D coordinates.");
+            alert.showAndWait();
+            return;
+        }
+
+        String coordinatesText = format3DCoordinatesText();
+
+        Stage dialog = new Stage();
+        dialog.initOwner(owner);
+        dialog.setTitle("3D Coordinates " + (currentGraphIndex + 1) + " / " + graphLineCount());
+
+        Label hintLabel = new Label("Raw layout output (vertex x y z). Select all or use Copy.");
+        TextArea textArea = new TextArea(coordinatesText);
+        textArea.setWrapText(false);
+        textArea.setPrefRowCount(12);
+        textArea.setPrefColumnCount(40);
+
+        Button copyButton = new Button("Copy");
+        copyButton.setOnAction(ev -> {
+            ClipboardContent content = new ClipboardContent();
+            content.putString(textArea.getText());
+            Clipboard.getSystemClipboard().setContent(content);
+        });
+        Button closeButton = new Button("Close");
+        closeButton.setOnAction(ev -> dialog.close());
+
+        HBox buttonBar = new HBox(10, copyButton, closeButton);
+        VBox root = new VBox(10, hintLabel, textArea, buttonBar);
+        root.setStyle("-fx-padding: 10;");
+        dialog.setScene(new Scene(root, 420, 360));
+        dialog.show();
+
+        textArea.requestFocus();
+        textArea.selectAll();
+    }
+
     private void showEditCoordinatesDialog(Stage owner, Pane graphPane, Label pageLabel) {
         if (graphLinesEmpty()) return;
         if (currentVertexCircleMap == null || currentVertexCircleMap.isEmpty()) {
@@ -2065,6 +2171,24 @@ public class GraphVisualizer extends Application {
               .append(String.format("%.2f", circle.getCenterX()))
               .append(' ')
               .append(String.format("%.2f", circle.getCenterY()))
+              .append('\n');
+        }
+        return sb.toString();
+    }
+
+    private String format3DCoordinatesText() {
+        List<Integer> vertices = new ArrayList<>(cachedBasePositions.keySet());
+        Collections.sort(vertices);
+        StringBuilder sb = new StringBuilder();
+        for (int vertex : vertices) {
+            double[] coord = cachedBasePositions.get(vertex);
+            sb.append(vertex)
+              .append(' ')
+              .append(String.format("%.6f", coord[0]))
+              .append(' ')
+              .append(String.format("%.6f", coord[1]))
+              .append(' ')
+              .append(String.format("%.6f", coord[2]))
               .append('\n');
         }
         return sb.toString();

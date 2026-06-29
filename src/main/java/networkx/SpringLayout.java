@@ -165,6 +165,134 @@ public class SpringLayout {
         return getPositions(state);
     }
 
+    /**
+     * Runs force-directed layout with some nodes fixed in place.
+     * Only movable (non-fixed) nodes will be repositioned.
+     *
+     * @param g           the graph containing all relevant nodes and edges
+     * @param initialPos  initial positions for all nodes in the graph (dim-dimensional)
+     * @param fixedNodes  set of node IDs that should not move
+     * @param iterations  number of FR iterations to run
+     * @param dim         dimensionality (typically 2)
+     * @return            updated positions for all nodes
+     */
+    public static Map<Integer, double[]> springLayoutPartial(Graph g, Map<Integer, double[]> initialPos,
+                                                              Set<Integer> fixedNodes, int iterations, int dim) {
+        Set<Integer> nodeSet = g.getNodes();
+        int n = nodeSet.size();
+        if (n == 0) return new HashMap<>(initialPos);
+
+        List<Integer> nodes = new ArrayList<>(nodeSet);
+        Map<Integer, Integer> nodeIndex = new HashMap<>();
+        for (int i = 0; i < nodes.size(); i++) {
+            nodeIndex.put(nodes.get(i), i);
+        }
+
+        double[][] pos = new double[n][dim];
+        for (int i = 0; i < n; i++) {
+            double[] initP = initialPos.get(nodes.get(i));
+            if (initP != null) {
+                System.arraycopy(initP, 0, pos[i], 0, Math.min(initP.length, dim));
+            }
+        }
+
+        boolean[] fixed = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            fixed[i] = fixedNodes.contains(nodes.get(i));
+        }
+
+        List<Graph.Edge> edges = new ArrayList<>(g.getEdges());
+        int edgeCount = edges.size();
+        int[] edgeI = new int[edgeCount];
+        int[] edgeJ = new int[edgeCount];
+        for (int e = 0; e < edgeCount; e++) {
+            Graph.Edge edge = edges.get(e);
+            edgeI[e] = nodeIndex.get(edge.u);
+            edgeJ[e] = nodeIndex.get(edge.v);
+        }
+
+        double k = 1.0 / Math.sqrt(n);
+        double kSq = k * k;
+        double t = 0.1;
+        double dt = t / (iterations + 1);
+        double[][] disp = new double[n][dim];
+        double[] delta = new double[dim];
+
+        for (int iter = 0; iter < iterations; iter++) {
+            for (int i = 0; i < n; i++) Arrays.fill(disp[i], 0.0);
+
+            // Repulsive forces between all pairs
+            for (int i = 0; i < n; i++) {
+                double[] posi = pos[i];
+                double[] dispi = disp[i];
+                for (int j = i + 1; j < n; j++) {
+                    double[] posj = pos[j];
+                    double distSq = 0.0;
+                    for (int d = 0; d < dim; d++) {
+                        delta[d] = posi[d] - posj[d];
+                        distSq += delta[d] * delta[d];
+                    }
+                    if (distSq < EPS_SQ) distSq = EPS_SQ;
+                    double factor = kSq / distSq;
+                    double[] dispj = disp[j];
+                    for (int d = 0; d < dim; d++) {
+                        double repForce = delta[d] * factor;
+                        dispi[d] += repForce;
+                        dispj[d] -= repForce;
+                    }
+                }
+            }
+
+            // Attractive forces along edges
+            for (int e = 0; e < edgeCount; e++) {
+                int i = edgeI[e];
+                int j = edgeJ[e];
+                double[] posi = pos[i];
+                double[] posj = pos[j];
+                double[] dispi = disp[i];
+                double[] dispj = disp[j];
+                double distSq = 0.0;
+                for (int d = 0; d < dim; d++) {
+                    delta[d] = posi[d] - posj[d];
+                    distSq += delta[d] * delta[d];
+                }
+                double distance = Math.sqrt(distSq);
+                if (distance < EPS) distance = EPS;
+                double factor = distance / k;
+                for (int d = 0; d < dim; d++) {
+                    double attrForce = delta[d] * factor;
+                    dispi[d] -= attrForce;
+                    dispj[d] += attrForce;
+                }
+            }
+
+            // Apply displacement only to non-fixed nodes
+            for (int i = 0; i < n; i++) {
+                if (fixed[i]) continue;
+                double[] dispi = disp[i];
+                double dispLengthSq = 0.0;
+                for (int d = 0; d < dim; d++) {
+                    dispLengthSq += dispi[d] * dispi[d];
+                }
+                double dispLength = Math.sqrt(dispLengthSq);
+                if (dispLength < EPS) dispLength = EPS;
+                double scale = Math.min(dispLength, t) / dispLength;
+                double[] posi = pos[i];
+                for (int d = 0; d < dim; d++) {
+                    posi[d] += dispi[d] * scale;
+                }
+            }
+
+            t -= dt;
+        }
+
+        Map<Integer, double[]> result = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            result.put(nodes.get(i), Arrays.copyOf(pos[i], dim));
+        }
+        return result;
+    }
+
     private static void runOneIteration(SpringLayoutState state) {
         if (state.dim == 3) {
             runOneIteration3D(state);
