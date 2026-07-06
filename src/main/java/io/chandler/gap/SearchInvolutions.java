@@ -9,12 +9,11 @@ import java.util.Scanner;
 
 public class SearchInvolutions {
 	public static void main(String[] args) throws FileNotFoundException {
-		Scanner in = new Scanner(new File("/home/cjgriscom/Programming/GroupExplorer/PlanarStudy/mcl_2/2-cycles.txt"));
+		Scanner in = new Scanner(new File("/home/cjgriscom/Programming/GroupExplorer/PlanarStudy/j1/2-cycles.txt"));
 		
 		List<int[]> searchPairs = new ArrayList<>();
-		searchPairs.add(new int[] {18, 180});
-		searchPairs.add(new int[] {16, 15});
-		searchPairs.add(new int[] {222, 94});
+		searchPairs.add(new int[] {168, 8});
+		searchPairs.add(new int[] {244, 78});
 
 		// Match every line that contains all search pairs		
 

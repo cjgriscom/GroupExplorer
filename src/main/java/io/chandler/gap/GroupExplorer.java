@@ -821,7 +821,7 @@ public class GroupExplorer implements AbstractGroupProperties {
             case 3: return "triple";
             case 4: return "quadruple";
             case 5: return "quintuple";
-            default: return count + "p";
+            default: return count + "×";
         }
     }
 
