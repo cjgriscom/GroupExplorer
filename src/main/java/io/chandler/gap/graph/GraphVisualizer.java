@@ -30,6 +30,7 @@ import io.chandler.gap.graph.genus.MultiGenus;
 import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayout;
 import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayoutMulti;
 import io.chandler.gap.graph.layoutalgos.ConcentricConstrainedLayout;
+import io.chandler.gap.graph.layoutalgos.GridFlattenLayout;
 import io.chandler.gap.graph.layoutalgos.GridLayout;
 import io.chandler.gap.graph.layoutalgos.Java3D;
 import io.chandler.gap.graph.layoutalgos.SATLayout;
@@ -79,6 +80,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import javafx.application.Platform;
+import javafx.animation.Animation;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
+import javafx.util.Duration;
 
 public class GraphVisualizer extends Application {
 
@@ -96,10 +101,11 @@ public class GraphVisualizer extends Application {
 
     private Pane graphPane;
 
-    private TextField seedTextField, itersTextField, thetaTextField, normTextField, triesTextField, initialItersTextField, repulsionFactorTextField, wTextField, hTextField, solutionTextField;
+    private TextField seedTextField, itersTextField, thetaTextField, normTextField, triesTextField, initialItersTextField, repulsionFactorTextField, wTextField, hTextField, solutionTextField, timeBudgetTextField;
     // editable paginator index field (k in k / n)
     private TextField pageIndexTextField;
-    private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel, repulsionFactorLabel, wLabel, hLabel, solutionLabel;
+    private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel, repulsionFactorLabel, wLabel, hLabel, solutionLabel, timeBudgetLabel;
+    private Label pageLabel;
     private Button solutionPrevButton, solutionNextButton;
     private ComboBox<String> layoutChoiceBox;
 	private Label numSharedLinesLabel;
@@ -147,6 +153,8 @@ public class GraphVisualizer extends Application {
     private boolean suppressRender = false;
     private boolean renderQueued = false;
 
+    private Timeline flattenRefreshTimeline;
+
     private Map<String, LayoutAlgo> layoutAlgoMap = new LinkedHashMap<>();
     {
         layoutAlgoMap.put("Java Spring", new JavaSpring());
@@ -157,6 +165,7 @@ public class GraphVisualizer extends Application {
         layoutAlgoMap.put("SAT Layout", new SATLayout());
         layoutAlgoMap.put("Planar Puzzle", new ConcentricConstrainedLayout());
         layoutAlgoMap.put("Grid Solver", new GridLayout());
+        layoutAlgoMap.put("Grid Flatten", new GridFlattenLayout());
     }
     private final String defaultLayout = "Java Networkx";
 
@@ -186,6 +195,11 @@ public class GraphVisualizer extends Application {
 
     @Override
     public void stop() {
+        stopFlattenRefresh();
+        LayoutAlgo algo = layoutAlgoMap.get("Grid Flatten");
+        if (algo instanceof GridFlattenLayout) {
+            ((GridFlattenLayout) algo).cancel();
+        }
         closeGraphSource();
     }
 
@@ -226,7 +240,7 @@ public class GraphVisualizer extends Application {
         // Editable index field followed by total count label: "k / n"
         pageIndexTextField = new TextField(String.valueOf(currentGraphIndex + 1));
         pageIndexTextField.setPrefWidth(60);
-        Label pageLabel = new Label(" / " + graphLineCount());
+        pageLabel = new Label(" / " + graphLineCount());
 
         // Create layout configuration controls.
         seedTextField = new TextField("0");
@@ -239,6 +253,7 @@ public class GraphVisualizer extends Application {
         wTextField = new TextField("20");
         hTextField = new TextField("20");
         solutionTextField = new TextField("0");
+        timeBudgetTextField = new TextField("20");
         
         seedLabel = new Label("Seed:");
         itersLabel = new Label("Iters:");
@@ -250,6 +265,7 @@ public class GraphVisualizer extends Application {
         wLabel = new Label("Grid Width:");
         hLabel = new Label("Grid Height:");
         solutionLabel = new Label("Solution:");
+        timeBudgetLabel = new Label("Time Budget (min):");
 
         showFittedNodesCheckBox = new CheckBox("Show Fitted Nodes");
         showFittedNodesCheckBox.setSelected(false);
@@ -377,7 +393,7 @@ public class GraphVisualizer extends Application {
         solutionNextButton.setPrefWidth(30);
 
         // Configure the text fields (set width and key listeners)
-        for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField, triesTextField, initialItersTextField, repulsionFactorTextField, wTextField, hTextField, solutionTextField}) {
+        for (TextField textField : new TextField[] {seedTextField, itersTextField, normTextField, thetaTextField, triesTextField, initialItersTextField, repulsionFactorTextField, wTextField, hTextField, solutionTextField, timeBudgetTextField}) {
             textField.setPrefWidth(50);
             textField.setOnKeyReleased(value -> {
                 updateGraph(graphPane, pageLabel);
@@ -520,6 +536,7 @@ public class GraphVisualizer extends Application {
             repulsionFactorLabel, repulsionFactorTextField,
             wLabel, wTextField,
             hLabel, hTextField,
+            timeBudgetLabel, timeBudgetTextField,
             solutionLabel, solutionBox,
             showCirclesCheckBox,
             snapToGridCheckBox,
@@ -690,6 +707,10 @@ public class GraphVisualizer extends Application {
         bindVisibility(LayoutAlgoArg.H, hLabel, hTextField);
         bindVisibility(LayoutAlgoArg.SOLUTION, solutionLabel, solutionBox);
         bindVisibility(LayoutAlgoArg.ALL_SOLUTIONS, allSolutionsCheckBox);
+        bindVisibility(LayoutAlgoArg.TIME_BUDGET, timeBudgetLabel, timeBudgetTextField);
+
+        flattenRefreshTimeline = new Timeline(new KeyFrame(Duration.seconds(2), e -> pollFlattenLayout()));
+        flattenRefreshTimeline.setCycleCount(Timeline.INDEFINITE);
 
         Scene scene = new Scene(root, 1024, 768);
 
@@ -1184,14 +1205,30 @@ public class GraphVisualizer extends Application {
                 String method = layoutChoiceBox.getValue();
                 LayoutAlgo algo = layoutAlgoMap.get(method);
                 algo.performLayout(Math.min(graphPane.getWidth(), graphPane.getHeight()), currentLine, currentGraph, getArgs(algo));
-                Double fit = algo.getFitOut();
 
                 cachedBasePositions = algo.getResult();
                 cachedGraphKey = newCacheKey;
-                if (fit != null) {
-                    fitLabel.setText("Fit: " + String.format("%.5f", fit.doubleValue()));
+                if (algo instanceof GridFlattenLayout) {
+                    GridFlattenLayout flat = (GridFlattenLayout) algo;
+                    fitLabel.setText(flat.getStatus());
+                    ensureFlattenRefreshRunning();
                 } else {
-                    fitLabel.setText("");
+                    stopFlattenRefresh();
+                    Double fit = algo.getFitOut();
+                    if (fit != null) {
+                        fitLabel.setText("Fit: " + String.format("%.5f", fit.doubleValue()));
+                    } else {
+                        fitLabel.setText("");
+                    }
+                }
+            } else {
+                LayoutAlgo algo = layoutAlgoMap.get(layoutChoiceBox.getValue());
+                if (algo instanceof GridFlattenLayout) {
+                    GridFlattenLayout flat = (GridFlattenLayout) algo;
+                    fitLabel.setText(flat.getStatus());
+                    if (flat.isRunning()) {
+                        ensureFlattenRefreshRunning();
+                    }
                 }
             }
             // Make a fresh copy of the cached base coordinates.
@@ -1481,6 +1518,8 @@ public class GraphVisualizer extends Application {
                 return (double)Integer.parseInt(solutionTextField.getText());
             case ALL_SOLUTIONS:
                 return (allSolutionsCheckBox.isSelected() ? 1. : 0.);
+            case TIME_BUDGET:
+                return (double)Integer.parseInt(timeBudgetTextField.getText());
         }
         return null;
     }
@@ -1593,6 +1632,34 @@ public class GraphVisualizer extends Application {
      * Updates the visibility of the argument controls (seed, iters, theta, norm, show fitted nodes)
      * based on the currently selected layout algorithm's getArgs() values.
      */
+    private void pollFlattenLayout() {
+        LayoutAlgo algo = layoutAlgoMap.get(layoutChoiceBox.getValue());
+        if (!(algo instanceof GridFlattenLayout)) {
+            stopFlattenRefresh();
+            return;
+        }
+        GridFlattenLayout flat = (GridFlattenLayout) algo;
+        fitLabel.setText(flat.getStatus());
+        cachedBasePositions = copyPositions(flat.getResult());
+        updateGraph(graphPane, pageLabel);
+        if (!flat.isRunning()) {
+            stopFlattenRefresh();
+        }
+    }
+
+    private void ensureFlattenRefreshRunning() {
+        if (flattenRefreshTimeline != null
+                && flattenRefreshTimeline.getStatus() != Animation.Status.RUNNING) {
+            flattenRefreshTimeline.play();
+        }
+    }
+
+    private void stopFlattenRefresh() {
+        if (flattenRefreshTimeline != null) {
+            flattenRefreshTimeline.stop();
+        }
+    }
+
     private void updateArgsVisibility() {
         String method = layoutChoiceBox.getValue();
         LayoutAlgo algo = layoutAlgoMap.get(method);
@@ -2123,7 +2190,8 @@ public class GraphVisualizer extends Application {
                 + "_" + initialItersTextField.getText() + "_" + showFittedNodesCheckBox.isSelected()
                 + "_" + repulsionFactorTextField.getText() + "_" + wTextField.getText()
                 + "_" + hTextField.getText() + "_" + solutionTextField.getText()
-                + "_" + allSolutionsCheckBox.isSelected();
+                + "_" + allSolutionsCheckBox.isSelected()
+                + "_" + timeBudgetTextField.getText();
     }
 
     private String buildPositionLockKey(String currentLine) {
@@ -2262,6 +2330,7 @@ public class GraphVisualizer extends Application {
             case "SAT Layout": return new SATLayout();
             case "Planar Puzzle": return new ConcentricConstrainedLayout();
             case "Grid Solver": return new GridLayout();
+            case "Grid Flatten": return new GridFlattenLayout();
             default: return new JavaNetworkx();
         }
     }

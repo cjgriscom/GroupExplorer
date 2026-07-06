@@ -56,7 +56,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS =60; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS =10; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -80,8 +80,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.g2_3; 
-        String groupName = "g2_3";
+        String generator = Generators.o8m2_2; 
+        String groupName = "o8m2_2";
 
         // Print configuration
         System.out.println("Group: " + groupName);

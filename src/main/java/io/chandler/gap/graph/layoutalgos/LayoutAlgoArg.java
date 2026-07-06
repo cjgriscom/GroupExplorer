@@ -17,4 +17,6 @@ public enum LayoutAlgoArg {
 	H,
 	SOLUTION,
 	ALL_SOLUTIONS,
+	/** Time budget in minutes (grid flatten solver). */
+	TIME_BUDGET,
 }

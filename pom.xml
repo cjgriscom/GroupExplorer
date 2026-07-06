@@ -62,6 +62,11 @@
             <artifactId>json</artifactId>
             <version>20250517</version>
         </dependency>
+        <dependency>
+            <groupId>com.google.ortools</groupId>
+            <artifactId>ortools-java</artifactId>
+            <version>9.15.6755</version>
+        </dependency>
 
         <dependency>
             <groupId>org.openjfx</groupId>
