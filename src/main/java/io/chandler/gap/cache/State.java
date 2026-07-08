@@ -4,10 +4,11 @@ import java.math.BigInteger;
 import java.util.Arrays;
 
 import io.chandler.gap.GroupExplorer.MemorySettings;
+import io.chandler.gap.cache.KeyframeStateCache.PrefixHash;
 
 public abstract class State {
 	public static State of(int[] state, int maxElement, MemorySettings mem) {
-		if (mem == MemorySettings.COMPRESS) {
+		if (mem.compressBits > 0) {
 			throw new IllegalStateException(
 				"COMPRESS mode uses KeyframeStateCache.tryAdd; do not call State.of directly");
 		} else if (mem == MemorySettings.COMPACT) {
@@ -31,11 +32,11 @@ public abstract class State {
 	 */
 	public static class StateCompressed extends State {
 		public final int stateId;
-		public final long hash;
+		public final PrefixHash hash;
 		private int[] perm;
 		private final KeyframeStateCache cache;
 
-		public StateCompressed(int stateId, long hash, int[] perm, KeyframeStateCache cache) {
+		public StateCompressed(int stateId, PrefixHash hash, int[] perm, KeyframeStateCache cache) {
 			this.stateId = stateId;
 			this.hash = hash;
 			this.perm = perm;
@@ -72,14 +73,14 @@ public abstract class State {
 
 		@Override
 		public int hashCode() {
-			return Long.hashCode(hash);
+			return hash.hashCode();
 		}
 
 		@Override
 		public boolean equals(Object obj) {
 			if (this == obj) return true;
 			if (obj instanceof StateCompressed) {
-				return hash == ((StateCompressed) obj).hash;
+				return hash.equals(((StateCompressed) obj).hash);
 			}
 			return false;
 		}

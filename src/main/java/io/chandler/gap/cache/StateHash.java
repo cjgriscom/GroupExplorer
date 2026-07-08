@@ -18,12 +18,12 @@ public final class StateHash {
      * Maximum prefix length storable in a signed 64-bit key without overflow,
      * derived as {@code floor(log_{nElements}(2^64))}, capped at {@code nElements}.
      */
-    public static int derivePrefixLength(int nElements) {
+    public static int derivePrefixLength(int nElements, int compressBits) {
         if (nElements <= 1) {
             return nElements;
         }
         // log_n(2^64) = 64 / log2(n)
-        int fromBits = (int) (64.0 / (Math.log(nElements) / Math.log(2)));
+        int fromBits = (int) ((double)compressBits / (Math.log(nElements) / Math.log(2)));
         return Math.min(nElements, fromBits);
     }
 
@@ -42,6 +42,47 @@ public final class StateHash {
         long base = nElements + 1L;
         int len = Math.min(prefixLen, state.length);
         for (int i = 0; i < len; i++) {
+            value = value * base + state[i];
+        }
+        return value;
+    }
+
+    /**
+     * Encodes {@code prefixLen} images split across two 64-bit limbs without overflow.
+     * The first limb holds up to {@link #derivePrefixLength(int, int) derivePrefixLength(n, 64)}
+     * coordinates; the remainder goes in the second limb.
+     */
+    public static long[] encodePair(int[] state, int prefixLen, int nElements) {
+        int firstLen = Math.min(prefixLen, derivePrefixLength(nElements, 64));
+        int secondLen = prefixLen - firstLen;
+        long part0 = encodeRange(state, 0, firstLen, nElements);
+        long part1 = secondLen > 0 ? encodeRange(state, firstLen, secondLen, nElements) : 0L;
+        return new long[] {part0, part1};
+    }
+
+    public static long[] encodePair(short[] state, int prefixLen, int nElements) {
+        int firstLen = Math.min(prefixLen, derivePrefixLength(nElements, 64));
+        int secondLen = prefixLen - firstLen;
+        long part0 = encodeRange(state, 0, firstLen, nElements);
+        long part1 = secondLen > 0 ? encodeRange(state, firstLen, secondLen, nElements) : 0L;
+        return new long[] {part0, part1};
+    }
+
+    private static long encodeRange(int[] state, int offset, int len, int nElements) {
+        long value = 0;
+        long base = nElements + 1L;
+        int end = Math.min(offset + len, state.length);
+        for (int i = offset; i < end; i++) {
+            value = value * base + state[i];
+        }
+        return value;
+    }
+
+    private static long encodeRange(short[] state, int offset, int len, int nElements) {
+        long value = 0;
+        long base = nElements + 1L;
+        int end = Math.min(offset + len, state.length);
+        for (int i = offset; i < end; i++) {
             value = value * base + state[i];
         }
         return value;
@@ -83,10 +124,5 @@ public final class StateHash {
     public static boolean verifyInjective(String generators, int prefixLen) {
         GroupExplorer group = new GroupExplorer(generators, MemorySettings.FASTEST);
         return verifyInjective(group, prefixLen);
-    }
-
-    public static boolean verifyInjective(String generators) {
-        GroupExplorer group = new GroupExplorer(generators, MemorySettings.FASTEST);
-        return verifyInjective(group, derivePrefixLength(group.nElements));
     }
 }

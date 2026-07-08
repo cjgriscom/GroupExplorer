@@ -214,14 +214,14 @@ public class MiscSolvers {
         Integer maxDepth = 58;
 
         if (maxDepth == null || order == null || System.getProperty("debug") != null) {
-            GroupExplorer groudp = new GroupExplorer(hs_2, MemorySettings.COMPRESS);
+            GroupExplorer groudp = new GroupExplorer(hs_2, MemorySettings.COMPRESS_LONG);
             groudp.exploreStates(false, (states, depth) -> {
                 System.out.println("Depth " + depth + ": " + states.size() + " states");
             });
             System.out.println("Order: " + groudp.order());
         }
 
-        drawers_analysis(hs_2, order, maxDepth, stateMatch, matchNStates, MemorySettings.COMPRESS);
+        drawers_analysis(hs_2, order, maxDepth, stateMatch, matchNStates, MemorySettings.COMPRESS_LONG);
     }
 
     public static void drawers_j2_2() {

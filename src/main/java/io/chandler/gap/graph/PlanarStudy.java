@@ -68,7 +68,7 @@ public class PlanarStudy {
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
 
-        MemorySettings mem = MemorySettings.COMPRESS;
+        MemorySettings mem = MemorySettings.COMPRESS_LONG;
 
         // We use two cycle descriptions for the candidate pairs.
 

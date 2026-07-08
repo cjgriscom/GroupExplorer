@@ -116,12 +116,32 @@ public class GroupExplorer implements AbstractGroupProperties {
         }
     }
 
-    public static enum MemorySettings {
-        FASTEST,
-        DEFAULT,
-        COMPACT,
-        COMPRESS,
+    public static class MemorySettings {
+        public static MemorySettings FASTEST = new MemorySettings(0,0);
+        public static MemorySettings DEFAULT = new MemorySettings(1,0);
+        public static MemorySettings COMPACT = new MemorySettings(2,0);
+        public static MemorySettings COMPRESS_LONG = new MemorySettings(3, 64);
+        public static MemorySettings COMPRESS_BIGINT = new MemorySettings(3, 128);
+
+        public final int mode;
+        public final int compressBits;
+        public MemorySettings(int mode, int compressBits) {
+            this.mode = mode;
+            this.compressBits = compressBits;
+        }
+        public MemorySettings(int mode) {
+            this(mode, 0);
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || !(obj instanceof MemorySettings)) return false;
+            MemorySettings other = (MemorySettings) obj;
+            return mode == other.mode && compressBits == other.compressBits;
+        }
     }
+
     public GroupExplorer(String cycleNotation, MemorySettings mem) {
         this(cycleNotation, mem, new ObjectOpenHashSet<State>());
     }
@@ -159,16 +179,16 @@ public class GroupExplorer implements AbstractGroupProperties {
     }
 
     private void initCompressCache() {
-        if (mem == MemorySettings.COMPRESS) {
+        if (mem.compressBits > 0) {
             multithread = false;
-            int prefixLen = compressPrefixLength(nElements);
-            compressCache = new KeyframeStateCache(prefixLen, nElements, parsedOperations);
+            int prefixLen = compressPrefixLength(nElements, mem.compressBits);
+            compressCache = new KeyframeStateCache(prefixLen, mem.compressBits, nElements, parsedOperations);
         }
     }
 
     /** {@link StateHash#derivePrefixLength(int)} */
-    public static int compressPrefixLength(int nElements) {
-        return StateHash.derivePrefixLength(nElements);
+    public static int compressPrefixLength(int nElements, int compressBits) {
+        return StateHash.derivePrefixLength(nElements, compressBits);
     }
 
     public KeyframeStateCache compressCache() {
@@ -611,7 +631,7 @@ public class GroupExplorer implements AbstractGroupProperties {
 
             for (int i = 0; i < parsedOperations.size(); i++) {
                 int[] newState = applyOperation(currentState, parsedOperations.get(i));
-                long newHash = compressCache.hash(newState);
+                KeyframeStateCache.PrefixHash newHash = compressCache.hash(newState);
 
                 if (compressCache.containsHash(newHash)) {
                     continue;
