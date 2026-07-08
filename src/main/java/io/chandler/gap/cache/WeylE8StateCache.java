@@ -216,7 +216,7 @@ public final class WeylE8StateCache implements CompressStateCache {
         }
 
         boolean add(long[] key) {
-            if (size * 4 >= capacity * 3) {
+            if ((long) size * 4 >= (long) capacity * 3) {
                 grow();
             }
             int slot = findInsertSlot(key);
@@ -231,9 +231,8 @@ public final class WeylE8StateCache implements CompressStateCache {
 
         private void grow() {
             if (numChunks >= maxChunks()) {
-                throw new IllegalStateException(
-                    "Hash table capacity exceeded at " + size + " entries (max slots "
-                    + ((long) numChunks * SLOTS_PER_CHUNK) + ")");
+                // Table is at maximum size; keep going until probes fail.
+                return;
             }
             rehash(numChunks << 1);
         }
