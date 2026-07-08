@@ -321,7 +321,7 @@ public class SamplePuzzleDepthDistribution {
 
             int iterations = 0;
             while (true) {
-                int ret = gap.iterateExploration(false, -1, true, (newStates, depth) -> {
+                int ret = gap.iterateExploration(true, -1, true, (newStates, depth) -> {
                     countsByDepth.merge(depth, newStates.size(), Integer::sum);
                     if (newStates.size() > DUMP_DEPTH_MAX_FRONTIER) {
                         return;
