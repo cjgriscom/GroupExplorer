@@ -19,11 +19,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import io.chandler.gap.GroupExplorer.MemorySettings;
-import io.chandler.gap.GroupExplorer.PeekData;
 import io.chandler.gap.cache.CompressStateCache;
 import io.chandler.gap.cache.KeyframeStateCache;
 import io.chandler.gap.cache.State;
-import io.chandler.gap.cache.State.StateCompressed;
 
 /**
  * Computes BFS depth distributions for every puzzle in GridExplorer's
@@ -33,11 +31,11 @@ import io.chandler.gap.cache.State.StateCompressed;
  *
  * <p>Example (250 GB heap, custom puzzle list, Weyl E8 depth dump):
  * <pre>{@code
- * mvn -q exec:java \
- *   -Dexec.jvmArgs="-Xms250g -Xmx250g -XX:+UseG1GC" \
- *   -Dexec.mainClass=io.chandler.gap.SamplePuzzleDepthDistribution \
- *   -Dexec.args="--puzzles /tmp/sample.ts --puzzle-id weyl_e8 --compress-longs 2 --no-keyframes --dump-depths weyl_e8_depths.txt"
+ * HEAP=240g ./scripts/run.sh
  * }</pre>
+ *
+ * <p>{@code scripts/run.sh} invokes {@code java} directly so heap flags apply reliably.
+ * Confirm at startup: {@code JVM heap (startup): max=... MiB} should match your {@code HEAP} setting.
  */
 public class SamplePuzzleDepthDistribution {
 
@@ -115,6 +113,7 @@ public class SamplePuzzleDepthDistribution {
 
         final String puzzleId = puzzleIdIn;
         KeyframeStateCache.KEYFRAMES_ENABLED = !noKeyframes;
+        printJvmHeap("startup");
         if (dumpDepthsPath != null) {
             Files.deleteIfExists(dumpDepthsPath);
         }
@@ -282,16 +281,10 @@ public class SamplePuzzleDepthDistribution {
             states,
             new HashSet<>(),
             new HashSet<>(),
-            true);
+            false);
 
-        TreeMap<Integer, Integer> countsByDepth = new TreeMap<>();
-        countsByDepth.put(0, 1);
-
-        int iterations = gap.exploreStates(true, (newStates, depth) -> {
-            countsByDepth.merge(depth, newStates.size(), Integer::sum);
-        });
-
-        return new DepthStats(countsByDepth, iterations, gap.order());
+        gap.initIterativeExploration();
+        return runCompressBfs(gap, true, null);
     }
 
     static DepthStats exploreDepthDistributionWithDump(PuzzleDef puzzle, MemorySettings compressMem,
@@ -305,9 +298,6 @@ public class SamplePuzzleDepthDistribution {
             new HashSet<>(),
             false);
 
-        TreeMap<Integer, Integer> countsByDepth = new TreeMap<>();
-        countsByDepth.put(0, 1);
-
         try (BufferedWriter dump = Files.newBufferedWriter(
                 dumpDepthsPath,
                 StandardCharsets.UTF_8,
@@ -315,37 +305,68 @@ public class SamplePuzzleDepthDistribution {
                 StandardOpenOption.APPEND)) {
 
             writeDumpSectionHeader(dump, puzzle);
-
             gap.initIterativeExploration();
             writeDumpState(dump, gap, 0, 0, gap.elements.clone(), new int[0]);
 
-            int iterations = 0;
-            while (true) {
-                int ret = gap.iterateExploration(true, -1, true, (newStates, depth) -> {
-                    countsByDepth.merge(depth, newStates.size(), Integer::sum);
-                    if (newStates.size() > DUMP_DEPTH_MAX_FRONTIER) {
-                        return;
-                    }
+            return runCompressBfs(gap, true, (depth, newCount) -> {
+                if (newCount > DUMP_DEPTH_MAX_FRONTIER) {
+                    return;
+                }
+                int[] index = {0};
+                CompressStateCache cache = gap.compressStateCache();
+                gap.forEachFrontier(state -> {
                     try {
-                        int index = 0;
-                        for (Object entry : newStates) {
-                            StateCompressed state = (StateCompressed) ((PeekData) entry).newState;
-                            CompressStateCache cache = gap.compressStateCache();
-                            int[] path = cache.tracePath(state.getStateId());
-                            writeDumpState(dump, gap, depth, index++, state.state(), path);
-                        }
+                        int[] path = cache.tracePath(state.getStateId());
+                        writeDumpState(dump, gap, depth, index[0]++, state.state(), path);
                     } catch (IOException e) {
                         throw new UncheckedIOException(e);
                     }
                 });
-                iterations = gap.getIteration();
-                if (ret != -2) {
-                    break;
+            });
+        }
+    }
+
+    @FunctionalInterface
+    interface LayerCallback {
+        void onLayer(int depth, int newCount) throws IOException;
+    }
+
+    static DepthStats runCompressBfs(GroupExplorer gap, boolean debug, LayerCallback onLayer) {
+        if (gap.compressStateCache() == null) {
+            throw new IllegalStateException("runCompressBfs requires COMPRESS mode");
+        }
+
+        TreeMap<Integer, Integer> countsByDepth = new TreeMap<>();
+        countsByDepth.put(0, 1);
+
+        while (true) {
+            int totalBefore = gap.visitedStateCount();
+            int ret = gap.iterateExploration(debug, -1, false, null);
+            int depth = gap.getIteration();
+            int newCount = gap.visitedStateCount() - totalBefore;
+            if (newCount > 0) {
+                countsByDepth.merge(depth, newCount, Integer::sum);
+                if (onLayer != null) {
+                    try {
+                        onLayer.onLayer(depth, newCount);
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
                 }
             }
-
-            return new DepthStats(countsByDepth, iterations, gap.order());
+            if (ret != -2) {
+                return new DepthStats(countsByDepth, depth, gap.order());
+            }
         }
+    }
+
+    static void printJvmHeap(String label) {
+        Runtime rt = Runtime.getRuntime();
+        System.out.printf("JVM heap (%s): max=%d MiB total=%d MiB free=%d MiB%n",
+            label,
+            rt.maxMemory() / (1024 * 1024),
+            rt.totalMemory() / (1024 * 1024),
+            rt.freeMemory() / (1024 * 1024));
     }
 
     static void writeDumpSectionHeader(BufferedWriter out, PuzzleDef puzzle) throws IOException {
