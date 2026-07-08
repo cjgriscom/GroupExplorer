@@ -8,7 +8,7 @@ import io.chandler.gap.cache.KeyframeStateCache.PrefixHash;
 
 public abstract class State {
 	public static State of(int[] state, int maxElement, MemorySettings mem) {
-		if (mem.compressBits > 0) {
+		if (mem.isCompress()) {
 			throw new IllegalStateException(
 				"COMPRESS mode uses KeyframeStateCache.tryAdd; do not call State.of directly");
 		} else if (mem == MemorySettings.COMPACT) {
@@ -36,18 +36,20 @@ public abstract class State {
 		public final PrefixHash hash;
 		private int[] permInt;
 		private byte[] permBytes;
-		private final KeyframeStateCache cache;
+		private final CompressStateCache cache;
 
-		public StateCompressed(int stateId, PrefixHash hash, int[] perm, KeyframeStateCache cache) {
+		public StateCompressed(int stateId, PrefixHash hash, int[] perm, CompressStateCache cache) {
 			this.stateId = stateId;
 			this.hash = hash;
 			this.cache = cache;
-			if (cache.nElements() <= 255) {
-				this.permBytes = permToBytes(perm);
-				this.permInt = null;
-			} else {
-				this.permInt = perm;
-				this.permBytes = null;
+			if (perm != null) {
+				if (cache.nElements() <= 255) {
+					this.permBytes = permToBytes(perm);
+					this.permInt = null;
+				} else {
+					this.permInt = perm;
+					this.permBytes = null;
+				}
 			}
 		}
 
@@ -71,7 +73,7 @@ public abstract class State {
 			return cache.reconstruct(stateId);
 		}
 
-		public KeyframeStateCache cache() {
+		public CompressStateCache cache() {
 			return cache;
 		}
 

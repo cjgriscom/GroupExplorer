@@ -15,11 +15,14 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+import io.chandler.gap.cache.CompressStateCache;
 import io.chandler.gap.cache.KeyframeStateCache;
 import io.chandler.gap.cache.ParityStateCache;
 import io.chandler.gap.cache.State;
 import io.chandler.gap.cache.State.StateCompressed;
 import io.chandler.gap.cache.StateHash;
+import io.chandler.gap.cache.WeylE8StateCache;
+import io.chandler.gap.weyl.WeylE8Quotient.Encoding;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 
 public class GroupExplorer implements AbstractGroupProperties {
@@ -28,7 +31,7 @@ public class GroupExplorer implements AbstractGroupProperties {
     private Set<State> stateMapIncomplete;
     private Set<State> stateMapTmp;
 
-    private KeyframeStateCache compressCache;
+    private CompressStateCache compressCache;
 
     public int[] elements;
     public List<int[][]> parsedOperations;
@@ -122,12 +125,24 @@ public class GroupExplorer implements AbstractGroupProperties {
         public static MemorySettings COMPACT = new MemorySettings(2,0);
         public static MemorySettings COMPRESS_LONG = compress(1);
 
+        public static final int MODE_FASTEST = 0;
+        public static final int MODE_DEFAULT = 1;
+        public static final int MODE_COMPACT = 2;
+        public static final int MODE_COMPRESS = 3;
+        public static final int MODE_WEYL_E8 = 4;
+
         public final int mode;
         public final int compressBits;
+        public final Encoding weylE8Encoding;
 
         public MemorySettings(int mode, int compressBits) {
+            this(mode, compressBits, Encoding.PAIR_ONLY);
+        }
+
+        public MemorySettings(int mode, int compressBits, Encoding weylE8Encoding) {
             this.mode = mode;
             this.compressBits = compressBits;
+            this.weylE8Encoding = weylE8Encoding;
         }
         public MemorySettings(int mode) {
             this(mode, 0);
@@ -138,7 +153,27 @@ public class GroupExplorer implements AbstractGroupProperties {
             if (numLongs < 1) {
                 throw new IllegalArgumentException("numLongs must be >= 1");
             }
-            return new MemorySettings(3, numLongs * 64);
+            return new MemorySettings(MODE_COMPRESS, numLongs * 64);
+        }
+
+        /** Weyl(E8)-specialized COMPRESS mode with antipodal quotient hashing. */
+        public static MemorySettings compressWeylE8(int numLongs) {
+            return compressWeylE8(numLongs, Encoding.PRIMARY_IMAGE);
+        }
+
+        public static MemorySettings compressWeylE8(int numLongs, Encoding encoding) {
+            if (numLongs < 1) {
+                throw new IllegalArgumentException("numLongs must be >= 1");
+            }
+            return new MemorySettings(MODE_WEYL_E8, numLongs * 64, encoding);
+        }
+
+        public boolean isCompress() {
+            return compressBits > 0;
+        }
+
+        public boolean isWeylE8Compress() {
+            return mode == MODE_WEYL_E8;
         }
 
         public int compressLongs() {
@@ -191,25 +226,61 @@ public class GroupExplorer implements AbstractGroupProperties {
     }
 
     private void initCompressCache() {
-        if (mem.compressBits > 0) {
-            multithread = false;
-            int prefixLen = compressPrefixLength(nElements, mem.compressBits);
-            compressCache = new KeyframeStateCache(prefixLen, mem.compressBits, nElements, parsedOperations);
+        if (!mem.isCompress()) {
+            return;
         }
+        multithread = false;
+        if (mem.isWeylE8Compress()) {
+            if (nElements != 240) {
+                throw new IllegalArgumentException(
+                    "Weyl(E8) compress mode requires 240 points, got " + nElements);
+            }
+            compressCache = new WeylE8StateCache(mem.compressLongs(), parsedOperations, mem.weylE8Encoding);
+            return;
+        }
+        int prefixLen = compressPrefixLength(nElements, mem.compressBits);
+        compressCache = new KeyframeStateCache(prefixLen, mem.compressBits, nElements, parsedOperations);
     }
 
-    /** {@link StateHash#derivePrefixLength(int)} */
+    /** {@link StateHash#derivePrefixLength(int, int)} */
     public static int compressPrefixLength(int nElements, int compressBits) {
         return StateHash.derivePrefixLength(nElements, compressBits);
     }
 
-    public KeyframeStateCache compressCache() {
+    public CompressStateCache compressStateCache() {
         return compressCache;
+    }
+
+    /** Returns the keyframe cache when generic COMPRESS mode is active. */
+    public KeyframeStateCache compressCache() {
+        if (compressCache instanceof KeyframeStateCache) {
+            return (KeyframeStateCache) compressCache;
+        }
+        return null;
     }
 
     /** Size of the legacy in-memory visited set. Expected to be 0 in COMPRESS mode. */
     public int visitedSetSize() {
         return stateMap.size();
+    }
+
+    private StateCompressed newFrontierState(int stateId, KeyframeStateCache.PrefixHash hash, int[] perm) {
+        if (KeyframeStateCache.STRIP_FRONTIER_PERMS) {
+            return new StateCompressed(stateId, hash, null, compressCache);
+        }
+        return new StateCompressed(stateId, hash, perm, compressCache);
+    }
+
+    private void stripFrontierPermsIfScheduled() {
+        int interval = KeyframeStateCache.STRIP_FRONTIER_INTERVAL;
+        if (interval <= 0 || iteration % interval != 0) {
+            return;
+        }
+        for (State state : stateMapIncomplete) {
+            if (state instanceof StateCompressed) {
+                ((StateCompressed) state).stripPerm();
+            }
+        }
     }
 
     public void setMultithread(boolean multithread) {
@@ -232,7 +303,7 @@ public class GroupExplorer implements AbstractGroupProperties {
             if (compressCache != null) {
                 int[] root = elements.clone();
                 int id = compressCache.registerRoot(root);
-                stateMapIncomplete.add(new StateCompressed(id, compressCache.hash(root), root, compressCache));
+                stateMapIncomplete.add(newFrontierState(id, compressCache.hash(root), root));
             } else {
                 stateMap.add(State.of(elements.clone(), nElements, mem));
             }
@@ -317,6 +388,14 @@ public class GroupExplorer implements AbstractGroupProperties {
             return compressCache.size();
         }
         return stateMap.size();
+    }
+
+    /** Total visited states including the current BFS frontier. */
+    public int visitedStateCount() {
+        if (compressCache != null) {
+            return compressCache.size();
+        }
+        return stateMap.size() + stateMapIncomplete.size();
     }
 
     @Override
@@ -459,7 +538,7 @@ public class GroupExplorer implements AbstractGroupProperties {
             compressCache.clear();
             int[] root = elements.clone();
             int id = compressCache.registerRoot(root);
-            stateMapIncomplete.add(new StateCompressed(id, compressCache.hash(root), root, compressCache));
+            stateMapIncomplete.add(newFrontierState(id, compressCache.hash(root), root));
         } else {
             stateMapIncomplete.add(State.of(elements.clone(), nElements, mem));
         }
@@ -654,7 +733,7 @@ public class GroupExplorer implements AbstractGroupProperties {
                     continue;
                 }
 
-                StateCompressed s = new StateCompressed(newId, newHash, newState, compressCache);
+                StateCompressed s = newFrontierState(newId, newHash, newState);
                 incompleteAdditions.add(s);
 
                 if (peekStateAndDepth != null) {
@@ -672,6 +751,10 @@ public class GroupExplorer implements AbstractGroupProperties {
                         }
                     }
                 }
+            }
+
+            if (KeyframeStateCache.STRIP_FRONTIER_PERMS) {
+                parent.stripPerm();
             }
         }
 
@@ -698,6 +781,7 @@ public class GroupExplorer implements AbstractGroupProperties {
         stateMapIncomplete = stateMapTmp;
         stateMapTmp = tmp;
         stateMapTmp.clear();
+        stripFrontierPermsIfScheduled();
 
         long sizeEnd = compressCache.size();
         if (sizeInit == sizeEnd) {
