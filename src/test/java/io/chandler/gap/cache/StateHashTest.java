@@ -15,13 +15,13 @@ class StateHashTest {
 
     @Test
     void derivePrefixLength_fromLogFormula() {
-        assertEquals(13, StateHash.derivePrefixLength(13));
-        assertEquals(9, StateHash.derivePrefixLength(106));
+        assertEquals(13, StateHash.derivePrefixLength(13, 64));
+        assertEquals(9, StateHash.derivePrefixLength(106, 64));
     }
 
     @Test
     void l3_3_prefixHashIsInjective() {
-        int prefixLen = StateHash.derivePrefixLength(13);
+        int prefixLen = StateHash.derivePrefixLength(13, 64);
         assertTrue(StateHash.verifyInjective(L3_3, prefixLen));
     }
 
@@ -30,7 +30,7 @@ class StateHashTest {
         GroupExplorer fastest = new GroupExplorer(L3_3, MemorySettings.FASTEST);
         fastest.exploreStates(false, (states, depth) -> {});
 
-        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS);
+        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS_LONG);
         compress.exploreStates(false, (states, depth) -> {});
 
         assertEquals(fastest.order(), compress.order());
@@ -39,21 +39,19 @@ class StateHashTest {
 
     @Test
     void compressReconstructMatchesExploration() {
-        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS);
+        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS_LONG);
         compress.exploreStates(false, (states, depth) -> {});
 
         KeyframeStateCache cache = compress.compressCache();
-        int prefixLen = cache.prefixLen();
         for (int id = 0; id < cache.size(); id++) {
             int[] reconstructed = cache.reconstruct(id);
-            long hash = StateHash.encode(reconstructed, prefixLen, compress.nElements);
-            assertTrue(cache.containsHash(hash));
+            assertTrue(cache.containsHash(cache.hash(reconstructed)));
         }
     }
 
     @Test
     void compressPeekStatesMatchDirectApplication() {
-        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS);
+        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS_LONG);
         compress.setTrackPath(true);
         compress.initIterativeExploration();
         compress.iterateExploration(false, -1, true, (list, depth) -> {
@@ -69,7 +67,7 @@ class StateHashTest {
 
     @Test
     void tracePathReproducesEveryState() {
-        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS);
+        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS_LONG);
         compress.exploreStates(false, (states, depth) -> {});
 
         KeyframeStateCache cache = compress.compressCache();
@@ -94,7 +92,7 @@ class StateHashTest {
     void compressDoesNotAccumulateStateMap() {
         // The visited set must live entirely in the hash cache; stateMap should stay
         // empty so memory does not scale with the number of explored states.
-        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS);
+        GroupExplorer compress = new GroupExplorer(L3_3, MemorySettings.COMPRESS_LONG);
         compress.exploreStates(false, (states, depth) -> {});
 
         assertEquals(5616, compress.order());

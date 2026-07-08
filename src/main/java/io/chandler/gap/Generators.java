@@ -226,7 +226,7 @@ public class Generators {
 
 
         HashSet<State> states = new HashSet<>();
-        GroupExplorer g = new GroupExplorer("", MemorySettings.COMPRESS, states, new HashSet<>(), new HashSet<>(), true);
+        GroupExplorer g = new GroupExplorer("", MemorySettings.COMPRESS_BIGINT, states, new HashSet<>(), new HashSet<>(), true);
         TreeMap<String, Integer> cycleDescriptions = new TreeMap<>();
         exploreGroup(g, null);
 

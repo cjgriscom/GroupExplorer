@@ -2,31 +2,64 @@ package io.chandler.gap.cache;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 
 /**
- * Stores visited group states using long prefix hashes for membership and
+ * Stores visited group states using prefix hashes for membership and
  * parent/generator derivations with periodic keyframe snapshots of full permutations.
+ *
+ * <p>Supports 64-bit ({@code compressBits == 64}) and 128-bit ({@code compressBits == 128})
+ * mixed-radix prefix keys via {@link PrefixHash}.
  */
 public class KeyframeStateCache {
 
     public static final int KEYFRAME_INTERVAL = 4;
 
+    /** Prefix hash key: one limb for 64-bit mode, two limbs for 128-bit mode. */
+    public static final class PrefixHash {
+        public final long part0;
+        public final long part1;
+
+        public PrefixHash(long part0, long part1) {
+            this.part0 = part0;
+            this.part1 = part1;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (!(obj instanceof PrefixHash)) return false;
+            PrefixHash other = (PrefixHash) obj;
+            return part0 == other.part0 && part1 == other.part1;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(part0, part1);
+        }
+    }
+
     private final int prefixLen;
+    private final int compressBits;
     private final int nElements;
     private final List<int[][]> parsedOperations;
 
-    private final LongOpenHashSet hashes = new LongOpenHashSet();
+    private final ObjectOpenHashSet<PrefixHash> hashes = new ObjectOpenHashSet<>();
 
     private int[] parentId = new int[16];
     private byte[] genIndex = new byte[16];
     private short[][] keyframePerm = new short[16][];
     private int size = 0;
 
-    public KeyframeStateCache(int prefixLen, int nElements, List<int[][]> parsedOperations) {
+    public KeyframeStateCache(int prefixLen, int compressBits, int nElements, List<int[][]> parsedOperations) {
+        if (compressBits != 64 && compressBits != 128) {
+            throw new IllegalArgumentException("Unsupported compressBits: " + compressBits);
+        }
         this.prefixLen = prefixLen;
+        this.compressBits = compressBits;
         this.nElements = nElements;
         this.parsedOperations = parsedOperations;
     }
@@ -35,20 +68,32 @@ public class KeyframeStateCache {
         return prefixLen;
     }
 
+    public int compressBits() {
+        return compressBits;
+    }
+
     public int size() {
         return size;
     }
 
-    public boolean containsHash(long hash) {
+    public boolean containsHash(PrefixHash hash) {
         return hashes.contains(hash);
     }
 
-    public long hash(int[] perm) {
-        return StateHash.encode(perm, prefixLen, nElements);
+    public PrefixHash hash(int[] perm) {
+        if (compressBits <= 64) {
+            return new PrefixHash(StateHash.encode(perm, prefixLen, nElements), 0L);
+        }
+        long[] pair = StateHash.encodePair(perm, prefixLen, nElements);
+        return new PrefixHash(pair[0], pair[1]);
     }
 
-    public long hash(short[] perm) {
-        return StateHash.encode(perm, prefixLen, nElements);
+    public PrefixHash hash(short[] perm) {
+        if (compressBits <= 64) {
+            return new PrefixHash(StateHash.encode(perm, prefixLen, nElements), 0L);
+        }
+        long[] pair = StateHash.encodePair(perm, prefixLen, nElements);
+        return new PrefixHash(pair[0], pair[1]);
     }
 
     public short[] cvt(int[] perm) {
@@ -65,7 +110,7 @@ public class KeyframeStateCache {
         if (size != 0) {
             throw new IllegalStateException("Root already registered");
         }
-        long h = hash(permShort);
+        PrefixHash h = hash(permShort);
         hashes.add(h);
         ensureCapacity(1);
         parentId[0] = -1;
@@ -79,7 +124,7 @@ public class KeyframeStateCache {
      * Register a newly discovered state. Returns the assigned state id, or -1 if duplicate.
      */
     public int tryAdd(int parentStateId, byte gen, int[] perm, int depth) {
-        long h = hash(perm);
+        PrefixHash h = hash(perm);
         if (!hashes.add(h)) {
             return -1;
         }
@@ -154,7 +199,7 @@ public class KeyframeStateCache {
         Arrays.fill(keyframePerm, 0, keyframePerm.length, null);
     }
 
-    /** Applies one generator, matching {@link GroupExplorer} BFS semantics. */
+    /** Applies one generator, matching {@link io.chandler.gap.GroupExplorer} BFS semantics. */
     public short[] applyGeneratorCopy(short[] state, int genIndex) {
         int[][] operation = parsedOperations.get(genIndex);
         short[] newState = Arrays.copyOf(state, state.length);
