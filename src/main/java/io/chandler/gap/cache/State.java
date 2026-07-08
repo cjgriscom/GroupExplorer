@@ -42,14 +42,12 @@ public abstract class State {
 			this.stateId = stateId;
 			this.hash = hash;
 			this.cache = cache;
-			if (perm != null) {
-				if (cache.nElements() <= 255) {
-					this.permBytes = permToBytes(perm);
-					this.permInt = null;
-				} else {
-					this.permInt = perm;
-					this.permBytes = null;
-				}
+			if (cache.nElements() <= 255) {
+				this.permBytes = permToBytes(perm);
+				this.permInt = null;
+			} else {
+				this.permInt = perm;
+				this.permBytes = null;
 			}
 		}
 

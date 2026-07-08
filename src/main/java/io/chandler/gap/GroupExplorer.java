@@ -264,25 +264,6 @@ public class GroupExplorer implements AbstractGroupProperties {
         return stateMap.size();
     }
 
-    private StateCompressed newFrontierState(int stateId, KeyframeStateCache.PrefixHash hash, int[] perm) {
-        if (KeyframeStateCache.STRIP_FRONTIER_PERMS) {
-            return new StateCompressed(stateId, hash, null, compressCache);
-        }
-        return new StateCompressed(stateId, hash, perm, compressCache);
-    }
-
-    private void stripFrontierPermsIfScheduled() {
-        int interval = KeyframeStateCache.STRIP_FRONTIER_INTERVAL;
-        if (interval <= 0 || iteration % interval != 0) {
-            return;
-        }
-        for (State state : stateMapIncomplete) {
-            if (state instanceof StateCompressed) {
-                ((StateCompressed) state).stripPerm();
-            }
-        }
-    }
-
     public void setMultithread(boolean multithread) {
         this.multithread = multithread;
     }
@@ -303,7 +284,7 @@ public class GroupExplorer implements AbstractGroupProperties {
             if (compressCache != null) {
                 int[] root = elements.clone();
                 int id = compressCache.registerRoot(root);
-                stateMapIncomplete.add(newFrontierState(id, compressCache.hash(root), root));
+                stateMapIncomplete.add(new StateCompressed(id, compressCache.hash(root), root, compressCache));
             } else {
                 stateMap.add(State.of(elements.clone(), nElements, mem));
             }
@@ -538,7 +519,7 @@ public class GroupExplorer implements AbstractGroupProperties {
             compressCache.clear();
             int[] root = elements.clone();
             int id = compressCache.registerRoot(root);
-            stateMapIncomplete.add(newFrontierState(id, compressCache.hash(root), root));
+            stateMapIncomplete.add(new StateCompressed(id, compressCache.hash(root), root, compressCache));
         } else {
             stateMapIncomplete.add(State.of(elements.clone(), nElements, mem));
         }
@@ -733,7 +714,7 @@ public class GroupExplorer implements AbstractGroupProperties {
                     continue;
                 }
 
-                StateCompressed s = newFrontierState(newId, newHash, newState);
+                StateCompressed s = new StateCompressed(newId, newHash, newState, compressCache);
                 incompleteAdditions.add(s);
 
                 if (peekStateAndDepth != null) {
@@ -751,10 +732,6 @@ public class GroupExplorer implements AbstractGroupProperties {
                         }
                     }
                 }
-            }
-
-            if (KeyframeStateCache.STRIP_FRONTIER_PERMS) {
-                parent.stripPerm();
             }
         }
 
@@ -781,7 +758,6 @@ public class GroupExplorer implements AbstractGroupProperties {
         stateMapIncomplete = stateMapTmp;
         stateMapTmp = tmp;
         stateMapTmp.clear();
-        stripFrontierPermsIfScheduled();
 
         long sizeEnd = compressCache.size();
         if (sizeInit == sizeEnd) {

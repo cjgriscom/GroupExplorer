@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Test;
 
 import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.SamplePuzzleDepthDistribution.PuzzleDef;
-import io.chandler.gap.cache.KeyframeStateCache;
 import io.chandler.gap.cache.WeylE8StateCache;
 import io.chandler.gap.weyl.WeylE8Antipodes;
 import io.chandler.gap.weyl.WeylE8Quotient;
@@ -114,34 +113,6 @@ class WeylE8StateCacheTest {
                 replay = GroupExplorer.applyOperation(replay, compress.parsedOperations.get(g));
             }
             assertArrayEquals(cache.reconstruct(id), replay, "state id " + id);
-        }
-    }
-
-    @Test
-    void stripFrontierPermsMatchesFastestToDepth30() {
-        KeyframeStateCache.STRIP_FRONTIER_PERMS = true;
-        try {
-            GroupExplorer fastest = new GroupExplorer(weylE8Generator, MemorySettings.FASTEST);
-            fastest.initIterativeExploration();
-            for (int d = 0; d < 30; d++) {
-                fastest.iterateExploration(false, -1, null);
-            }
-
-            GroupExplorer compress = new GroupExplorer(
-                weylE8Generator,
-                MemorySettings.compressWeylE8(2),
-                new HashSet<>(),
-                new HashSet<>(),
-                new HashSet<>(),
-                false);
-            compress.initIterativeExploration();
-            for (int d = 0; d < 30; d++) {
-                compress.iterateExploration(false, -1, null);
-            }
-
-            assertEquals(fastest.visitedStateCount(), compress.visitedStateCount());
-        } finally {
-            KeyframeStateCache.STRIP_FRONTIER_PERMS = false;
         }
     }
 }
