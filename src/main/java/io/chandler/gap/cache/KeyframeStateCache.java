@@ -17,18 +17,6 @@ public class KeyframeStateCache implements CompressStateCache {
     public static int KEYFRAME_INTERVAL = 8;
     public static boolean KEYFRAMES_ENABLED = true;
 
-    /**
-     * When true, frontier {@link io.chandler.gap.cache.State.StateCompressed} handles
-     * store only state id and hash; permutations are reconstructed from the cache on expand.
-     */
-    public static boolean STRIP_FRONTIER_PERMS = false;
-
-    /**
-     * When {@code > 0}, drop stored frontier permutations every N completed BFS layers.
-     * Depth counts and visited-set membership are unaffected.
-     */
-    public static int STRIP_FRONTIER_INTERVAL = 0;
-
     /** Prefix hash key spanning one or more 64-bit mixed-radix limbs. */
     public static final class PrefixHash {
         public final long[] parts;

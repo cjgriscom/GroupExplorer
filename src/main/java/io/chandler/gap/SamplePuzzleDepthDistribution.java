@@ -73,45 +73,30 @@ public class SamplePuzzleDepthDistribution {
         String puzzleIdIn = null;
         int compressLongs = 2;
         boolean noKeyframes = false;
-        boolean stripFrontierPerms = false;
-        int stripFrontierInterval = 0;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             if ("--puzzles".equals(arg)) {
-                puzzlesPath = Paths.get(requireValue(args, i++, arg));
+                puzzlesPath = Paths.get(args[++i]);
             } else if ("--output-dir".equals(arg)) {
-                outputDir = Paths.get(requireValue(args, i++, arg));
+                outputDir = Paths.get(args[++i]);
             } else if ("--max-order".equals(arg)) {
-                maxOrder = Long.parseLong(requireValue(args, i++, arg));
+                maxOrder = Long.parseLong(args[++i]);
             } else if ("--puzzle-id".equals(arg)) {
-                puzzleIdIn = requireValue(args, i++, arg);
+                puzzleIdIn = args[++i];
             } else if ("--compress-longs".equals(arg)) {
-                compressLongs = Integer.parseInt(requireValue(args, i++, arg));
+                compressLongs = Integer.parseInt(args[++i]);
             } else if ("--keyframe-interval".equals(arg)) {
-                KeyframeStateCache.KEYFRAME_INTERVAL = Integer.parseInt(requireValue(args, i++, arg));
+                KeyframeStateCache.KEYFRAME_INTERVAL = Integer.parseInt(args[++i]);
             } else if ("--no-keyframes".equals(arg)) {
                 noKeyframes = true;
-            } else if ("--strip-frontier-perms".equals(arg)) {
-                stripFrontierPerms = true;
-            } else if ("--strip-frontier-interval".equals(arg)) {
-                stripFrontierInterval = Integer.parseInt(requireValue(args, i++, arg));
-            } else if (arg.startsWith("--strip-frontier-interval=")) {
-                stripFrontierInterval = Integer.parseInt(arg.substring("--strip-frontier-interval=".length()));
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
             }
         }
 
-        if (stripFrontierInterval < 0) {
-            throw new IllegalArgumentException(
-                "--strip-frontier-interval must be >= 0 (0 disables periodic stripping)");
-        }
-
         final String puzzleId = puzzleIdIn;
         KeyframeStateCache.KEYFRAMES_ENABLED = !noKeyframes;
-        KeyframeStateCache.STRIP_FRONTIER_PERMS = stripFrontierPerms;
-        KeyframeStateCache.STRIP_FRONTIER_INTERVAL = stripFrontierInterval;
         List<PuzzleDef> puzzles = parseSamplePuzzles(puzzlesPath);
         if (puzzleId != null && puzzles.stream().noneMatch(p -> p.id.equals(puzzleId))) {
             throw new IllegalArgumentException("Unknown puzzle id: " + puzzleId);
@@ -416,13 +401,5 @@ public class SamplePuzzleDepthDistribution {
             return value;
         }
         return '"' + value.replace("\"", "\"\"") + '"';
-    }
-
-    static String requireValue(String[] args, int flagIndex, String flag) {
-        if (flagIndex + 1 >= args.length) {
-            throw new IllegalArgumentException(
-                "Missing value for " + flag + " (e.g. " + flag + " 5)");
-        }
-        return args[flagIndex + 1];
     }
 }
