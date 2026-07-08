@@ -72,29 +72,46 @@ public class SamplePuzzleDepthDistribution {
         long maxOrder = Long.MAX_VALUE;
         String puzzleIdIn = null;
         int compressLongs = 2;
+        boolean noKeyframes = false;
+        boolean stripFrontierPerms = false;
+        int stripFrontierInterval = 0;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             if ("--puzzles".equals(arg)) {
-                puzzlesPath = Paths.get(args[++i]);
+                puzzlesPath = Paths.get(requireValue(args, i++, arg));
             } else if ("--output-dir".equals(arg)) {
-                outputDir = Paths.get(args[++i]);
+                outputDir = Paths.get(requireValue(args, i++, arg));
             } else if ("--max-order".equals(arg)) {
-                maxOrder = Long.parseLong(args[++i]);
+                maxOrder = Long.parseLong(requireValue(args, i++, arg));
             } else if ("--puzzle-id".equals(arg)) {
-                puzzleIdIn = args[++i];
+                puzzleIdIn = requireValue(args, i++, arg);
             } else if ("--compress-longs".equals(arg)) {
-                compressLongs = Integer.parseInt(args[++i]);
+                compressLongs = Integer.parseInt(requireValue(args, i++, arg));
             } else if ("--keyframe-interval".equals(arg)) {
-                KeyframeStateCache.KEYFRAME_INTERVAL = Integer.parseInt(args[++i]);
+                KeyframeStateCache.KEYFRAME_INTERVAL = Integer.parseInt(requireValue(args, i++, arg));
+            } else if ("--no-keyframes".equals(arg)) {
+                noKeyframes = true;
+            } else if ("--strip-frontier-perms".equals(arg)) {
+                stripFrontierPerms = true;
+            } else if ("--strip-frontier-interval".equals(arg)) {
+                stripFrontierInterval = Integer.parseInt(requireValue(args, i++, arg));
+            } else if (arg.startsWith("--strip-frontier-interval=")) {
+                stripFrontierInterval = Integer.parseInt(arg.substring("--strip-frontier-interval=".length()));
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
             }
         }
 
-        final String puzzleId = puzzleIdIn;
+        if (stripFrontierInterval < 0) {
+            throw new IllegalArgumentException(
+                "--strip-frontier-interval must be >= 0 (0 disables periodic stripping)");
+        }
 
-        MemorySettings compressMem = MemorySettings.compress(compressLongs);
+        final String puzzleId = puzzleIdIn;
+        KeyframeStateCache.KEYFRAMES_ENABLED = !noKeyframes;
+        KeyframeStateCache.STRIP_FRONTIER_PERMS = stripFrontierPerms;
+        KeyframeStateCache.STRIP_FRONTIER_INTERVAL = stripFrontierInterval;
         List<PuzzleDef> puzzles = parseSamplePuzzles(puzzlesPath);
         if (puzzleId != null && puzzles.stream().noneMatch(p -> p.id.equals(puzzleId))) {
             throw new IllegalArgumentException("Unknown puzzle id: " + puzzleId);
@@ -116,7 +133,9 @@ public class SamplePuzzleDepthDistribution {
                 continue;
             }
 
-            DepthStats stats = exploreDepthDistribution(puzzle.generator, compressMem);
+            DepthStats stats = exploreDepthDistribution(
+                puzzle.generator,
+                compressMemFor(puzzle.id, compressLongs));
             results.put(puzzle.id, stats);
             explored.add(puzzle);
 
@@ -223,6 +242,13 @@ public class SamplePuzzleDepthDistribution {
                 }
             }
         }
+    }
+
+    static MemorySettings compressMemFor(String puzzleId, int compressLongs) {
+        if ("weyl_e8".equals(puzzleId)) {
+            return MemorySettings.compressWeylE8(compressLongs);
+        }
+        return MemorySettings.compress(compressLongs);
     }
 
     static DepthStats exploreDepthDistribution(String generatorNotation, MemorySettings compressMem) {
@@ -390,5 +416,13 @@ public class SamplePuzzleDepthDistribution {
             return value;
         }
         return '"' + value.replace("\"", "\"\"") + '"';
+    }
+
+    static String requireValue(String[] args, int flagIndex, String flag) {
+        if (flagIndex + 1 >= args.length) {
+            throw new IllegalArgumentException(
+                "Missing value for " + flag + " (e.g. " + flag + " 5)");
+        }
+        return args[flagIndex + 1];
     }
 }

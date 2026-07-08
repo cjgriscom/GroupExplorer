@@ -11,6 +11,7 @@ import io.chandler.gap.Dodecahedron;
 import io.chandler.gap.GroupExplorer;
 import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.GroupExplorer.PeekData;
+import io.chandler.gap.cache.CompressStateCache;
 import io.chandler.gap.cache.KeyframeStateCache;
 import io.chandler.gap.cache.State;
 import io.chandler.gap.cache.State.StateCompressed;
@@ -349,7 +350,7 @@ public class MiscSolvers {
         group.setTrackPath(true);
         group.initIterativeExploration();
 
-        KeyframeStateCache compressCache = group.compressCache();
+        CompressStateCache compressCache = group.compressStateCache();
         final boolean compress = compressCache != null;
 
         ArrayList<int[]> matchingStates = new ArrayList<>();

@@ -12,9 +12,22 @@ import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
  *
  * <p>Hash width is configured by {@code numLongs} (each limb is 64 bits).
  */
-public class KeyframeStateCache {
+public class KeyframeStateCache implements CompressStateCache {
 
     public static int KEYFRAME_INTERVAL = 8;
+    public static boolean KEYFRAMES_ENABLED = true;
+
+    /**
+     * When true, frontier {@link io.chandler.gap.cache.State.StateCompressed} handles
+     * store only state id and hash; permutations are reconstructed from the cache on expand.
+     */
+    public static boolean STRIP_FRONTIER_PERMS = false;
+
+    /**
+     * When {@code > 0}, drop stored frontier permutations every N completed BFS layers.
+     * Depth counts and visited-set membership are unaffected.
+     */
+    public static int STRIP_FRONTIER_INTERVAL = 0;
 
     /** Prefix hash key spanning one or more 64-bit mixed-radix limbs. */
     public static final class PrefixHash {
@@ -71,8 +84,19 @@ public class KeyframeStateCache {
         return numLongs * 64;
     }
 
+    @Override
     public int nElements() {
         return nElements;
+    }
+
+    @Override
+    public boolean keyframesEnabled() {
+        return KEYFRAMES_ENABLED;
+    }
+
+    @Override
+    public List<int[][]> parsedOperations() {
+        return parsedOperations;
     }
 
     public int size() {
@@ -127,7 +151,7 @@ public class KeyframeStateCache {
         ensureCapacity(id + 1);
         parentId[id] = parentStateId;
         genIndex[id] = gen;
-        if (depth % KEYFRAME_INTERVAL == 0) {
+        if (KEYFRAMES_ENABLED && depth % KEYFRAME_INTERVAL == 0) {
             keyframePerm[id] = cvt(perm);
         } else {
             keyframePerm[id] = null;
@@ -138,6 +162,17 @@ public class KeyframeStateCache {
     public int[] reconstruct(int stateId) {
         if (stateId < 0 || stateId >= size) {
             throw new IllegalArgumentException("Invalid state id: " + stateId);
+        }
+        if (!KEYFRAMES_ENABLED) {
+            int[] path = tracePath(stateId);
+            int[] state = new int[nElements];
+            for (int i = 0; i < state.length; i++) {
+                state[i] = i + 1;
+            }
+            for (int g : path) {
+                state = io.chandler.gap.GroupExplorer.applyOperation(state, parsedOperations.get(g));
+            }
+            return state;
         }
         int[] gens = new int[KEYFRAME_INTERVAL];
         int genCount = 0;
