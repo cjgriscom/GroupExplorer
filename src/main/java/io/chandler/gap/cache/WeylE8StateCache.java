@@ -158,8 +158,11 @@ public final class WeylE8StateCache implements CompressStateCache {
         if (minCapacity <= parentGen.length) {
             return;
         }
-        int newCap = Math.max(minCapacity, parentGen.length * 2);
-        parentGen = Arrays.copyOf(parentGen, newCap);
+        long newCap = Math.max(minCapacity, (long) parentGen.length * 2);
+        if (newCap > Integer.MAX_VALUE - 8) {
+            throw new IllegalStateException("parentGen capacity exceeded: " + minCapacity);
+        }
+        parentGen = Arrays.copyOf(parentGen, (int) newCap);
     }
 
     private int parentOf(int id) {
@@ -176,7 +179,13 @@ public final class WeylE8StateCache implements CompressStateCache {
 
     /** Open-addressing set storing {@code numLongs} consecutive longs per slot. */
     static final class FlatLongHashSet {
-        private long[] table;
+        /** Slots per chunk; keep {@code SLOTS_PER_CHUNK * numLongs <= Integer.MAX_VALUE}. */
+        static final int CHUNK_SHIFT = 26;
+        static final int SLOTS_PER_CHUNK = 1 << CHUNK_SHIFT;
+        static final int CHUNK_MASK = SLOTS_PER_CHUNK - 1;
+
+        private long[][] chunks;
+        private int numChunks;
         private final int numLongs;
         private int capacity;
         private int mask;
@@ -184,7 +193,11 @@ public final class WeylE8StateCache implements CompressStateCache {
 
         FlatLongHashSet(int numLongs, int initialCapacity) {
             this.numLongs = numLongs;
-            resize(Integer.highestOneBit(Math.max(16, initialCapacity)));
+            if ((long) SLOTS_PER_CHUNK * numLongs > Integer.MAX_VALUE - 8) {
+                throw new IllegalArgumentException("numLongs too large for chunked table");
+            }
+            int chunksNeeded = Math.max(1, roundUpChunks(initialCapacity));
+            initChunks(chunksNeeded);
         }
 
         int size() {
@@ -192,7 +205,9 @@ public final class WeylE8StateCache implements CompressStateCache {
         }
 
         void clear() {
-            Arrays.fill(table, EMPTY_SLOT);
+            for (int c = 0; c < numChunks; c++) {
+                Arrays.fill(chunks[c], EMPTY_SLOT);
+            }
             size = 0;
         }
 
@@ -202,7 +217,7 @@ public final class WeylE8StateCache implements CompressStateCache {
 
         boolean add(long[] key) {
             if (size * 4 >= capacity * 3) {
-                rehash(capacity << 1);
+                grow();
             }
             int slot = findInsertSlot(key);
             if (slot >= 0) {
@@ -214,34 +229,62 @@ public final class WeylE8StateCache implements CompressStateCache {
             return true;
         }
 
-        private void rehash(int newCapacity) {
-            long[] old = table;
-            int oldCapacity = capacity;
-            resize(newCapacity);
-            for (int slot = 0; slot < oldCapacity; slot++) {
-                if (!isEmpty(old, slot)) {
-                    long[] key = readKey(old, slot, new long[numLongs]);
-                    int dest = -findInsertSlot(key) - 1;
-                    copyKey(key, dest);
-                    size++;
-                }
+        private void grow() {
+            if (numChunks >= maxChunks()) {
+                throw new IllegalStateException(
+                    "Hash table capacity exceeded at " + size + " entries (max slots "
+                    + ((long) numChunks * SLOTS_PER_CHUNK) + ")");
             }
+            rehash(numChunks << 1);
         }
 
-        private void resize(int newCapacity) {
-            capacity = newCapacity;
+        private int maxChunks() {
+            return Integer.MAX_VALUE / (SLOTS_PER_CHUNK * numLongs);
+        }
+
+        private static int roundUpChunks(int minSlots) {
+            int slots = Integer.highestOneBit(Math.max(SLOTS_PER_CHUNK, minSlots));
+            if (slots < minSlots) {
+                slots <<= 1;
+            }
+            return slots / SLOTS_PER_CHUNK;
+        }
+
+        private void initChunks(int newNumChunks) {
+            numChunks = newNumChunks;
+            capacity = numChunks * SLOTS_PER_CHUNK;
             mask = capacity - 1;
-            table = new long[capacity * numLongs];
+            chunks = new long[numChunks][];
+            for (int c = 0; c < numChunks; c++) {
+                chunks[c] = new long[SLOTS_PER_CHUNK * numLongs];
+            }
             size = 0;
+        }
+
+        private void rehash(int newNumChunks) {
+            long[][] old = chunks;
+            int oldNumChunks = numChunks;
+            initChunks(newNumChunks);
+            for (int c = 0; c < oldNumChunks; c++) {
+                long[] chunk = old[c];
+                for (int s = 0; s < SLOTS_PER_CHUNK; s++) {
+                    if (chunk[s * numLongs] != EMPTY_SLOT) {
+                        long[] key = readKey(chunk, s, new long[numLongs]);
+                        int dest = -findInsertSlot(key) - 1;
+                        copyKey(key, dest);
+                        size++;
+                    }
+                }
+            }
         }
 
         private int findSlot(long[] key) {
             int idx = hashIndex(key) & mask;
             while (true) {
-                if (isEmpty(table, idx)) {
+                if (isEmpty(idx)) {
                     return -1;
                 }
-                if (matches(table, idx, key)) {
+                if (matches(idx, key)) {
                     return idx;
                 }
                 idx = (idx + 1) & mask;
@@ -251,12 +294,11 @@ public final class WeylE8StateCache implements CompressStateCache {
         /** Returns slot index if present, otherwise {@code -(insertSlot + 1)}. */
         private int findInsertSlot(long[] key) {
             int idx = hashIndex(key) & mask;
-            int firstDeleted = -1;
             while (true) {
-                if (isEmpty(table, idx)) {
-                    return firstDeleted >= 0 ? -(firstDeleted + 1) : -(idx + 1);
+                if (isEmpty(idx)) {
+                    return -(idx + 1);
                 }
-                if (matches(table, idx, key)) {
+                if (matches(idx, key)) {
                     return idx;
                 }
                 idx = (idx + 1) & mask;
@@ -271,27 +313,33 @@ public final class WeylE8StateCache implements CompressStateCache {
             return (int) (h ^ (h >>> 32));
         }
 
-        private boolean isEmpty(long[] arr, int slot) {
-            return arr[slot * numLongs] == EMPTY_SLOT;
+        private boolean isEmpty(int slot) {
+            return slotLong(slot, 0) == EMPTY_SLOT;
         }
 
-        private boolean matches(long[] arr, int slot, long[] key) {
-            int base = slot * numLongs;
+        private boolean matches(int slot, long[] key) {
             for (int i = 0; i < numLongs; i++) {
-                if (arr[base + i] != key[i]) {
+                if (slotLong(slot, i) != key[i]) {
                     return false;
                 }
             }
             return true;
         }
 
-        private void copyKey(long[] key, int slot) {
-            int base = slot * numLongs;
-            System.arraycopy(key, 0, table, base, numLongs);
+        private long slotLong(int slot, int limb) {
+            int chunk = slot >>> CHUNK_SHIFT;
+            int index = (slot & CHUNK_MASK) * numLongs + limb;
+            return chunks[chunk][index];
         }
 
-        private long[] readKey(long[] arr, int slot, long[] dest) {
-            System.arraycopy(arr, slot * numLongs, dest, 0, numLongs);
+        private void copyKey(long[] key, int slot) {
+            int chunk = slot >>> CHUNK_SHIFT;
+            int base = (slot & CHUNK_MASK) * numLongs;
+            System.arraycopy(key, 0, chunks[chunk], base, numLongs);
+        }
+
+        private static long[] readKey(long[] chunk, int slot, long[] dest) {
+            System.arraycopy(chunk, slot * dest.length, dest, 0, dest.length);
             return dest;
         }
     }
