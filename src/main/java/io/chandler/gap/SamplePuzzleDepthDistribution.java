@@ -17,6 +17,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import io.chandler.gap.GroupExplorer.MemorySettings;
+import io.chandler.gap.cache.KeyframeStateCache;
 import io.chandler.gap.cache.State;
 
 /**
@@ -69,6 +70,8 @@ public class SamplePuzzleDepthDistribution {
         Path puzzlesPath = DEFAULT_PUZZLES;
         Path outputDir = DEFAULT_OUTPUT_DIR;
         long maxOrder = Long.MAX_VALUE;
+        String puzzleIdIn = null;
+        int compressLongs = 2;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -78,12 +81,24 @@ public class SamplePuzzleDepthDistribution {
                 outputDir = Paths.get(args[++i]);
             } else if ("--max-order".equals(arg)) {
                 maxOrder = Long.parseLong(args[++i]);
+            } else if ("--puzzle-id".equals(arg)) {
+                puzzleIdIn = args[++i];
+            } else if ("--compress-longs".equals(arg)) {
+                compressLongs = Integer.parseInt(args[++i]);
+            } else if ("--keyframe-interval".equals(arg)) {
+                KeyframeStateCache.KEYFRAME_INTERVAL = Integer.parseInt(args[++i]);
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
             }
         }
 
+        final String puzzleId = puzzleIdIn;
+
+        MemorySettings compressMem = MemorySettings.compress(compressLongs);
         List<PuzzleDef> puzzles = parseSamplePuzzles(puzzlesPath);
+        if (puzzleId != null && puzzles.stream().noneMatch(p -> p.id.equals(puzzleId))) {
+            throw new IllegalArgumentException("Unknown puzzle id: " + puzzleId);
+        }
         Files.createDirectories(outputDir);
 
         Map<String, DepthStats> results = new LinkedHashMap<>();
@@ -92,13 +107,16 @@ public class SamplePuzzleDepthDistribution {
         List<String> godsNumberMismatches = new ArrayList<>();
 
         for (PuzzleDef puzzle : puzzles) {
+            if (puzzleId != null && !puzzle.id.equals(puzzleId)) {
+                continue;
+            }
             System.out.println("=== " + puzzle.id + " (" + puzzle.name + ") ===");
             if (puzzle.order > maxOrder) {
                 System.out.println("Skipping: order " + puzzle.order + " exceeds max-order " + maxOrder);
                 continue;
             }
 
-            DepthStats stats = exploreDepthDistribution(puzzle.generator);
+            DepthStats stats = exploreDepthDistribution(puzzle.generator, compressMem);
             results.put(puzzle.id, stats);
             explored.add(puzzle);
 
@@ -138,6 +156,10 @@ public class SamplePuzzleDepthDistribution {
 
         System.out.println("Wrote CSV spreadsheets to " + outputDir.toAbsolutePath());
         printVerificationSummary(orderMismatches, godsNumberMismatches);
+
+        if (puzzleId != null && explored.isEmpty()) {
+            throw new IllegalStateException("No puzzles explored for id: " + puzzleId);
+        }
 
         if (!orderMismatches.isEmpty() || !godsNumberMismatches.isEmpty()) {
             throw new IllegalStateException("Verification failed: "
@@ -203,11 +225,11 @@ public class SamplePuzzleDepthDistribution {
         }
     }
 
-    static DepthStats exploreDepthDistribution(String generatorNotation) {
+    static DepthStats exploreDepthDistribution(String generatorNotation, MemorySettings compressMem) {
         HashSet<State> states = new HashSet<>();
         GroupExplorer gap = new GroupExplorer(
             generatorNotation,
-            MemorySettings.COMPRESS_BIGINT,
+            compressMem,
             states,
             new HashSet<>(),
             new HashSet<>(),

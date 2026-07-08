@@ -120,17 +120,29 @@ public class GroupExplorer implements AbstractGroupProperties {
         public static MemorySettings FASTEST = new MemorySettings(0,0);
         public static MemorySettings DEFAULT = new MemorySettings(1,0);
         public static MemorySettings COMPACT = new MemorySettings(2,0);
-        public static MemorySettings COMPRESS_LONG = new MemorySettings(3, 64);
-        public static MemorySettings COMPRESS_BIGINT = new MemorySettings(3, 128);
+        public static MemorySettings COMPRESS_LONG = compress(1);
 
         public final int mode;
         public final int compressBits;
+
         public MemorySettings(int mode, int compressBits) {
             this.mode = mode;
             this.compressBits = compressBits;
         }
         public MemorySettings(int mode) {
             this(mode, 0);
+        }
+
+        /** COMPRESS mode using {@code numLongs} 64-bit hash limbs. */
+        public static MemorySettings compress(int numLongs) {
+            if (numLongs < 1) {
+                throw new IllegalArgumentException("numLongs must be >= 1");
+            }
+            return new MemorySettings(3, numLongs * 64);
+        }
+
+        public int compressLongs() {
+            return compressBits / 64;
         }
 
         @Override
@@ -680,7 +692,7 @@ public class GroupExplorer implements AbstractGroupProperties {
         }
 
         // Swap frontier buffers. The old frontier (now in stateMapTmp) is cleared,
-        // releasing its StateCompressed handles and their int[] perms for GC. The new
+        // releasing its StateCompressed handles and their stored perms for GC. The new
         // frontier retains its perms so the next layer expands without reconstructing.
         Set<State> tmp = stateMapIncomplete;
         stateMapIncomplete = stateMapTmp;

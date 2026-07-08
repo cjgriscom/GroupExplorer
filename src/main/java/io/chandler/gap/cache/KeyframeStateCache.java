@@ -2,7 +2,6 @@ package io.chandler.gap.cache;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
@@ -11,39 +10,35 @@ import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
  * Stores visited group states using prefix hashes for membership and
  * parent/generator derivations with periodic keyframe snapshots of full permutations.
  *
- * <p>Supports 64-bit ({@code compressBits == 64}) and 128-bit ({@code compressBits == 128})
- * mixed-radix prefix keys via {@link PrefixHash}.
+ * <p>Hash width is configured by {@code numLongs} (each limb is 64 bits).
  */
 public class KeyframeStateCache {
 
-    public static final int KEYFRAME_INTERVAL = 4;
+    public static int KEYFRAME_INTERVAL = 8;
 
-    /** Prefix hash key: one limb for 64-bit mode, two limbs for 128-bit mode. */
+    /** Prefix hash key spanning one or more 64-bit mixed-radix limbs. */
     public static final class PrefixHash {
-        public final long part0;
-        public final long part1;
+        public final long[] parts;
 
-        public PrefixHash(long part0, long part1) {
-            this.part0 = part0;
-            this.part1 = part1;
+        public PrefixHash(long[] parts) {
+            this.parts = parts;
         }
 
         @Override
         public boolean equals(Object obj) {
             if (this == obj) return true;
             if (!(obj instanceof PrefixHash)) return false;
-            PrefixHash other = (PrefixHash) obj;
-            return part0 == other.part0 && part1 == other.part1;
+            return Arrays.equals(parts, ((PrefixHash) obj).parts);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(part0, part1);
+            return Arrays.hashCode(parts);
         }
     }
 
     private final int prefixLen;
-    private final int compressBits;
+    private final int numLongs;
     private final int nElements;
     private final List<int[][]> parsedOperations;
 
@@ -55,11 +50,11 @@ public class KeyframeStateCache {
     private int size = 0;
 
     public KeyframeStateCache(int prefixLen, int compressBits, int nElements, List<int[][]> parsedOperations) {
-        if (compressBits != 64 && compressBits != 128) {
-            throw new IllegalArgumentException("Unsupported compressBits: " + compressBits);
+        if (compressBits <= 0 || compressBits % 64 != 0) {
+            throw new IllegalArgumentException("compressBits must be a positive multiple of 64: " + compressBits);
         }
         this.prefixLen = prefixLen;
-        this.compressBits = compressBits;
+        this.numLongs = compressBits / 64;
         this.nElements = nElements;
         this.parsedOperations = parsedOperations;
     }
@@ -68,8 +63,16 @@ public class KeyframeStateCache {
         return prefixLen;
     }
 
+    public int numLongs() {
+        return numLongs;
+    }
+
     public int compressBits() {
-        return compressBits;
+        return numLongs * 64;
+    }
+
+    public int nElements() {
+        return nElements;
     }
 
     public int size() {
@@ -81,19 +84,11 @@ public class KeyframeStateCache {
     }
 
     public PrefixHash hash(int[] perm) {
-        if (compressBits <= 64) {
-            return new PrefixHash(StateHash.encode(perm, prefixLen, nElements), 0L);
-        }
-        long[] pair = StateHash.encodePair(perm, prefixLen, nElements);
-        return new PrefixHash(pair[0], pair[1]);
+        return new PrefixHash(StateHash.encodeLimbs(perm, prefixLen, nElements, numLongs));
     }
 
     public PrefixHash hash(short[] perm) {
-        if (compressBits <= 64) {
-            return new PrefixHash(StateHash.encode(perm, prefixLen, nElements), 0L);
-        }
-        long[] pair = StateHash.encodePair(perm, prefixLen, nElements);
-        return new PrefixHash(pair[0], pair[1]);
+        return new PrefixHash(StateHash.encodeLimbs(perm, prefixLen, nElements, numLongs));
     }
 
     public short[] cvt(int[] perm) {
