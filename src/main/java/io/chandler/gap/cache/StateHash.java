@@ -15,57 +15,56 @@ public final class StateHash {
     private StateHash() {}
 
     /**
-     * Maximum prefix length storable in a signed 64-bit key without overflow,
-     * derived as {@code floor(log_{nElements}(2^64))}, capped at {@code nElements}.
+     * Maximum prefix length storable in {@code compressBits} without overflow,
+     * derived as {@code floor(compressBits / log2(nElements))}, capped at {@code nElements}.
      */
     public static int derivePrefixLength(int nElements, int compressBits) {
         if (nElements <= 1) {
             return nElements;
         }
-        // log_n(2^64) = 64 / log2(n)
-        int fromBits = (int) ((double)compressBits / (Math.log(nElements) / Math.log(2)));
+        int fromBits = (int) ((double) compressBits / (Math.log(nElements) / Math.log(2)));
         return Math.min(nElements, fromBits);
     }
 
     public static long encode(int[] state, int prefixLen, int nElements) {
-        long value = 0;
-        long base = nElements + 1L;
-        int len = Math.min(prefixLen, state.length);
-        for (int i = 0; i < len; i++) {
-            value = value * base + state[i];
-        }
-        return value;
+        return encodeRange(state, 0, Math.min(prefixLen, state.length), nElements);
     }
 
     public static long encode(short[] state, int prefixLen, int nElements) {
-        long value = 0;
-        long base = nElements + 1L;
-        int len = Math.min(prefixLen, state.length);
-        for (int i = 0; i < len; i++) {
-            value = value * base + state[i];
-        }
-        return value;
+        return encodeRange(state, 0, Math.min(prefixLen, state.length), nElements);
     }
 
     /**
-     * Encodes {@code prefixLen} images split across two 64-bit limbs without overflow.
-     * The first limb holds up to {@link #derivePrefixLength(int, int) derivePrefixLength(n, 64)}
-     * coordinates; the remainder goes in the second limb.
+     * Encodes {@code prefixLen} images split across {@code numLongs} 64-bit limbs without overflow.
+     * Each limb holds up to {@link #derivePrefixLength(int, int) derivePrefixLength(n, 64)} coordinates.
      */
-    public static long[] encodePair(int[] state, int prefixLen, int nElements) {
-        int firstLen = Math.min(prefixLen, derivePrefixLength(nElements, 64));
-        int secondLen = prefixLen - firstLen;
-        long part0 = encodeRange(state, 0, firstLen, nElements);
-        long part1 = secondLen > 0 ? encodeRange(state, firstLen, secondLen, nElements) : 0L;
-        return new long[] {part0, part1};
+    public static long[] encodeLimbs(int[] state, int prefixLen, int nElements, int numLongs) {
+        return encodeLimbsImpl(state, prefixLen, nElements, numLongs);
     }
 
-    public static long[] encodePair(short[] state, int prefixLen, int nElements) {
-        int firstLen = Math.min(prefixLen, derivePrefixLength(nElements, 64));
-        int secondLen = prefixLen - firstLen;
-        long part0 = encodeRange(state, 0, firstLen, nElements);
-        long part1 = secondLen > 0 ? encodeRange(state, firstLen, secondLen, nElements) : 0L;
-        return new long[] {part0, part1};
+    public static long[] encodeLimbs(short[] state, int prefixLen, int nElements, int numLongs) {
+        return encodeLimbsImpl(state, prefixLen, nElements, numLongs);
+    }
+
+    private static long[] encodeLimbsImpl(Object state, int prefixLen, int nElements, int numLongs) {
+        if (numLongs < 1) {
+            throw new IllegalArgumentException("numLongs must be >= 1");
+        }
+        int limbCapacity = derivePrefixLength(nElements, 64);
+        long[] parts = new long[numLongs];
+        int limb = 0;
+        int offset = 0;
+        while (offset < prefixLen && limb < numLongs) {
+            int len = Math.min(limbCapacity, prefixLen - offset);
+            if (state instanceof int[]) {
+                parts[limb] = encodeRange((int[]) state, offset, len, nElements);
+            } else {
+                parts[limb] = encodeRange((short[]) state, offset, len, nElements);
+            }
+            offset += len;
+            limb++;
+        }
+        return parts;
     }
 
     private static long encodeRange(int[] state, int offset, int len, int nElements) {

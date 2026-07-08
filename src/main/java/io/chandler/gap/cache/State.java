@@ -27,24 +27,33 @@ public abstract class State {
 	public abstract int[] state();
 
 	/**
-	 * Lightweight handle for COMPRESS mode. Frontier nodes retain {@code perm};
+	 * Lightweight handle for COMPRESS mode. Frontier nodes retain a compact permutation
+	 * ({@code byte[]} when {@code nElements <= 255}, otherwise {@code int[]});
 	 * visited nodes drop it and reconstruct from {@link KeyframeStateCache} on demand.
 	 */
 	public static class StateCompressed extends State {
 		public final int stateId;
 		public final PrefixHash hash;
-		private int[] perm;
+		private int[] permInt;
+		private byte[] permBytes;
 		private final KeyframeStateCache cache;
 
 		public StateCompressed(int stateId, PrefixHash hash, int[] perm, KeyframeStateCache cache) {
 			this.stateId = stateId;
 			this.hash = hash;
-			this.perm = perm;
 			this.cache = cache;
+			if (cache.nElements() <= 255) {
+				this.permBytes = permToBytes(perm);
+				this.permInt = null;
+			} else {
+				this.permInt = perm;
+				this.permBytes = null;
+			}
 		}
 
 		public void stripPerm() {
-			this.perm = null;
+			this.permInt = null;
+			this.permBytes = null;
 		}
 
 		public int getStateId() {
@@ -53,8 +62,11 @@ public abstract class State {
 
 		/** Returns the frontier permutation if present, otherwise reconstructs. */
 		public int[] frontierPerm() {
-			if (perm != null) {
-				return perm;
+			if (permInt != null) {
+				return permInt;
+			}
+			if (permBytes != null) {
+				return permFromBytes(permBytes);
 			}
 			return cache.reconstruct(stateId);
 		}
@@ -65,10 +77,23 @@ public abstract class State {
 
 		@Override
 		public int[] state() {
-			if (perm != null) {
-				return perm;
+			return frontierPerm();
+		}
+
+		private static byte[] permToBytes(int[] perm) {
+			byte[] bytes = new byte[perm.length];
+			for (int i = 0; i < perm.length; i++) {
+				bytes[i] = (byte) perm[i];
 			}
-			return cache.reconstruct(stateId);
+			return bytes;
+		}
+
+		private static int[] permFromBytes(byte[] perm) {
+			int[] result = new int[perm.length];
+			for (int i = 0; i < perm.length; i++) {
+				result[i] = perm[i] & 0xff;
+			}
+			return result;
 		}
 
 		@Override
