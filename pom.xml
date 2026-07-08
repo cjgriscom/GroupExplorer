@@ -13,6 +13,7 @@
         <junit.version>5.8.2</junit.version>
         <javafx.version>11.0.2</javafx.version>
         <javafx.platform>linux</javafx.platform>
+        <exec.jvmArgs></exec.jvmArgs>
     </properties>
 
     <dependencies>
@@ -103,6 +104,14 @@
                 <configuration>
                     <source>11</source>
                     <target>11</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.3</version>
+                <configuration>
+                    <jvmArgs>${exec.jvmArgs}</jvmArgs>
                 </configuration>
             </plugin>
             <plugin>

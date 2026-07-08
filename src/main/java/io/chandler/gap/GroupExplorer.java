@@ -511,6 +511,16 @@ public class GroupExplorer implements AbstractGroupProperties {
         return iteration;
     }
 
+    public int frontierSize() {
+        return stateMapIncomplete.size();
+    }
+
+    public void forEachFrontier(java.util.function.Consumer<StateCompressed> action) {
+        for (State state : stateMapIncomplete) {
+            action.accept((StateCompressed) state);
+        }
+    }
+
     public void initIterativeExploration() {
         stateMap.clear();
         stateMapIncomplete.clear();
