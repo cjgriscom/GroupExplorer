@@ -2,10 +2,12 @@ package io.chandler.gap;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -17,14 +19,25 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import io.chandler.gap.GroupExplorer.MemorySettings;
+import io.chandler.gap.GroupExplorer.PeekData;
+import io.chandler.gap.cache.CompressStateCache;
 import io.chandler.gap.cache.KeyframeStateCache;
 import io.chandler.gap.cache.State;
+import io.chandler.gap.cache.State.StateCompressed;
 
 /**
  * Computes BFS depth distributions for every puzzle in GridExplorer's
  * {@code samplePuzzles.ts} and writes spreadsheet-friendly CSV output.
  *
  * <p>Uses the same exploration setup as {@link Generators#exploreGroup}.
+ *
+ * <p>Example (250 GB heap, custom puzzle list, Weyl E8 depth dump):
+ * <pre>{@code
+ * mvn -q exec:java \
+ *   -Dexec.jvmArgs="-Xms250g -Xmx250g -XX:+UseG1GC" \
+ *   -Dexec.mainClass=io.chandler.gap.SamplePuzzleDepthDistribution \
+ *   -Dexec.args="--puzzles /tmp/sample.ts --puzzle-id weyl_e8 --compress-longs 2 --no-keyframes --dump-depths weyl_e8_depths.txt"
+ * }</pre>
  */
 public class SamplePuzzleDepthDistribution {
 
@@ -32,6 +45,8 @@ public class SamplePuzzleDepthDistribution {
         Paths.get("/home/cjgriscom/Programming/GridExplorer/src/samplePuzzles.ts");
     private static final Path DEFAULT_OUTPUT_DIR =
         Paths.get("sample_puzzle_depth_distribution");
+
+    private static final int DUMP_DEPTH_MAX_FRONTIER = 1000;
 
     static final class PuzzleDef {
         final String id;
@@ -73,6 +88,7 @@ public class SamplePuzzleDepthDistribution {
         String puzzleIdIn = null;
         int compressLongs = 2;
         boolean noKeyframes = false;
+        Path dumpDepthsPath = null;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -90,6 +106,8 @@ public class SamplePuzzleDepthDistribution {
                 KeyframeStateCache.KEYFRAME_INTERVAL = Integer.parseInt(args[++i]);
             } else if ("--no-keyframes".equals(arg)) {
                 noKeyframes = true;
+            } else if ("--dump-depths".equals(arg)) {
+                dumpDepthsPath = Paths.get(args[++i]);
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
             }
@@ -97,6 +115,9 @@ public class SamplePuzzleDepthDistribution {
 
         final String puzzleId = puzzleIdIn;
         KeyframeStateCache.KEYFRAMES_ENABLED = !noKeyframes;
+        if (dumpDepthsPath != null) {
+            Files.deleteIfExists(dumpDepthsPath);
+        }
         List<PuzzleDef> puzzles = parseSamplePuzzles(puzzlesPath);
         if (puzzleId != null && puzzles.stream().noneMatch(p -> p.id.equals(puzzleId))) {
             throw new IllegalArgumentException("Unknown puzzle id: " + puzzleId);
@@ -119,8 +140,9 @@ public class SamplePuzzleDepthDistribution {
             }
 
             DepthStats stats = exploreDepthDistribution(
-                puzzle.generator,
-                compressMemFor(puzzle.id, compressLongs));
+                puzzle,
+                compressMemFor(puzzle.id, compressLongs),
+                dumpDepthsPath);
             results.put(puzzle.id, stats);
             explored.add(puzzle);
 
@@ -158,6 +180,9 @@ public class SamplePuzzleDepthDistribution {
             orderMismatches,
             godsNumberMismatches);
 
+        if (dumpDepthsPath != null) {
+            System.out.println("Wrote depth dumps to " + dumpDepthsPath.toAbsolutePath());
+        }
         System.out.println("Wrote CSV spreadsheets to " + outputDir.toAbsolutePath());
         printVerificationSummary(orderMismatches, godsNumberMismatches);
 
@@ -236,7 +261,20 @@ public class SamplePuzzleDepthDistribution {
         return MemorySettings.compress(compressLongs);
     }
 
-    static DepthStats exploreDepthDistribution(String generatorNotation, MemorySettings compressMem) {
+    static DepthStats exploreDepthDistribution(PuzzleDef puzzle, MemorySettings compressMem)
+            throws IOException {
+        return exploreDepthDistribution(puzzle, compressMem, null);
+    }
+
+    static DepthStats exploreDepthDistribution(PuzzleDef puzzle, MemorySettings compressMem, Path dumpDepthsPath)
+            throws IOException {
+        if (dumpDepthsPath == null) {
+            return exploreDepthDistributionPlain(puzzle.generator, compressMem);
+        }
+        return exploreDepthDistributionWithDump(puzzle, compressMem, dumpDepthsPath);
+    }
+
+    static DepthStats exploreDepthDistributionPlain(String generatorNotation, MemorySettings compressMem) {
         HashSet<State> states = new HashSet<>();
         GroupExplorer gap = new GroupExplorer(
             generatorNotation,
@@ -254,6 +292,125 @@ public class SamplePuzzleDepthDistribution {
         });
 
         return new DepthStats(countsByDepth, iterations, gap.order());
+    }
+
+    static DepthStats exploreDepthDistributionWithDump(PuzzleDef puzzle, MemorySettings compressMem,
+            Path dumpDepthsPath) throws IOException {
+        HashSet<State> states = new HashSet<>();
+        GroupExplorer gap = new GroupExplorer(
+            puzzle.generator,
+            compressMem,
+            states,
+            new HashSet<>(),
+            new HashSet<>(),
+            false);
+
+        TreeMap<Integer, Integer> countsByDepth = new TreeMap<>();
+        countsByDepth.put(0, 1);
+
+        try (BufferedWriter dump = Files.newBufferedWriter(
+                dumpDepthsPath,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND)) {
+
+            writeDumpSectionHeader(dump, puzzle);
+
+            gap.initIterativeExploration();
+            writeDumpState(dump, gap, 0, 0, gap.elements.clone(), new int[0]);
+
+            int iterations = 0;
+            while (true) {
+                int ret = gap.iterateExploration(false, -1, true, (newStates, depth) -> {
+                    countsByDepth.merge(depth, newStates.size(), Integer::sum);
+                    if (newStates.size() > DUMP_DEPTH_MAX_FRONTIER) {
+                        return;
+                    }
+                    try {
+                        int index = 0;
+                        for (Object entry : newStates) {
+                            StateCompressed state = (StateCompressed) ((PeekData) entry).newState;
+                            CompressStateCache cache = gap.compressStateCache();
+                            int[] path = cache.tracePath(state.getStateId());
+                            writeDumpState(dump, gap, depth, index++, state.state(), path);
+                        }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                });
+                iterations = gap.getIteration();
+                if (ret != -2) {
+                    break;
+                }
+            }
+
+            return new DepthStats(countsByDepth, iterations, gap.order());
+        }
+    }
+
+    static void writeDumpSectionHeader(BufferedWriter out, PuzzleDef puzzle) throws IOException {
+        out.write("# puzzle_id=");
+        out.write(puzzle.id);
+        out.newLine();
+        out.write("# name=");
+        out.write(puzzle.name);
+        out.newLine();
+        out.write("# generators=");
+        out.write(puzzle.generator);
+        out.newLine();
+        out.write("# dump when new_states_at_depth <= ");
+        out.write(Integer.toString(DUMP_DEPTH_MAX_FRONTIER));
+        out.newLine();
+    }
+
+    static void writeDumpState(BufferedWriter out, GroupExplorer gap, int depth, int index,
+            int[] perm, int[] generatorPath) throws IOException {
+        out.write("depth ");
+        out.write(Integer.toString(depth));
+        out.write(" index ");
+        out.write(Integer.toString(index));
+        out.newLine();
+        out.write("path ");
+        out.write(formatGeneratorPath(generatorPath));
+        out.newLine();
+        out.write("ops ");
+        out.write(formatGeneratorOps(gap.parsedOperations, generatorPath));
+        out.newLine();
+        out.write("perm ");
+        out.write(GroupExplorer.stateToNotation(perm));
+        out.newLine();
+        out.newLine();
+    }
+
+    static String formatGeneratorPath(int[] generatorPath) {
+        if (generatorPath.length == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < generatorPath.length; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append(generatorPath[i]);
+        }
+        return sb.toString();
+    }
+
+    static String formatGeneratorOps(List<int[][]> parsedOperations, int[] generatorPath) {
+        if (generatorPath.length == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < generatorPath.length; i++) {
+            if (i > 0) {
+                sb.append(" * ");
+            }
+            sb.append('[');
+            sb.append(generatorPath[i]);
+            sb.append("]=");
+            sb.append(GroupExplorer.cyclesToNotation(parsedOperations.get(generatorPath[i])));
+        }
+        return sb.toString();
     }
 
     static void writeWideCsv(Path path, List<PuzzleDef> puzzles, Map<String, DepthStats> results)
