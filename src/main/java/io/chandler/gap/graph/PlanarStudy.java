@@ -56,7 +56,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS =60; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS = 30; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -80,8 +80,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.g2_3; 
-        String groupName = "g2_3";
+        String generator = Generators.sp_8_2_120; 
+        String groupName = "sp_8_2_120";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -113,6 +113,9 @@ public class PlanarStudy {
                       !groupName.startsWith("hs") &&
                       !groupName.startsWith("mcl") &&
                       !groupName.startsWith("co3") &&
+                      !groupName.startsWith("l7_2") &&
+                      !groupName.startsWith("sp_8_2") &&
+                      !groupName.startsWith("l5_3") &&
                       !generator.equals(Generators.tg) &&
                       !generator.equals(Generators.m24)) {
             boolean multithread = true;
@@ -386,6 +389,7 @@ public class PlanarStudy {
             conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase2Indices[0]];
         
         for (int r = 1; r <= repetitions; r++) {
+            boolean lastLoop = r == repetitions; 
             final int rFinal = r;
             final long orderFinal = order;
             System.out.println("Starting Phase 2, round " + r + "");
@@ -511,8 +515,8 @@ public class PlanarStudy {
                     synchronized (phase1Lock) {
                         // Prevent duplicates while lock is released
                         if (!canonicalGraphs.add(canonicalLabeling)) return;
-                        //newCandidates.add(newCandidate);
-                        //newCandidateGraphs.add(candGraph);
+                        if (!lastLoop) newCandidates.add(newCandidate); // COMMENT OUT if too many candidates
+                        if (!lastLoop) newCandidateGraphs.add(candGraph);
                         if (size.equals(String.valueOf(orderFinal)) && passesGeometryFilterFinal) {
                             phase2RoundOut.println(GroupExplorer.generatorsToString(newCandidate));
                             found[rFinal]++;

@@ -1,7 +1,9 @@
 package io.chandler.gap.graph;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.math.BigInteger;
@@ -15,8 +17,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Scanner;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jgrapht.Graph;
 import org.jgrapht.alg.drawing.IndexedFRLayoutAlgorithm2D;
@@ -32,15 +37,19 @@ import io.chandler.gap.graph.layoutalgos.AxisConstrainedLayoutMulti;
 import io.chandler.gap.graph.layoutalgos.ConcentricConstrainedLayout;
 import io.chandler.gap.graph.layoutalgos.GridLayout;
 import io.chandler.gap.graph.layoutalgos.Java3D;
-import io.chandler.gap.graph.layoutalgos.SATLayout;
 import io.chandler.gap.graph.layoutalgos.JavaNetworkx;
 import io.chandler.gap.graph.layoutalgos.JavaSpring;
 import io.chandler.gap.graph.layoutalgos.LayoutAlgo;
 import io.chandler.gap.graph.layoutalgos.LayoutAlgoArg;
 import io.chandler.gap.graph.layoutalgos.LayoutCongestion;
+import io.chandler.gap.graph.layoutalgos.SATLayout;
 import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.geometry.Bounds;
 import javafx.scene.Node;
 import javafx.scene.Scene;
@@ -53,32 +62,23 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
-import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.Pane;
-import javafx.scene.layout.VBox;
-import javafx.scene.paint.Color;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Text;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
-import javafx.collections.FXCollections;
-import javafx.collections.ObservableList;
-import javafx.beans.binding.Bindings;
-
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicInteger;
-import javafx.application.Platform;
 
 public class GraphVisualizer extends Application {
 
@@ -100,6 +100,7 @@ public class GraphVisualizer extends Application {
     // editable paginator index field (k in k / n)
     private TextField pageIndexTextField;
     private Label seedLabel, itersLabel, thetaLabel, normLabel, triesLabel, initialItersLabel, repulsionFactorLabel, wLabel, hLabel, solutionLabel;
+    private Label pageLabel;
     private Button solutionPrevButton, solutionNextButton;
     private ComboBox<String> layoutChoiceBox;
 	private Label numSharedLinesLabel;
@@ -128,6 +129,8 @@ public class GraphVisualizer extends Application {
     private Map<Integer, double[]> cachedBasePositions = new HashMap<>();
     private Map<Integer, double[]> manualPositions = null;
     private String manualPositionsCacheKey = null;
+    /** True once any 2D edit (drag, edit coords, 2D shift-zoom, lock) has baked the view. */
+    private boolean hasUnsaved2DEdits = false;
 
     private CheckBox showDirectionCheckBox;
 
@@ -206,9 +209,19 @@ public class GraphVisualizer extends Application {
         graphPane.prefWidthProperty().bind(root.widthProperty());
         graphPane.prefHeightProperty().bind(root.heightProperty().subtract(100)); // Adjust for other UI elements
 
-        // Add scroll event to adjust zoom scale using the scroll wheel
+        // Add scroll event to adjust zoom scale using the scroll wheel.
+        // Shift+scroll scales point coordinates in place (shift-zoom) instead of the canvas.
         graphPane.setOnScroll(e -> {
-            double delta = e.getDeltaY();
+            double delta = e.getDeltaY() != 0 ? e.getDeltaY() : e.getDeltaX();
+            if (delta == 0) {
+                return;
+            }
+            if (e.isShiftDown()) {
+                double factor = delta > 0 ? 1.05 : 1.0 / 1.05;
+                scalePointCoordinates(factor);
+                e.consume();
+                return;
+            }
             if (delta > 0) {
                 scale += 0.05;
             } else if (delta < 0) {
@@ -226,7 +239,7 @@ public class GraphVisualizer extends Application {
         // Editable index field followed by total count label: "k / n"
         pageIndexTextField = new TextField(String.valueOf(currentGraphIndex + 1));
         pageIndexTextField.setPrefWidth(60);
-        Label pageLabel = new Label(" / " + graphLineCount());
+        pageLabel = new Label(" / " + graphLineCount());
 
         // Create layout configuration controls.
         seedTextField = new TextField("0");
@@ -428,7 +441,7 @@ public class GraphVisualizer extends Application {
             Alert alert = new Alert(Alert.AlertType.INFORMATION);
             alert.setTitle("Controls");
             alert.setHeaderText(null);
-            alert.setContentText("Left Click + Drag: Adjust Graph Points\nShift + Left Click + Drag: Select Multiple Points\nRight Click + Drag: Rotate 3D view (disabled when Lock Rotation is on)");
+            alert.setContentText("Left Click + Drag: Adjust Graph Points\nShift + Left Click + Drag: Select Multiple Points\nScroll: Zoom canvas\nShift + Scroll: Scale point coordinates (shift-zoom)\nRight Click + Drag: Rotate 3D view (disabled when Lock Rotation is on)");
             alert.showAndWait();
         });
 
@@ -455,12 +468,14 @@ public class GraphVisualizer extends Application {
                 if (circlesMatchGraph(buildGraphFromLine(currentLine))) {
                     syncLockedPositions(currentLine);
                 }
+                hasUnsaved2DEdits = true;
             } else if (manualPositions != null && manualPositionsCacheKey != null
                     && manualPositionsCacheKey.startsWith("lock:")) {
                 if (circlesMatchGraph(buildGraphFromLine(currentLine))) {
                     manualPositions = capturePositionsFromCircles();
                 }
                 manualPositionsCacheKey = buildLayoutCacheKey(currentLine);
+                hasUnsaved2DEdits = true;
             }
         });
 
@@ -818,15 +833,15 @@ public class GraphVisualizer extends Application {
             return;
         }
         List<String> lines = new ArrayList<>();
-        try (Scanner scanner = new Scanner(new File(filePath))) {
-            while (scanner.hasNextLine()) {
-                String line = scanner.nextLine();
+        try (BufferedReader reader = new BufferedReader(new FileReader(new File(filePath)))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
                 if (!line.trim().isEmpty()) {
                     lines.add(line);
-                }
+                }   
             }
-        } catch (FileNotFoundException e) {
-            System.err.println("File not found: " + filePath);
+        } catch (IOException e) {
+            System.err.println("Failed to read file: " + filePath + " " + e.getMessage());
         }
         graphLines = lines;
     }
@@ -1077,11 +1092,13 @@ public class GraphVisualizer extends Application {
                     }
                 }
 
+                // Use local pane coords so drag deltas match the mouse under canvas zoom.
+                javafx.geometry.Point2D local = pane.sceneToLocal(e.getSceneX(), e.getSceneY());
                 circle.setUserData(new VertexDragContext(
-                    circle.getCenterX() - e.getSceneX(),
-                    circle.getCenterY() - e.getSceneY(),
-                    e.getSceneX(),
-                    e.getSceneY(),
+                    circle.getCenterX() - local.getX(),
+                    circle.getCenterY() - local.getY(),
+                    local.getX(),
+                    local.getY(),
                     startPositions,
                     dragVertices
                 ));
@@ -1096,9 +1113,10 @@ public class GraphVisualizer extends Application {
                     return;
                 }
 
+                javafx.geometry.Point2D local = pane.sceneToLocal(e.getSceneX(), e.getSceneY());
                 if (ctx.dragVertices.size() > 1) {
-                    double deltaX = e.getSceneX() - ctx.startSceneX;
-                    double deltaY = e.getSceneY() - ctx.startSceneY;
+                    double deltaX = local.getX() - ctx.startLocalX;
+                    double deltaY = local.getY() - ctx.startLocalY;
                     for (int dragVertex : ctx.dragVertices) {
                         double[] start = ctx.startPositions.get(dragVertex);
                         if (start != null) {
@@ -1109,10 +1127,11 @@ public class GraphVisualizer extends Application {
                     int dragVertex = ctx.dragVertices.iterator().next();
                     setVertexPosition(
                         dragVertex,
-                        e.getSceneX() + ctx.offsetX,
-                        e.getSceneY() + ctx.offsetY
+                        local.getX() + ctx.offsetX,
+                        local.getY() + ctx.offsetY
                     );
                 }
+                hasUnsaved2DEdits = true;
                 updateVertexVisualsAfterMove();
             });
 
@@ -1125,6 +1144,7 @@ public class GraphVisualizer extends Application {
                     return;
                 }
                 snapVerticesToGrid(ctx.dragVertices);
+                hasUnsaved2DEdits = true;
                 circle.setUserData(null);
             });
 
@@ -1184,10 +1204,11 @@ public class GraphVisualizer extends Application {
                 String method = layoutChoiceBox.getValue();
                 LayoutAlgo algo = layoutAlgoMap.get(method);
                 algo.performLayout(Math.min(graphPane.getWidth(), graphPane.getHeight()), currentLine, currentGraph, getArgs(algo));
-                Double fit = algo.getFitOut();
 
                 cachedBasePositions = algo.getResult();
                 cachedGraphKey = newCacheKey;
+                hasUnsaved2DEdits = false;
+                Double fit = algo.getFitOut();
                 if (fit != null) {
                     fitLabel.setText("Fit: " + String.format("%.5f", fit.doubleValue()));
                 } else {
@@ -1589,10 +1610,6 @@ public class GraphVisualizer extends Application {
         }
     }
 
-    /**
-     * Updates the visibility of the argument controls (seed, iters, theta, norm, show fitted nodes)
-     * based on the currently selected layout algorithm's getArgs() values.
-     */
     private void updateArgsVisibility() {
         String method = layoutChoiceBox.getValue();
         LayoutAlgo algo = layoutAlgoMap.get(method);
@@ -1605,19 +1622,104 @@ public class GraphVisualizer extends Application {
     private static class VertexDragContext {
         final double offsetX;
         final double offsetY;
-        final double startSceneX;
-        final double startSceneY;
+        final double startLocalX;
+        final double startLocalY;
         final Map<Integer, double[]> startPositions;
         final Set<Integer> dragVertices;
 
-        VertexDragContext(double offsetX, double offsetY, double startSceneX, double startSceneY,
+        VertexDragContext(double offsetX, double offsetY, double startLocalX, double startLocalY,
                           Map<Integer, double[]> startPositions, Set<Integer> dragVertices) {
             this.offsetX = offsetX;
             this.offsetY = offsetY;
-            this.startSceneX = startSceneX;
-            this.startSceneY = startSceneY;
+            this.startLocalX = startLocalX;
+            this.startLocalY = startLocalY;
             this.startPositions = startPositions;
             this.dragVertices = dragVertices;
+        }
+    }
+
+    /**
+     * True when shift-zoom can safely scale the live 3D layout (rotation still works)
+     * without wiping any 2D edits.
+     */
+    private boolean canScale3DCoordinates() {
+        if (hasUnsaved2DEdits) {
+            return false;
+        }
+        if (manualPositions != null) {
+            return false;
+        }
+        if (lockRotationCheckBox != null && lockRotationCheckBox.isSelected()) {
+            return false;
+        }
+        if (cachedBasePositions == null || cachedBasePositions.isEmpty()) {
+            return false;
+        }
+        return cachedBasePositions.values().iterator().next().length == 3;
+    }
+
+    /**
+     * Scales vertex coordinates. If the live 3D layout is still intact, scales
+     * cachedBasePositions and reprojects (rotation keeps working). Otherwise scales
+     * the on-screen 2D positions and bakes them into manualPositions.
+     */
+    private void scalePointCoordinates(double factor) {
+        if (graphPane == null) {
+            return;
+        }
+        if (canScale3DCoordinates()) {
+            scale3DBasePositions(factor);
+            updateGraph(graphPane, pageLabel);
+            return;
+        }
+        if (currentVertexCircleMap.isEmpty()) {
+            return;
+        }
+        double centerX = graphPane.getWidth() / 2.0;
+        double centerY = graphPane.getHeight() / 2.0;
+        for (Map.Entry<Integer, Circle> entry : currentVertexCircleMap.entrySet()) {
+            Circle circle = entry.getValue();
+            double x = centerX + (circle.getCenterX() - centerX) * factor;
+            double y = centerY + (circle.getCenterY() - centerY) * factor;
+            setVertexPosition(entry.getKey(), x, y);
+        }
+        hasUnsaved2DEdits = true;
+        updateVertexVisualsAfterMove();
+        persistCurrentPositions();
+    }
+
+    private void scale3DBasePositions(double factor) {
+        double sumX = 0, sumY = 0, sumZ = 0;
+        int count = 0;
+        for (double[] pos : cachedBasePositions.values()) {
+            sumX += pos[0];
+            sumY += pos[1];
+            sumZ += pos[2];
+            count++;
+        }
+        if (count == 0) {
+            return;
+        }
+        double cx = sumX / count;
+        double cy = sumY / count;
+        double cz = sumZ / count;
+        for (double[] pos : cachedBasePositions.values()) {
+            pos[0] = cx + (pos[0] - cx) * factor;
+            pos[1] = cy + (pos[1] - cy) * factor;
+            pos[2] = cz + (pos[2] - cz) * factor;
+        }
+    }
+
+    private void persistCurrentPositions() {
+        if (graphLinesEmpty() || currentVertexCircleMap.isEmpty()) {
+            return;
+        }
+        String currentLine = getGraphLine(currentGraphIndex);
+        manualPositions = capturePositionsFromCircles();
+        if (lockRotationCheckBox != null && lockRotationCheckBox.isSelected()) {
+            manualPositionsCacheKey = buildPositionLockKey(currentLine);
+        } else {
+            manualPositionsCacheKey = buildLayoutCacheKey(currentLine);
         }
     }
 
@@ -1708,6 +1810,7 @@ public class GraphVisualizer extends Application {
                 setVertexPosition(v, newPos[0], newPos[1]);
             }
         }
+        hasUnsaved2DEdits = true;
         updateVertexVisualsAfterMove();
     }
 
@@ -2094,6 +2197,7 @@ public class GraphVisualizer extends Application {
                 validateCoordinates(parsed, currentLine);
                 manualPositions = parsed;
                 manualPositionsCacheKey = buildLayoutCacheKey(currentLine);
+                hasUnsaved2DEdits = true;
                 updateGraph(graphPane, pageLabel);
                 dialog.close();
             } catch (IllegalArgumentException ex) {
@@ -2326,7 +2430,13 @@ public class GraphVisualizer extends Application {
             final String line = linesToProcess.get(i);
             futures.add(executor.submit(() -> {
                 if (Thread.currentThread().isInterrupted()) return;
-                double congestion = computeCongestionForLine(line, layoutName, args, boxSize);
+                int attempts = 0;
+                double congestion = Double.MAX_VALUE;
+                while (attempts++ < 3 && congestion > 5) { // Sometimes algo returns garbage
+                    EnumMap<LayoutAlgoArg, Double> args2 = args.clone();
+                    args2.put(LayoutAlgoArg.SEED, args.get(LayoutAlgoArg.SEED) + attempts);
+                    congestion = computeCongestionForLine(line, layoutName, args, boxSize);
+                }
                 congestionResults.add(new double[]{congestion, idx});
                 int done = completed.incrementAndGet();
                 if (done % Math.max(1, total / 100) == 0 || done == total) {

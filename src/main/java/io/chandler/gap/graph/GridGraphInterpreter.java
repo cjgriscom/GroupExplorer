@@ -22,7 +22,7 @@ public class GridGraphInterpreter {
 
 		// Assume a perfect grid alignment
 
-		try (Scanner in = new Scanner(new File("/tmp/g2.txt"))) {
+		try (Scanner in = new Scanner(new File("/tmp/om"))) {
 
 			// Cache all x and y values
 			TreeSet<Double> xValues = new TreeSet<>();
@@ -170,13 +170,13 @@ public class GridGraphInterpreter {
 
 			// Now print the grid
 			for (int y = 0; y < yCount; y++) {
-				System.out.print("          '(");
+				System.out.print("(");
 				for (int x = 0; x < xCount; x++) {
 					String cell = grid[x][y] == 0 ? "x" : grid[x][y] + "";
-					System.out.print(cell + (x == xCount - 1 ? "),' +" : ","));
+					System.out.print(cell + (x == xCount - 1 ? ")," : ","));
 				}
-				System.out.println();
 			}
+			System.out.println();
 		}
 	}
 }
