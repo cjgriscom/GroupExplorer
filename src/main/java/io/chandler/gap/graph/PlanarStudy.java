@@ -1,7 +1,10 @@
 package io.chandler.gap.graph;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
@@ -10,6 +13,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -65,6 +69,9 @@ public class PlanarStudy {
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
+        boolean SORT_CANDIDATES = true; // sort Phase 1 pairs before Phase 2 for stable indices
+        int resumePhase2FromCandidate = 0; // 0 = normal full run, n = start from candidate n
+        String resumePhase2ResultsFile = ""; // empty = no seed, or filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
 
@@ -96,6 +103,10 @@ public class PlanarStudy {
         System.out.println("Min geometry Aut(G) order: " + minGeometryAutOrder);
         System.out.println("Directed: " + directed);
         System.out.println("Generate: " + generate);
+        System.out.println("Sort candidates: " + SORT_CANDIDATES);
+        System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
+        System.out.println("Resume Phase 2 results file: " +
+            (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty() ? "(none)" : resumePhase2ResultsFile));
 
         File root = new File("PlanarStudy/" + groupName);
         root.mkdirs();
@@ -370,6 +381,10 @@ public class PlanarStudy {
         }
         phase1Out.close();
         System.out.println("Phase 1 completed. Unique candidate pairs: " + candidatePairs.size());
+        if (SORT_CANDIDATES) {
+            candidatePairs.sort(Comparator.comparing(pair -> GroupExplorer.generatorsToString(pair)));
+            System.out.println("Sorted candidate pairs for stable Phase 2 indices: " + candidatePairs.size());
+        }
         
         // --------------------------------------------------------
         // Phase 2: Repetitions-based candidate generation.
@@ -396,10 +411,44 @@ public class PlanarStudy {
             List<int[][][]> newCandidates = new ArrayList<>();
             List<Graph<Integer, DefaultEdge>> newCandidateGraphs = new ArrayList<>();
             String roundFileName = baseFileName + "_R" + r + "-filtered.txt";
-            PrintStream phase2RoundOut = new PrintStream(root.getAbsolutePath() + "/" + roundFileName);
+            String roundFilePath = root.getAbsolutePath() + "/" + roundFileName;
+            File configuredResumeFile = (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty())
+                ? null
+                : resolveResumeFile(root, resumePhase2ResultsFile);
+            boolean resumeThisRound = lastLoop &&
+                configuredResumeFile != null &&
+                roundFileName.equals(configuredResumeFile.getName());
+            if (resumeThisRound) {
+                if (!configuredResumeFile.isFile()) {
+                    throw new IOException("Resume results file not found: " + configuredResumeFile.getAbsolutePath());
+                }
+                int seededLines = seedCanonicalGraphsFromResultsFile(
+                    configuredResumeFile,
+                    canonicalGraphs,
+                    dreadnautL,
+                    directed,
+                    errors
+                );
+                found[rFinal] = seededLines;
+                System.out.println("Seeded canonical labels from " + configuredResumeFile.getName() +
+                    " (" + seededLines + " result lines)");
+            }
+            int startCandidate = resumeThisRound ? resumePhase2FromCandidate : 0;
+            if (startCandidate >= currentCandidates.size()) {
+                System.out.println("Resume start index " + startCandidate +
+                    " >= candidate count " + currentCandidates.size() + "; skipping round " + r);
+                continue;
+            }
+            PrintStream phase2RoundOut = resumeThisRound
+                ? new PrintStream(new FileOutputStream(roundFilePath, true))
+                : new PrintStream(roundFilePath);
+            if (resumeThisRound) {
+                System.out.println("Appending to " + roundFileName + ", starting at candidate " + startCandidate +
+                    " of " + currentCandidates.size());
+            }
             int roundCount = 0;
             // For each candidate from the previous round, combine with each line from file3.
-            for (int i = 0; i < currentCandidates.size(); i++) {
+            for (int i = startCandidate; i < currentCandidates.size(); i++) {
                 final int iDisp = i;
                 final int sizeDisp = currentCandidates.size();
                 int[][][] candidate = currentCandidates.get(i);
@@ -536,6 +585,77 @@ public class PlanarStudy {
         }
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + order + " found: " + Arrays.toString(found));
         System.out.println("Errors: " + errors);
+    }
+
+    private static File resolveResumeFile(File root, String resumePhase2ResultsFile) {
+        File resumeFile = new File(resumePhase2ResultsFile);
+        if (!resumeFile.isAbsolute()) {
+            resumeFile = new File(root, resumePhase2ResultsFile);
+        }
+        return resumeFile;
+    }
+
+    private static int seedCanonicalGraphsFromResultsFile(
+        File resumeFile,
+        Set<String> canonicalGraphs,
+        ThreadLocal<DreadnautInterface> dreadnautL,
+        boolean directed,
+        AtomicInteger errors
+    ) throws IOException {
+        final int batchSize = 1000;
+        final int progressInterval = 10000;
+        AtomicInteger lineCount = new AtomicInteger(0);
+        AtomicInteger uniqueLabels = new AtomicInteger(0);
+        List<String> batch = new ArrayList<>(batchSize);
+        try (BufferedReader reader = new BufferedReader(new FileReader(resumeFile))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+                batch.add(line);
+                if (batch.size() >= batchSize) {
+                    processSeedBatch(batch, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels);
+                    int lines = lineCount.addAndGet(batch.size());
+                    if (lines / progressInterval > (lines - batch.size()) / progressInterval) {
+                        System.out.println("  Seeding progress: " + lines + " lines, " +
+                            uniqueLabels.get() + " unique canonical labels");
+                    }
+                    batch.clear();
+                }
+            }
+            if (!batch.isEmpty()) {
+                processSeedBatch(batch, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels);
+                lineCount.addAndGet(batch.size());
+            }
+        }
+        System.out.println("  Seeding complete: " + lineCount.get() + " lines, " +
+            uniqueLabels.get() + " unique canonical labels");
+        return lineCount.get();
+    }
+
+    private static void processSeedBatch(
+        List<String> batch,
+        Set<String> canonicalGraphs,
+        ThreadLocal<DreadnautInterface> dreadnautL,
+        boolean directed,
+        AtomicInteger errors,
+        AtomicInteger uniqueLabels
+    ) {
+        batch.parallelStream().forEach(line -> {
+            try {
+                int[][][] candidate = GroupExplorer.parseOperationsArr(line);
+                String canonicalLabeling = dreadnautL.get().getCanonicalLabeling(candidate, directed);
+                synchronized (canonicalGraphs) {
+                    if (canonicalGraphs.add(canonicalLabeling)) {
+                        uniqueLabels.incrementAndGet();
+                    }
+                }
+            } catch (RuntimeException e) {
+                System.err.println("Failed to seed canonical labeling: " + e.getMessage());
+                errors.incrementAndGet();
+            }
+        });
     }
 
     private static boolean conjMatches(String conj, String description) {
