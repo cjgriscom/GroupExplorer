@@ -24,6 +24,7 @@ import java.util.Scanner;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.GZIPOutputStream;
 
 import org.jgrapht.Graph;
 import org.jgrapht.Graphs;
@@ -60,7 +61,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS = 30; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS = 60; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -70,8 +71,8 @@ public class PlanarStudy {
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         boolean SORT_CANDIDATES = true; // sort Phase 1 pairs before Phase 2 for stable indices
-        int resumePhase2FromCandidate = 0; // 0 = normal full run, n = start from candidate n
-        String resumePhase2ResultsFile = ""; // empty = no seed, or filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
+        int resumePhase2FromCandidate = 0; // 0 = normal full run, n = start from final results candidate n
+        String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
 
@@ -87,8 +88,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.sp_8_2_120; 
-        String groupName = "sp_8_2_120";
+        String generator = Generators.td42; 
+        String groupName = "td42";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -124,6 +125,7 @@ public class PlanarStudy {
                       !groupName.startsWith("hs") &&
                       !groupName.startsWith("mcl") &&
                       !groupName.startsWith("co3") &&
+                      !groupName.startsWith("td42") &&
                       !groupName.startsWith("l7_2") &&
                       !groupName.startsWith("sp_8_2") &&
                       !groupName.startsWith("l5_3") &&
@@ -211,13 +213,15 @@ public class PlanarStudy {
             geomAutTagCore += "gm" + geometryAutOrderModulus;
         }
         String geomAutTag = geomAutTagCore.isEmpty() ? "" : geomAutTagCore + "-";
-        PrintStream phase1Out = new PrintStream(
+        String phase1FilePath =
             root.getAbsolutePath() + "/" +
             (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") +
             (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +
             (requirePlanar ? "" : discardOverGenusN == 1 ? "torus-" : (discardOverGenusN == 0 ? "np-" : "np" + discardOverGenusN + "-")) +
             geomAutTag +
-            conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt");
+            conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt";
+        PrintStream phase1Out = new PrintStream(phase1FilePath);
+        QuarantineLog phase1Quarantine = new QuarantineLog(phase1FilePath);
         int[] found = new int[repetitions + 1];
 
         AtomicInteger p1_1_count = new AtomicInteger(0);
@@ -320,7 +324,11 @@ public class PlanarStudy {
                 Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, directed);
 
                 // Check for isomorphic duplicates.
-                String canonicalLabeling = dreadnautL.get().getCanonicalLabeling(combinedPair, directed);
+                String canonicalLabeling = getCanonicalLabelingOrQuarantine(
+                    dreadnautL.get(), combinedPair, directed, phase1Quarantine, null);
+                if (canonicalLabeling == null) {
+                    return;
+                }
                 synchronized (canonicalGraphs) {
                     if (canonicalGraphs.contains(canonicalLabeling)) {
                         return;
@@ -359,6 +367,7 @@ public class PlanarStudy {
                             }
                         }
                     } catch (RuntimeException e) {
+                        maybeQuarantineDreadnautFailure(phase1Quarantine, combinedPair, e);
                         System.err.println("Failed to compute geometry automorphism order: " + e.getMessage());
                         passesGeometryFilter = false;
                     }
@@ -380,6 +389,7 @@ public class PlanarStudy {
             });
         }
         phase1Out.close();
+        phase1Quarantine.close();
         System.out.println("Phase 1 completed. Unique candidate pairs: " + candidatePairs.size());
         if (SORT_CANDIDATES) {
             candidatePairs.sort(Comparator.comparing(pair -> GroupExplorer.generatorsToString(pair)));
@@ -418,17 +428,21 @@ public class PlanarStudy {
             boolean resumeThisRound = lastLoop &&
                 configuredResumeFile != null &&
                 roundFileName.equals(configuredResumeFile.getName());
+            QuarantineLog roundQuarantine = new QuarantineLog(roundFilePath);
             if (resumeThisRound) {
                 if (!configuredResumeFile.isFile()) {
                     throw new IOException("Resume results file not found: " + configuredResumeFile.getAbsolutePath());
                 }
+                QuarantineLog seedQuarantine = new QuarantineLog(configuredResumeFile.getAbsolutePath());
                 int seededLines = seedCanonicalGraphsFromResultsFile(
                     configuredResumeFile,
                     canonicalGraphs,
                     dreadnautL,
                     directed,
-                    errors
+                    errors,
+                    seedQuarantine
                 );
+                seedQuarantine.close();
                 found[rFinal] = seededLines;
                 System.out.println("Seeded canonical labels from " + configuredResumeFile.getName() +
                     " (" + seededLines + " result lines)");
@@ -437,6 +451,7 @@ public class PlanarStudy {
             if (startCandidate >= currentCandidates.size()) {
                 System.out.println("Resume start index " + startCandidate +
                     " >= candidate count " + currentCandidates.size() + "; skipping round " + r);
+                roundQuarantine.close();
                 continue;
             }
             PrintStream phase2RoundOut = resumeThisRound
@@ -505,18 +520,15 @@ public class PlanarStudy {
                     Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, directed);
 
                     // Check for isomorphic duplicates.
-                    String canonicalLabeling;
-                    try {
-                        canonicalLabeling = dreadnautL.get().getCanonicalLabeling(newCandidate, directed);
-                        synchronized (canonicalGraphs) {
-                            if (canonicalGraphs.contains(canonicalLabeling)) {
-                                return;
-                            }
-                        }
-                    } catch (RuntimeException e) {
-                        System.err.println("Failed to compute canonical labeling: " + e.getMessage());
-                        errors.incrementAndGet();
+                    String canonicalLabeling = getCanonicalLabelingOrQuarantine(
+                        dreadnautL.get(), newCandidate, directed, roundQuarantine, errors);
+                    if (canonicalLabeling == null) {
                         return;
+                    }
+                    synchronized (canonicalGraphs) {
+                        if (canonicalGraphs.contains(canonicalLabeling)) {
+                            return;
+                        }
                     }
                     
                     // Enforce all simple cycles have length multiple of N (if enabled)
@@ -555,6 +567,7 @@ public class PlanarStudy {
                                 }
                             }
                         } catch (RuntimeException e) {
+                            maybeQuarantineDreadnautFailure(roundQuarantine, newCandidate, e);
                             System.err.println("Failed to compute geometry automorphism order: " + e.getMessage());
                             passesGeometryFilter = false;
                         }
@@ -580,11 +593,95 @@ public class PlanarStudy {
                 System.out.println("  Completed inner loop for candidate " + i + " of " + currentCandidates.size());
             }
             phase2RoundOut.close();
+            roundQuarantine.close();
             System.out.println("Round " + r + " completed. Unique new candidates: " + roundCount);
             currentCandidates = newCandidates;
         }
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + order + " found: " + Arrays.toString(found));
         System.out.println("Errors: " + errors);
+    }
+
+    /**
+     * Lazily opened gzipped log for graphs that cause dreadnaut to exit abnormally.
+     * The file is {@code outputFilePath + ".quarantine.log.gz"} and is only created
+     * when the first failure is recorded.
+     */
+    private static final class QuarantineLog {
+        private final String quarantinePath;
+        private PrintStream out;
+        private final Object lock = new Object();
+
+        QuarantineLog(String outputFilePath) {
+            this.quarantinePath = outputFilePath + ".quarantine.log.gz";
+        }
+
+        void logFailure(String graph, String reason) {
+            synchronized (lock) {
+                if (out == null) {
+                    try {
+                        out = new PrintStream(new GZIPOutputStream(new FileOutputStream(quarantinePath)));
+                    } catch (IOException e) {
+                        System.err.println("Failed to open quarantine log " + quarantinePath + ": " + e.getMessage());
+                        return;
+                    }
+                }
+                out.println("# " + reason);
+                out.println(graph);
+            }
+        }
+
+        void close() {
+            synchronized (lock) {
+                if (out != null) {
+                    out.close();
+                    out = null;
+                }
+            }
+        }
+    }
+
+    private static boolean isAbnormalDreadnautExit(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (cur instanceof IOException) {
+                String msg = cur.getMessage();
+                if (msg != null && msg.contains("dreadnaut exited with code")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static void maybeQuarantineDreadnautFailure(
+        QuarantineLog quarantine,
+        int[][][] candidate,
+        RuntimeException e
+    ) {
+        if (quarantine != null && isAbnormalDreadnautExit(e)) {
+            quarantine.logFailure(GroupExplorer.generatorsToString(candidate), e.getMessage());
+        }
+    }
+
+    private static String getCanonicalLabelingOrQuarantine(
+        DreadnautInterface dreadnaut,
+        int[][][] candidate,
+        boolean directed,
+        QuarantineLog quarantine,
+        AtomicInteger errors
+    ) {
+        try {
+            return dreadnaut.getCanonicalLabeling(candidate, directed);
+        } catch (RuntimeException e) {
+            if (isAbnormalDreadnautExit(e)) {
+                quarantine.logFailure(GroupExplorer.generatorsToString(candidate), e.getMessage());
+            } else {
+                System.err.println("Failed to compute canonical labeling: " + e.getMessage());
+            }
+            if (errors != null) {
+                errors.incrementAndGet();
+            }
+            return null;
+        }
     }
 
     private static File resolveResumeFile(File root, String resumePhase2ResultsFile) {
@@ -600,7 +697,8 @@ public class PlanarStudy {
         Set<String> canonicalGraphs,
         ThreadLocal<DreadnautInterface> dreadnautL,
         boolean directed,
-        AtomicInteger errors
+        AtomicInteger errors,
+        QuarantineLog quarantine
     ) throws IOException {
         final int batchSize = 1000;
         final int progressInterval = 10000;
@@ -615,7 +713,7 @@ public class PlanarStudy {
                 }
                 batch.add(line);
                 if (batch.size() >= batchSize) {
-                    processSeedBatch(batch, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels);
+                    processSeedBatch(batch, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels, quarantine);
                     int lines = lineCount.addAndGet(batch.size());
                     if (lines / progressInterval > (lines - batch.size()) / progressInterval) {
                         System.out.println("  Seeding progress: " + lines + " lines, " +
@@ -625,7 +723,7 @@ public class PlanarStudy {
                 }
             }
             if (!batch.isEmpty()) {
-                processSeedBatch(batch, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels);
+                processSeedBatch(batch, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels, quarantine);
                 lineCount.addAndGet(batch.size());
             }
         }
@@ -640,20 +738,20 @@ public class PlanarStudy {
         ThreadLocal<DreadnautInterface> dreadnautL,
         boolean directed,
         AtomicInteger errors,
-        AtomicInteger uniqueLabels
+        AtomicInteger uniqueLabels,
+        QuarantineLog quarantine
     ) {
         batch.parallelStream().forEach(line -> {
-            try {
-                int[][][] candidate = GroupExplorer.parseOperationsArr(line);
-                String canonicalLabeling = dreadnautL.get().getCanonicalLabeling(candidate, directed);
-                synchronized (canonicalGraphs) {
-                    if (canonicalGraphs.add(canonicalLabeling)) {
-                        uniqueLabels.incrementAndGet();
-                    }
+            int[][][] candidate = GroupExplorer.parseOperationsArr(line);
+            String canonicalLabeling = getCanonicalLabelingOrQuarantine(
+                dreadnautL.get(), candidate, directed, quarantine, errors);
+            if (canonicalLabeling == null) {
+                return;
+            }
+            synchronized (canonicalGraphs) {
+                if (canonicalGraphs.add(canonicalLabeling)) {
+                    uniqueLabels.incrementAndGet();
                 }
-            } catch (RuntimeException e) {
-                System.err.println("Failed to seed canonical labeling: " + e.getMessage());
-                errors.incrementAndGet();
             }
         });
     }
