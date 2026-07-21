@@ -517,7 +517,7 @@ public class PlanarStudy {
                     }
 
                     String size = null;
-                    if (!allowSubgroups) {
+                    if (!allowSubgroups || lastLoop) {
                         size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
                         if (!size.equals(String.valueOf(orderFinal))) {
                             return;
