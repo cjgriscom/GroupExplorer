@@ -754,17 +754,23 @@ public class GraphVisualizer extends Application {
             autButton.setText("Aut: ?");
         }
 
-        // Allow the user to (re)compute |Aut(G)| on demand, even for large graphs.
+        // If |Aut(G)| is unknown, compute it on demand; otherwise open the min-Aut filter dialog.
         autButton.setOnAction(e -> {
-            try {
-                BigInteger autOrder = GraphSymm.automorphismGroupOrder(generator, false);
-                autButton.setText("Aut: " + autOrder);
-            } catch (RuntimeException ex) {
-                Alert alert = new Alert(Alert.AlertType.ERROR);
-                alert.setTitle("Automorphism computation failed");
-                alert.setHeaderText("Failed to compute |Aut(G)|");
-                alert.setContentText(ex.getMessage());
-                alert.showAndWait();
+            if (!isAutCalculated()) {
+                try {
+                    BigInteger autOrder = GraphSymm.automorphismGroupOrder(generator, false);
+                    autButton.setText("Aut: " + autOrder);
+                } catch (RuntimeException ex) {
+                    autButton.setText("Aut: err");
+                    Alert alert = new Alert(Alert.AlertType.ERROR);
+                    alert.setTitle("Automorphism computation failed");
+                    alert.setHeaderText("Failed to compute |Aut(G)|");
+                    alert.setContentText(ex.getMessage());
+                    alert.showAndWait();
+                }
+            } else {
+                Stage owner = (Stage) autButton.getScene().getWindow();
+                showFilterByMinAutDialog(owner, pageLabel);
             }
         });
 
@@ -2640,6 +2646,167 @@ public class GraphVisualizer extends Application {
         });
 
         dialog.show();
+    }
+
+    private static boolean isAutCalculated(String autButtonText) {
+        if (!autButtonText.startsWith("Aut: ")) return false;
+        String value = autButtonText.substring(5);
+        return !"?".equals(value) && !"err".equals(value);
+    }
+
+    private boolean isAutCalculated() {
+        return isAutCalculated(autButton.getText());
+    }
+
+    private static BigInteger parseAutButtonValue(String autButtonText) {
+        if (!isAutCalculated(autButtonText)) return BigInteger.ONE;
+        return new BigInteger(autButtonText.substring(5));
+    }
+
+    private static BigInteger computeAutOrderForLine(String line) {
+        int[][][] generator = GroupExplorer.parseOperationsArr(line);
+        return GraphSymm.automorphismGroupOrder(generator, false);
+    }
+
+    private void showFilterByMinAutDialog(Stage owner, Label pageLabel) {
+        if (graphLinesEmpty()) return;
+
+        List<String> linesToProcess = new ArrayList<>(graphLineCount());
+        for (int i = 0; i < graphLineCount(); i++) {
+            linesToProcess.add(getGraphLine(i));
+        }
+        int total = linesToProcess.size();
+
+        Stage dialog = new Stage();
+        dialog.initOwner(owner);
+        dialog.setTitle("Filter by min Aut (" + total + " generators)");
+
+        ObservableList<String> resultItems = FXCollections.observableArrayList();
+        ListView<String> listView = new ListView<>(resultItems);
+        listView.setPrefHeight(400);
+        listView.setPrefWidth(700);
+
+        Label progressLabel = new Label("0 / " + total + " completed");
+        Button stopButton = new Button("Stop");
+        TextField minAutField = new TextField(parseAutButtonValue(autButton.getText()).toString());
+        minAutField.setPrefWidth(120);
+        Button applyFilterButton = new Button("Keep At Least");
+
+        HBox controlBar = new HBox(10, progressLabel, stopButton,
+                new Label("Min |Aut|:"), minAutField, applyFilterButton);
+        controlBar.setStyle("-fx-padding: 5; -fx-alignment: center-left;");
+
+        VBox dialogRoot = new VBox(5, controlBar, listView);
+        dialogRoot.setStyle("-fx-padding: 10;");
+
+        dialog.setScene(new Scene(dialogRoot, 720, 480));
+
+        List<Object[]> autResults = Collections.synchronizedList(new ArrayList<>());
+
+        int nThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+        ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+        AtomicInteger completed = new AtomicInteger(0);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < total; i++) {
+            final int idx = i;
+            final String line = linesToProcess.get(i);
+            futures.add(executor.submit(() -> {
+                if (Thread.currentThread().isInterrupted()) return;
+                BigInteger autOrder = null;
+                try {
+                    autOrder = computeAutOrderForLine(line);
+                } catch (RuntimeException ignored) {
+                }
+                autResults.add(new Object[]{autOrder, idx});
+                int done = completed.incrementAndGet();
+                if (done % Math.max(1, total / 100) == 0 || done == total) {
+                    Platform.runLater(() -> refreshAutList(resultItems, autResults, linesToProcess, progressLabel, done, total));
+                }
+            }));
+        }
+
+        stopButton.setOnAction(ev -> {
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+            stopButton.setDisable(true);
+            stopButton.setText("Stopped");
+            Platform.runLater(() -> refreshAutList(resultItems, autResults, linesToProcess, progressLabel, completed.get(), total));
+        });
+
+        applyFilterButton.setOnAction(ev -> {
+            BigInteger minAut;
+            try {
+                minAut = new BigInteger(minAutField.getText().trim());
+            } catch (NumberFormatException ex) {
+                return;
+            }
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+
+            List<Object[]> snapshot;
+            synchronized (autResults) {
+                snapshot = new ArrayList<>(autResults);
+            }
+            snapshot.sort((a, b) -> {
+                BigInteger left = (BigInteger) a[0];
+                BigInteger right = (BigInteger) b[0];
+                if (left == null && right == null) return 0;
+                if (left == null) return 1;
+                if (right == null) return -1;
+                return right.compareTo(left);
+            });
+
+            List<String> filtered = new ArrayList<>();
+            for (Object[] entry : snapshot) {
+                BigInteger autOrder = (BigInteger) entry[0];
+                if (autOrder != null && autOrder.compareTo(minAut) >= 0) {
+                    filtered.add(linesToProcess.get((int) entry[1]));
+                }
+            }
+            setGraphLines(filtered);
+            currentGraphIndex = 0;
+            if (!graphLinesEmpty()) {
+                updateGraph(graphPane, pageLabel);
+                updateGraphInfo(getGraphLine(currentGraphIndex));
+            } else {
+                graphPane.getChildren().clear();
+            }
+            pageLabel.setText(" / " + graphLineCount());
+            pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
+            dialog.close();
+        });
+
+        dialog.setOnCloseRequest(ev -> {
+            for (Future<?> f : futures) f.cancel(true);
+            executor.shutdownNow();
+        });
+
+        dialog.show();
+    }
+
+    private static void refreshAutList(ObservableList<String> items, List<Object[]> autResults,
+            List<String> lines, Label progressLabel, int done, int total) {
+        List<Object[]> snapshot;
+        synchronized (autResults) {
+            snapshot = new ArrayList<>(autResults);
+        }
+        snapshot.sort((a, b) -> {
+            BigInteger left = (BigInteger) a[0];
+            BigInteger right = (BigInteger) b[0];
+            if (left == null && right == null) return 0;
+            if (left == null) return 1;
+            if (right == null) return -1;
+            return right.compareTo(left);
+        });
+        List<String> display = new ArrayList<>(snapshot.size());
+        for (Object[] entry : snapshot) {
+            BigInteger autOrder = (BigInteger) entry[0];
+            String autText = autOrder == null ? "err" : autOrder.toString();
+            display.add(String.format("%s  |  %s", autText, lines.get((int) entry[1])));
+        }
+        items.setAll(display);
+        progressLabel.setText(done + " / " + total + " completed");
     }
 
     private static void refreshFitList(ObservableList<String> items, List<double[]> fitResults,
