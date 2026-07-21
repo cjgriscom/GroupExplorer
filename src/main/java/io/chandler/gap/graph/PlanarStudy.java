@@ -21,10 +21,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Random;
-import java.util.Scanner;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import java.util.zip.GZIPOutputStream;
 
 import org.jgrapht.Graph;
@@ -40,6 +41,7 @@ import io.chandler.gap.GapInterface;
 import io.chandler.gap.Generators;
 import io.chandler.gap.GroupExplorer;
 import io.chandler.gap.GroupExplorer.MemorySettings;
+import io.chandler.gap.PbinFile;
 import io.chandler.gap.graph.genus.MultiGenus;
 
 public class PlanarStudy {
@@ -134,6 +136,8 @@ public class PlanarStudy {
                       !groupName.startsWith("sp_8_2") &&
                       !groupName.startsWith("l5_3") &&
                       !groupName.startsWith("tg") &&
+                      !groupName.startsWith("he") &&
+                      !groupName.startsWith("suz") &&
                       !generator.equals(Generators.m24)) {
             boolean multithread = true;
             PrintStream[] filesOut = new PrintStream[conj.length];
@@ -173,32 +177,9 @@ public class PlanarStudy {
         // --------------------------------------------------------
         DreadnautWatchdog dreadnautWatchdog = new DreadnautWatchdog(DREADNAUT_WATCHDOG_TIMEOUT_SECONDS);
         dreadnautWatchdog.start();
-        try {
+        try (CycleSource lines2 = CycleSource.open(root, conj[phase1Indices[1]]);
+             CycleSource lines3 = CycleSource.open(root, conj[phase2Indices[0]])) {
         System.out.println("Starting Phase 1: Pair Filtering");
-
-        List<String> lines2 = new ArrayList<>();
-        File file2 = new File(root.getAbsolutePath() + "/" + conj[phase1Indices[1]] + ".txt");
-        try (Scanner scanner2 = new Scanner(file2)) {
-            while (scanner2.hasNextLine()) {
-                String l = scanner2.nextLine();
-                if (!l.trim().isEmpty()) {
-                    lines2.add(l);
-                }
-            }
-        }
-        Collections.shuffle(lines2, new Random(321));
-
-        List<String> lines3 = new ArrayList<>();
-        File file3 = new File(root.getAbsolutePath() + "/" + conj[phase2Indices[0]] + ".txt");
-        try (Scanner scanner3 = new Scanner(file3)) {
-            while (scanner3.hasNextLine()) {
-                String l = scanner3.nextLine();
-                if (!l.trim().isEmpty()) {
-                    lines3.add(l);
-                }
-            }
-        }
-        Collections.shuffle(lines3, new Random(321));
 
         // instantiate GAP to check group order.
         ThreadLocal<GapInterface> gapL = ThreadLocal.withInitial(() -> { try { return new GapInterface(); } catch (IOException e) { throw new RuntimeException("Failed to create GapInterface", e); } });
@@ -608,6 +589,118 @@ public class PlanarStudy {
         System.out.println("Errors: " + errors);
         } finally {
             dreadnautWatchdog.stop();
+        }
+    }
+
+    /**
+     * Source of conjugacy-class cycle notations in a deterministic shuffled order.
+     * Resolves {@code <name>.pbin} preferentially over {@code <name>.txt}. Index
+     * shuffle uses the same seeded {@link Collections#shuffle} as the former
+     * in-memory list shuffle, so visit order matches when entry order matches.
+     */
+    private abstract static class CycleSource implements AutoCloseable {
+        private static final long SHUFFLE_SEED = 321L;
+
+        /** File-order indices permuted by {@link #SHUFFLE_SEED}. */
+        protected final int[] order;
+
+        protected CycleSource(int size) {
+            List<Integer> idxs = new ArrayList<>(size);
+            for (int i = 0; i < size; i++) {
+                idxs.add(i);
+            }
+            Collections.shuffle(idxs, new Random(SHUFFLE_SEED));
+            this.order = new int[size];
+            for (int i = 0; i < size; i++) {
+                this.order[i] = idxs.get(i);
+            }
+        }
+
+        static CycleSource open(File dir, String conjName) throws IOException {
+            File pbin = new File(dir, conjName + ".txt.pbin");
+            if (pbin.isFile()) {
+                System.out.println("Cycle source: " + pbin.getName() + " (pbin)");
+                return new PbinCycleSource(PbinFile.open(pbin.getAbsolutePath()));
+            }
+            File txt = new File(dir, conjName + ".txt");
+            if (txt.isFile()) {
+                System.out.println("Cycle source: " + txt.getName() + " (txt)");
+                return new TextCycleSource(loadTextLines(txt));
+            }
+            throw new IOException("No cycle file for '" + conjName +
+                "' (.pbin or .txt) under " + dir.getAbsolutePath());
+        }
+
+        private static List<String> loadTextLines(File file) throws IOException {
+            List<String> lines = new ArrayList<>();
+            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.trim().isEmpty()) {
+                        lines.add(line);
+                    }
+                }
+            }
+            return lines;
+        }
+
+        final int size() {
+            return order.length;
+        }
+
+        /** Cycle notation at the original (unshuffled) file index. */
+        abstract String get(int fileIndex);
+
+        /** Parallel stream of cycle notations in shuffled order. */
+        final Stream<String> parallelStream() {
+            return IntStream.of(order).parallel().mapToObj(this::get);
+        }
+
+        @Override
+        public abstract void close() throws IOException;
+    }
+
+    private static final class TextCycleSource extends CycleSource {
+        private final List<String> lines;
+
+        TextCycleSource(List<String> lines) {
+            super(lines.size());
+            this.lines = lines;
+        }
+
+        @Override
+        String get(int fileIndex) {
+            return lines.get(fileIndex);
+        }
+
+        @Override
+        public void close() {
+            // nothing to close
+        }
+    }
+
+    private static final class PbinCycleSource extends CycleSource {
+        private final PbinFile pbin;
+
+        PbinCycleSource(PbinFile pbin) {
+            super(pbin.size());
+            this.pbin = pbin;
+        }
+
+        @Override
+        String get(int fileIndex) {
+            synchronized (pbin) {
+                try {
+                    return pbin.get(fileIndex);
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to read pbin entry " + fileIndex, e);
+                }
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            pbin.close();
         }
     }
 
