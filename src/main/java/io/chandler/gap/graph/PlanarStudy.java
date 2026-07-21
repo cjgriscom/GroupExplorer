@@ -70,6 +70,9 @@ public class PlanarStudy {
         int enforceLoopMultiples = 0; // For planar grid stuff, set to 1 for normal operation
         long minGeometryAutOrder = 1; // Minimum |Aut(geometry)|; 1 disables this filter
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
+        // On final result aggregation, also accept |G_result| = |G| / INCLUDE_QUOTIENT.
+        // 0 or 1 = only full group order (normal behavior).
+        int INCLUDE_QUOTIENT = 2;
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         boolean SORT_CANDIDATES = true; // sort Phase 1 pairs before Phase 2 for stable indices
@@ -104,6 +107,8 @@ public class PlanarStudy {
         if (!requirePlanar) System.out.println("Max genus: " + discardOverGenusN);
         System.out.println("Loop multiples: " + enforceLoopMultiples);
         System.out.println("Min geometry Aut(G) order: " + minGeometryAutOrder);
+        System.out.println("Include quotient: " + INCLUDE_QUOTIENT +
+            (INCLUDE_QUOTIENT > 1 ? " (also accept |G|/" + INCLUDE_QUOTIENT + ")" : " (full order only)"));
         System.out.println("Directed: " + directed);
         System.out.println("Generate: " + generate);
         System.out.println("Sort candidates: " + SORT_CANDIDATES);
@@ -116,7 +121,7 @@ public class PlanarStudy {
         File root = new File("PlanarStudy/" + groupName);
         root.mkdirs();
 
-        long order = -1;
+        String groupOrder = null;
 
         // --------------------------------------------------------
         // Generation branch: generate input files if needed.
@@ -154,7 +159,8 @@ public class PlanarStudy {
                     }
                 }
             });
-            order = g.order();
+            groupOrder = Integer.toString(g.order());
+            System.out.println("Order: " + groupOrder);
             
             // Close the generation files.
             for (int i = 0; i < conj.length; i++) {
@@ -165,9 +171,16 @@ public class PlanarStudy {
         } else {
             // If not generated then obtain the order from GAP.
             GapInterface gap = new GapInterface();
-            String orderS = gap.runGapSizeCommand(generator, 2).get(1).trim();
-            System.out.println("Order: " + orderS);
-            order = Long.parseLong(orderS);
+            groupOrder = gap.runGapSizeCommand(generator, 2).get(1).trim();
+            System.out.println("Order: " + groupOrder);
+        }
+
+        // Cache accepted |G| strings for final aggregation (supports huge GAP orders).
+        final String groupOrderFinal = groupOrder;
+        final Set<String> acceptedFullOrder = Set.of(groupOrderFinal);
+        final Set<String> acceptedFinalOrders = buildAcceptedFinalOrders(groupOrderFinal, INCLUDE_QUOTIENT);
+        if (INCLUDE_QUOTIENT > 1) {
+            System.out.println("Accepted final orders: " + acceptedFinalOrders);
         }
 
 
@@ -200,12 +213,14 @@ public class PlanarStudy {
             geomAutTagCore += "gm" + geometryAutOrderModulus;
         }
         String geomAutTag = geomAutTagCore.isEmpty() ? "" : geomAutTagCore + "-";
+        String andquotTag = INCLUDE_QUOTIENT > 1 ? "andquot" + INCLUDE_QUOTIENT + "-" : "";
         String phase1FilePath =
             root.getAbsolutePath() + "/" +
             (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") +
             (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +
             (requirePlanar ? "" : discardOverGenusN == 1 ? "torus-" : (discardOverGenusN == 0 ? "np-" : "np" + discardOverGenusN + "-")) +
             geomAutTag +
+            andquotTag +
             conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt";
         PrintStream phase1Out = new PrintStream(phase1FilePath);
         QuarantineLog phase1Quarantine = new QuarantineLog(phase1FilePath);
@@ -256,8 +271,6 @@ public class PlanarStudy {
 
             AtomicBoolean skipCurrent = new AtomicBoolean(false);
 
-            long orderFinal = order;
-
             lines2.forEachParallel(l2 -> {
                 if (skipCurrent.get() || skipRemaining.get()) return;
                 GroupExplorer ge = geL.get();
@@ -293,7 +306,7 @@ public class PlanarStudy {
                 String size = null;
                 if (!allowSubgroups) {
                     size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
-                    if (!size.equals(String.valueOf(orderFinal))) {
+                    if (!acceptedFullOrder.contains(size)) {
                         return;
                     }
                 }
@@ -327,9 +340,9 @@ public class PlanarStudy {
                     size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
                 }
 
-                // Only apply the geometry automorphism filters to final results (full group order).
+                // Only apply the geometry automorphism filters to accepted final result orders.
                 boolean passesGeometryFilter = true;
-                if (size.equals(String.valueOf(orderFinal)) &&
+                if (acceptedFinalOrders.contains(size) &&
                     (minGeometryAutOrder > 1L || geometryAutOrderModulus > 1L)) {
                     try {
                         BigInteger geomOrder = GraphSymm.automorphismGroupOrder(
@@ -361,7 +374,7 @@ public class PlanarStudy {
                     if (!canonicalGraphs.add(canonicalLabeling)) return;
                     candidatePairs.add(combinedPair);
                     pairGraphs.add(candGraph);
-                    if (size.equals(String.valueOf(orderFinal)) && passesGeometryFilterFinal) {
+                    if (acceptedFinalOrders.contains(size) && passesGeometryFilterFinal) {
                         phase1Out.println(GroupExplorer.generatorsToString(combinedPair));
                         found[0]++;
                     }
@@ -400,12 +413,12 @@ public class PlanarStudy {
             (enforceLoopMultiples > 1 ? "l" + enforceLoopMultiples + "-" : "") +
             (requirePlanar ? "" : discardOverGenusN == 1 ? "torus-" : (discardOverGenusN == 0 ? "np-" : "np" + discardOverGenusN + "-")) +
             geomAutTag +
+            andquotTag +
             conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase2Indices[0]];
         
         for (int r = 1; r <= repetitions; r++) {
             boolean lastLoop = r == repetitions; 
             final int rFinal = r;
-            final long orderFinal = order;
             System.out.println("Starting Phase 2, round " + r + "");
             AtomicBoolean skipRemainingP2 = new AtomicBoolean(false);
             List<int[][][]> newCandidates = new ArrayList<>();
@@ -498,7 +511,9 @@ public class PlanarStudy {
                     String size = null;
                     if (!allowSubgroups || lastLoop) {
                         size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
-                        if (!size.equals(String.valueOf(orderFinal))) {
+                        // Intermediate rounds: full order only. Final round: also |G|/INCLUDE_QUOTIENT.
+                        Set<String> accepted = lastLoop ? acceptedFinalOrders : acceptedFullOrder;
+                        if (!accepted.contains(size)) {
                             return;
                         }
                     }
@@ -531,9 +546,9 @@ public class PlanarStudy {
                         size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
                     }
 
-                    // Only apply the geometry automorphism filters to final results (full group order).
+                    // Only apply the geometry automorphism filters to accepted final result orders.
                     boolean passesGeometryFilter = true;
-                    if (size.equals(String.valueOf(orderFinal)) &&
+                    if (acceptedFinalOrders.contains(size) &&
                         (minGeometryAutOrder > 1L || geometryAutOrderModulus > 1L)) {
                         try {
                             BigInteger geomOrder = GraphSymm.automorphismGroupOrder(
@@ -565,7 +580,7 @@ public class PlanarStudy {
                         if (!canonicalGraphs.add(canonicalLabeling)) return;
                         if (!lastLoop) newCandidates.add(newCandidate); // COMMENT OUT if too many candidates
                         if (!lastLoop) newCandidateGraphs.add(candGraph);
-                        if (size.equals(String.valueOf(orderFinal)) && passesGeometryFilterFinal) {
+                        if (acceptedFinalOrders.contains(size) && passesGeometryFilterFinal) {
                             phase2RoundOut.println(GroupExplorer.generatorsToString(newCandidate));
                             found[rFinal]++;
                             System.out.println("    ("+(iDisp)+"/"+sizeDisp+") Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[rFinal] + " results and " + newCandidates.size() + " candidates");
@@ -590,11 +605,26 @@ public class PlanarStudy {
             System.out.println("Round " + r + " completed. Unique new candidates: " + roundCount);
             currentCandidates = newCandidates;
         }
-        System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + order + " found: " + Arrays.toString(found));
+        System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + groupOrderFinal + " found: " + Arrays.toString(found));
         System.out.println("Errors: " + errors);
         } finally {
             dreadnautWatchdog.stop();
         }
+    }
+
+    /**
+     * Build the set of GAP order strings accepted for final result aggregation.
+     * Always includes {@code groupOrder}; when {@code includeQuotient > 1} also
+     * includes {@code groupOrder / includeQuotient} (BigInteger division).
+     */
+    private static Set<String> buildAcceptedFinalOrders(String groupOrder, int includeQuotient) {
+        Set<String> accepted = new HashSet<>();
+        accepted.add(groupOrder);
+        if (includeQuotient > 1) {
+            BigInteger g = new BigInteger(groupOrder);
+            accepted.add(g.divide(BigInteger.valueOf(includeQuotient)).toString());
+        }
+        return Collections.unmodifiableSet(accepted);
     }
 
     private static final Object STDIN_LOCK = new Object();
