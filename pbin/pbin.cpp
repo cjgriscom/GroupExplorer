@@ -428,6 +428,33 @@ static void trim_line(std::string &line) {
         line.pop_back();
 }
 
+// Read one logical input line, joining physical lines that end with '\'.
+static bool read_logical_line(std::ifstream &ifs, std::string &line) {
+    line.clear();
+    for (;;) {
+        std::string part;
+        if (!std::getline(ifs, part)) {
+            return !line.empty();
+        }
+        trim_line(part);
+        if (part.empty() && line.empty()) {
+            continue;
+        }
+
+        bool continues = false;
+        if (!part.empty() && part.back() == '\\') {
+            part.pop_back();
+            trim_line(part);
+            continues = true;
+        }
+
+        line += part;
+        if (!continues) {
+            return true;
+        }
+    }
+}
+
 static void update_max_point(const Generator &gen, int &max_point) {
     for (auto &cs : gen.cycle_sets)
         for (auto &cyc : cs.cycles)
@@ -488,8 +515,7 @@ static void encode_file(const std::string &in_path,
         std::ifstream ifs(in_path);
         if (!ifs) throw std::runtime_error("cannot open " + in_path);
         std::string line;
-        while (std::getline(ifs, line)) {
-            trim_line(line);
+        while (read_logical_line(ifs, line)) {
             if (line.empty()) continue;
             ++M;
             if (!line.empty() && line.front() == '[') all_bare = false;
@@ -547,8 +573,7 @@ static void encode_file(const std::string &in_path,
     };
 
     std::string line;
-    while (std::getline(ifs, line)) {
-        trim_line(line);
+    while (read_logical_line(ifs, line)) {
         if (line.empty()) continue;
 
         block_raw.push_back(encode_generator(parse_generator(line), N));

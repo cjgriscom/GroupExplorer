@@ -18,6 +18,11 @@ Two line-oriented text formats are accepted:
 A file may use either style; the encoder auto-detects and records which style to
 reproduce on decode.
 
+Long lines may be split across physical lines with a trailing `\` (backslash at
+end of line). The encoder joins such continuations before parsing each generator.
+Blank lines within a continued generator are ignored; blank lines between
+generators are still skipped.
+
 ---
 
 ## Binary layout
