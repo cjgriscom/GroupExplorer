@@ -594,27 +594,12 @@ public class PlanarStudy {
 
     /**
      * Source of conjugacy-class cycle notations in a deterministic shuffled order.
-     * Resolves {@code <name>.pbin} preferentially over {@code <name>.txt}. Index
-     * shuffle uses the same seeded {@link Collections#shuffle} as the former
-     * in-memory list shuffle, so visit order matches when entry order matches.
+     * Resolves {@code <name>.txt.pbin} preferentially over {@code <name>.txt}.
+     * Text sources shuffle individual lines; PBIN sources shuffle whole blocks so
+     * decode stays sequential within each compressed chunk.
      */
     private abstract static class CycleSource implements AutoCloseable {
-        private static final long SHUFFLE_SEED = 321L;
-
-        /** File-order indices permuted by {@link #SHUFFLE_SEED}. */
-        protected final int[] order;
-
-        protected CycleSource(int size) {
-            List<Integer> idxs = new ArrayList<>(size);
-            for (int i = 0; i < size; i++) {
-                idxs.add(i);
-            }
-            Collections.shuffle(idxs, new Random(SHUFFLE_SEED));
-            this.order = new int[size];
-            for (int i = 0; i < size; i++) {
-                this.order[i] = idxs.get(i);
-            }
-        }
+        static final long SHUFFLE_SEED = 321L;
 
         static CycleSource open(File dir, String conjName) throws IOException {
             File pbin = new File(dir, conjName + ".txt.pbin");
@@ -644,17 +629,11 @@ public class PlanarStudy {
             return lines;
         }
 
-        final int size() {
-            return order.length;
-        }
-
-        /** Cycle notation at the original (unshuffled) file index. */
-        abstract String get(int fileIndex);
+        /** Number of cycle notations in this source. */
+        abstract int size();
 
         /** Parallel stream of cycle notations in shuffled order. */
-        final Stream<String> parallelStream() {
-            return IntStream.of(order).parallel().mapToObj(this::get);
-        }
+        abstract Stream<String> parallelStream();
 
         @Override
         public abstract void close() throws IOException;
@@ -662,15 +641,29 @@ public class PlanarStudy {
 
     private static final class TextCycleSource extends CycleSource {
         private final List<String> lines;
+        private final int[] order;
 
         TextCycleSource(List<String> lines) {
-            super(lines.size());
             this.lines = lines;
+            List<Integer> idxs = new ArrayList<>(lines.size());
+            for (int i = 0; i < lines.size(); i++) {
+                idxs.add(i);
+            }
+            Collections.shuffle(idxs, new Random(SHUFFLE_SEED));
+            this.order = new int[lines.size()];
+            for (int i = 0; i < lines.size(); i++) {
+                this.order[i] = idxs.get(i);
+            }
         }
 
         @Override
-        String get(int fileIndex) {
-            return lines.get(fileIndex);
+        int size() {
+            return order.length;
+        }
+
+        @Override
+        Stream<String> parallelStream() {
+            return IntStream.of(order).parallel().mapToObj(lines::get);
         }
 
         @Override
@@ -679,22 +672,62 @@ public class PlanarStudy {
         }
     }
 
+    /**
+     * PBIN-backed source: shuffles compressed blocks (not individual generators)
+     * so each block is decompressed once and its entries are visited contiguously.
+     * Parallelism is over blocks; decode work outside the file lock.
+     */
     private static final class PbinCycleSource extends CycleSource {
         private final PbinFile pbin;
+        private final int[] blockOrder;
 
         PbinCycleSource(PbinFile pbin) {
-            super(pbin.size());
             this.pbin = pbin;
+            int blockSize = pbin.getBlockSize();
+            int numBlocks = (pbin.size() + blockSize - 1) / blockSize;
+            List<Integer> blocks = new ArrayList<>(numBlocks);
+            for (int b = 0; b < numBlocks; b++) {
+                blocks.add(b);
+            }
+            Collections.shuffle(blocks, new Random(SHUFFLE_SEED));
+            this.blockOrder = new int[numBlocks];
+            for (int i = 0; i < numBlocks; i++) {
+                this.blockOrder[i] = blocks.get(i);
+            }
+            System.out.println("  Block-shuffled " + numBlocks + " blocks of size " + blockSize
+                + " (" + pbin.size() + " generators)");
         }
 
         @Override
-        String get(int fileIndex) {
-            synchronized (pbin) {
-                try {
-                    return pbin.get(fileIndex);
-                } catch (IOException e) {
-                    throw new RuntimeException("Failed to read pbin entry " + fileIndex, e);
+        int size() {
+            return pbin.size();
+        }
+
+        @Override
+        Stream<String> parallelStream() {
+            int blockSize = pbin.getBlockSize();
+            int n = pbin.size();
+            return IntStream.of(blockOrder).parallel()
+                .mapToObj(b -> loadBlockEntries(b, blockSize, n))
+                .flatMap(Arrays::stream);
+        }
+
+        private String[] loadBlockEntries(int block, int blockSize, int n) {
+            try {
+                byte[] raw;
+                synchronized (pbin) {
+                    raw = pbin.readRawBlock(block);
                 }
+                byte[] payload = pbin.decompressBlock(raw);
+                int start = block * blockSize;
+                int count = Math.min(blockSize, n - start);
+                String[] out = new String[count];
+                for (int off = 0; off < count; off++) {
+                    out[off] = pbin.decodeEntry(payload, off);
+                }
+                return out;
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to read pbin block " + block, e);
             }
         }
 
