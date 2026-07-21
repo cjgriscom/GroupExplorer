@@ -25,7 +25,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 import java.util.zip.GZIPOutputStream;
 
 import org.jgrapht.Graph;
@@ -108,8 +107,8 @@ public class PlanarStudy {
         System.out.println("Directed: " + directed);
         System.out.println("Generate: " + generate);
         System.out.println("Sort candidates: " + SORT_CANDIDATES);
-        System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
-        System.out.println("Resume Phase 2 results file: " +
+        if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
+        if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 results file: " +
             (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty() ? "(none)" : resumePhase2ResultsFile));
         System.out.println("Dreadnaut watchdog timeout: " +
             (DREADNAUT_WATCHDOG_TIMEOUT_SECONDS <= 0 || System.getProperty("disableDreadnautWatchdog") != null ? "disabled" : DREADNAUT_WATCHDOG_TIMEOUT_SECONDS + "s"));
@@ -238,8 +237,10 @@ public class PlanarStudy {
             }
         }
 
-        // Nested loops over the two lists with early termination support.
+        // Nested loops over the two lists with interactive skip/progress commands.
+        AtomicBoolean skipRemaining = new AtomicBoolean(false);
         for (String l1 : lines1) {
+            if (skipRemaining.get()) break;
             AtomicInteger p1_2_count = new AtomicInteger(0);
             p1_1_count.incrementAndGet();
             System.out.println("  Searching conjugacy class " + p1_1_count + " / " + lines1.size());
@@ -253,12 +254,12 @@ public class PlanarStudy {
             int[] l1State = geL.get().copyCurrentState();
             int[][] firstCandidate = parsed1[0]; // use the first generator set from file1.
 
-            AtomicBoolean earlyTermination = new AtomicBoolean(false);
+            AtomicBoolean skipCurrent = new AtomicBoolean(false);
 
             long orderFinal = order;
 
-            lines2.parallelStream().forEach(l2 -> {
-                if (earlyTermination.get()) return;
+            lines2.forEachParallel(l2 -> {
+                if (skipCurrent.get() || skipRemaining.get()) return;
                 GroupExplorer ge = geL.get();
                 int[][][] parsed2 = GroupExplorer.parseOperationsArr(l2);
                 int[][] secondCandidate = parsed2[0]; // use the first generator set from file2.
@@ -269,20 +270,13 @@ public class PlanarStudy {
                 p1_2_count.incrementAndGet();
                 // Check if
                 if (Arrays.equals(l1State, l2State)) return;
-                // Check for a key press to allow early termination of Phase 1 filtering.
-                try {
-                    if (System.in.available() > 0) {
-                        System.out.println("Key press detected. Early termination of Phase 1 filtering.");
-                        while (System.in.available() > 0) {
-                            System.in.read();
-                        }
-                        earlyTermination.set(true);
-                        System.out.println("p1_1_count: " + p1_1_count.get() + " / " + lines1.size());
-                        System.out.println("p1_2_count: " + p1_2_count.get() + " / " + lines2.size());
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                pollInteractiveCommand(skipCurrent, skipRemaining, () -> {
+                    System.out.println("Progress (Phase 1):");
+                    System.out.println("  conjugacy class: " + p1_1_count.get() + " / " + lines1.size());
+                    System.out.println("  inner pairs: " + p1_2_count.get() + " / " + lines2.size());
+                    System.out.println("  candidates so far: " + candidatePairs.size());
+                });
+                if (skipCurrent.get() || skipRemaining.get()) return;
                 // Combine the two generators into a pair.
                 int[][][] combinedPair = new int[][][]{firstCandidate, secondCandidate};
                 
@@ -374,7 +368,14 @@ public class PlanarStudy {
 
                     System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[0] + " results and " + candidatePairs.size() + " candidates");
                 }
-            });
+            }, () -> skipCurrent.get() || skipRemaining.get());
+            if (skipCurrent.get() && !skipRemaining.get()) {
+                System.out.println("  Skipped rest of conjugacy class " + p1_1_count.get());
+            }
+            if (skipRemaining.get()) {
+                System.out.println("  Skipping remaining Phase 1 conjugacy classes.");
+                break;
+            }
         }
         phase1Out.close();
         phase1Quarantine.close();
@@ -406,6 +407,7 @@ public class PlanarStudy {
             final int rFinal = r;
             final long orderFinal = order;
             System.out.println("Starting Phase 2, round " + r + "");
+            AtomicBoolean skipRemainingP2 = new AtomicBoolean(false);
             List<int[][][]> newCandidates = new ArrayList<>();
             List<Graph<Integer, DefaultEdge>> newCandidateGraphs = new ArrayList<>();
             String roundFileName = baseFileName + "_R" + r + "-filtered.txt";
@@ -452,30 +454,26 @@ public class PlanarStudy {
             int roundCount = 0;
             // For each candidate from the previous round, combine with each line from file3.
             for (int i = startCandidate; i < currentCandidates.size(); i++) {
+                if (skipRemainingP2.get()) break;
                 final int iDisp = i;
                 final int sizeDisp = currentCandidates.size();
                 int[][][] candidate = currentCandidates.get(i);
-                AtomicBoolean earlyTerminationP2 = new AtomicBoolean(false);
+                AtomicBoolean skipCurrentP2 = new AtomicBoolean(false);
                 AtomicInteger roundCountAtomic = new AtomicInteger(0);
+                AtomicInteger p2InnerCount = new AtomicInteger(0);
 
                 // Inner loop: iterate over individual lines from file3 in parallel.
-                lines3.parallelStream().forEach(l -> {
-                    if (earlyTerminationP2.get()) return;
-                    // Key press listener for early termination of the inner loop.
-                    try {
-                        if (System.in.available() > 0) {
-                            while (System.in.available() > 0) {
-                                char rr = (char) System.in.read();
-                                if (!(""+rr).trim().isEmpty()) {
-                                    System.out.println("Key press detected. Early termination of Phase 2 inner loop.");
-                                    earlyTerminationP2.set(true);
-                                }
-                            }
-                            earlyTerminationP2.set(true);
-                        }
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
+                lines3.forEachParallel(l -> {
+                    if (skipCurrentP2.get() || skipRemainingP2.get()) return;
+                    p2InnerCount.incrementAndGet();
+                    pollInteractiveCommand(skipCurrentP2, skipRemainingP2, () -> {
+                        System.out.println("Progress (Phase 2, round " + rFinal + "):");
+                        System.out.println("  candidate: " + iDisp + " / " + sizeDisp);
+                        System.out.println("  inner generators: " + p2InnerCount.get() + " / " + lines3.size());
+                        System.out.println("  results this round: " + found[rFinal]);
+                        System.out.println("  new candidates: " + newCandidates.size());
+                    });
+                    if (skipCurrentP2.get() || skipRemainingP2.get()) return;
                     // Parse the line from file2 and use its generator (index 0).
                     int[][][] parsedGen = GroupExplorer.parseOperationsArr(l);
                     if (Arrays.deepEquals(candidate[0], parsedGen[0])) return;
@@ -576,9 +574,16 @@ public class PlanarStudy {
                         roundCountAtomic.incrementAndGet();
 
                     }
-                });
+                }, () -> skipCurrentP2.get() || skipRemainingP2.get());
                 roundCount += roundCountAtomic.get();
                 System.out.println("  Completed inner loop for candidate " + i + " of " + currentCandidates.size());
+                if (skipCurrentP2.get() && !skipRemainingP2.get()) {
+                    System.out.println("  Skipped rest of candidate " + i);
+                }
+                if (skipRemainingP2.get()) {
+                    System.out.println("  Skipping remaining Phase 2 candidates this round.");
+                    break;
+                }
             }
             phase2RoundOut.close();
             roundQuarantine.close();
@@ -589,6 +594,59 @@ public class PlanarStudy {
         System.out.println("Errors: " + errors);
         } finally {
             dreadnautWatchdog.stop();
+        }
+    }
+
+    private static final Object STDIN_LOCK = new Object();
+
+    private static void printInteractiveHelp() {
+        System.out.println("Commands:");
+        System.out.println("  skip_current    skip rest of current conjugacy class / candidate");
+        System.out.println("  skip_remaining  skip all remaining work in this phase");
+        System.out.println("  progress        print current progress");
+        System.out.println("  (anything else) show this help");
+    }
+
+    /**
+     * If a full line is waiting on stdin, read and dispatch it.
+     * Safe to call from many worker threads; only one reads/handles at a time.
+     */
+    private static void pollInteractiveCommand(
+            AtomicBoolean skipCurrent,
+            AtomicBoolean skipRemaining,
+            Runnable printProgress) {
+        synchronized (STDIN_LOCK) {
+            try {
+                if (System.in.available() <= 0) return;
+                StringBuilder sb = new StringBuilder();
+                while (System.in.available() > 0) {
+                    int c = System.in.read();
+                    if (c < 0 || c == '\n') break;
+                    if (c != '\r') sb.append((char) c);
+                }
+                String cmd = sb.toString().trim();
+                if (cmd.isEmpty()) return;
+                switch (cmd.toLowerCase()) {
+                    case "skip_current":
+                        System.out.println("Command: skip_current");
+                        skipCurrent.set(true);
+                        break;
+                    case "skip_remaining":
+                        System.out.println("Command: skip_remaining");
+                        skipCurrent.set(true);
+                        skipRemaining.set(true);
+                        break;
+                    case "progress":
+                        printProgress.run();
+                        break;
+                    default:
+                        System.out.println("Unknown command: " + cmd);
+                        printInteractiveHelp();
+                        break;
+                }
+            } catch (IOException e) {
+                System.err.println("Failed to read interactive command: " + e.getMessage());
+            }
         }
     }
 
@@ -632,8 +690,12 @@ public class PlanarStudy {
         /** Number of cycle notations in this source. */
         abstract int size();
 
-        /** Parallel stream of cycle notations in shuffled order. */
-        abstract Stream<String> parallelStream();
+        /**
+         * Parallel visit in shuffled order. When {@code cancelled} becomes true,
+         * remaining work is skipped (including unread PBIN blocks).
+         */
+        abstract void forEachParallel(java.util.function.Consumer<String> action,
+                                      java.util.function.BooleanSupplier cancelled);
 
         @Override
         public abstract void close() throws IOException;
@@ -662,8 +724,12 @@ public class PlanarStudy {
         }
 
         @Override
-        Stream<String> parallelStream() {
-            return IntStream.of(order).parallel().mapToObj(lines::get);
+        void forEachParallel(java.util.function.Consumer<String> action,
+                             java.util.function.BooleanSupplier cancelled) {
+            IntStream.of(order).parallel().forEach(i -> {
+                if (cancelled.getAsBoolean()) return;
+                action.accept(lines.get(i));
+            });
         }
 
         @Override
@@ -704,12 +770,18 @@ public class PlanarStudy {
         }
 
         @Override
-        Stream<String> parallelStream() {
+        void forEachParallel(java.util.function.Consumer<String> action,
+                             java.util.function.BooleanSupplier cancelled) {
             int blockSize = pbin.getBlockSize();
             int n = pbin.size();
-            return IntStream.of(blockOrder).parallel()
-                .mapToObj(b -> loadBlockEntries(b, blockSize, n))
-                .flatMap(Arrays::stream);
+            IntStream.of(blockOrder).parallel().forEach(b -> {
+                if (cancelled.getAsBoolean()) return;
+                String[] entries = loadBlockEntries(b, blockSize, n);
+                for (String entry : entries) {
+                    if (cancelled.getAsBoolean()) return;
+                    action.accept(entry);
+                }
+            });
         }
 
         private String[] loadBlockEntries(int block, int blockSize, int n) {
