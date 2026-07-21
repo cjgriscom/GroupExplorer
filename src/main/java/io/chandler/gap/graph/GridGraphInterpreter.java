@@ -22,7 +22,7 @@ public class GridGraphInterpreter {
 
 		// Assume a perfect grid alignment
 
-		try (Scanner in = new Scanner(new File("/tmp/om"))) {
+		try (Scanner in = new Scanner(new File("/tmp/sp.txt"))) {
 
 			// Cache all x and y values
 			TreeSet<Double> xValues = new TreeSet<>();

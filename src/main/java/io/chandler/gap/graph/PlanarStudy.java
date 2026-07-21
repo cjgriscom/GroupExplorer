@@ -50,7 +50,7 @@ public class PlanarStudy {
     // fall back to nauty.
     private static final boolean USE_TRACES = true;
     /** Kill dreadnaut processes running longer than this (seconds); 0 disables the watchdog. */
-    private static final int DREADNAUT_WATCHDOG_TIMEOUT_SECONDS = 30;
+    private static final int DREADNAUT_WATCHDOG_TIMEOUT_SECONDS = 5*60;
     private static final int DREADNAUT_WATCHDOG_INTERVAL_SECONDS = 10;
     private static final String DREADNAUT_COMM = new File(DREADNAUT_PATH).getName();
 
@@ -62,7 +62,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS = 60; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS = 300; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -89,8 +89,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.td42; 
-        String groupName = "td42";
+        String generator = Generators.he2; 
+        String groupName = "he2";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -129,10 +129,11 @@ public class PlanarStudy {
                       !groupName.startsWith("mcl") &&
                       !groupName.startsWith("co3") &&
                       !groupName.startsWith("td42") &&
+                      !groupName.startsWith("tf42") &&
                       !groupName.startsWith("l7_2") &&
                       !groupName.startsWith("sp_8_2") &&
                       !groupName.startsWith("l5_3") &&
-                      !generator.equals(Generators.tg) &&
+                      !groupName.startsWith("tg") &&
                       !generator.equals(Generators.m24)) {
             boolean multithread = true;
             PrintStream[] filesOut = new PrintStream[conj.length];

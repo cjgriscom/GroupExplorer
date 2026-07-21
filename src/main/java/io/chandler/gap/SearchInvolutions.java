@@ -1,7 +1,9 @@
 package io.chandler.gap;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -9,11 +11,14 @@ import java.util.Scanner;
 
 public class SearchInvolutions {
 	public static void main(String[] args) throws FileNotFoundException {
-		Scanner in = new Scanner(new File("/home/cjgriscom/Programming/GroupExplorer/PlanarStudy/j1/2-cycles.txt"));
+		Scanner in = new Scanner(new BufferedReader(new FileReader(new File("/home/cjgriscom/Programming/GroupExplorer/PlanarStudy/sp_8_2_120/2-cycles.txt"))));
 		
 		List<int[]> searchPairs = new ArrayList<>();
-		searchPairs.add(new int[] {168, 8});
-		searchPairs.add(new int[] {244, 78});
+		String pairs = "[(12,79)(20,32)(29,76)(40,81)(44,100)(53,36)(66,2)(97,33)(112,101)(116,96)(118,90)]";
+		int[][] pairsArr = GroupExplorer.parseOperations(pairs).get(0);
+		for (int[] pair : pairsArr) {
+			searchPairs.add(pair);
+		}
 
 		// Match every line that contains all search pairs		
 
