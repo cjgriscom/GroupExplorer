@@ -6,6 +6,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.math.BigInteger;
@@ -48,10 +49,10 @@ public class PlanarStudy {
     // Traces cannot handle directed graphs. If enabled but a batch contains any directed graphs,
     // fall back to nauty.
     private static final boolean USE_TRACES = true;
-
-    // TODO figure out a way to 'quarantine' specific iterations that are taking too long (i.e. stuck on multi_genus),
-    // processing their results upon return but allowing the rest of the program to continue.
-    // CO3 - discardOverGenusN = 2 is taking too long with d40
+    /** Kill dreadnaut processes running longer than this (seconds); 0 disables the watchdog. */
+    private static final int DREADNAUT_WATCHDOG_TIMEOUT_SECONDS = 30;
+    private static final int DREADNAUT_WATCHDOG_INTERVAL_SECONDS = 10;
+    private static final String DREADNAUT_COMM = new File(DREADNAUT_PATH).getName();
 
     public static void main(String[] args) throws IOException {
         // --------------------------------------------------------
@@ -108,6 +109,8 @@ public class PlanarStudy {
         System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
         System.out.println("Resume Phase 2 results file: " +
             (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty() ? "(none)" : resumePhase2ResultsFile));
+        System.out.println("Dreadnaut watchdog timeout: " +
+            (DREADNAUT_WATCHDOG_TIMEOUT_SECONDS <= 0 || System.getProperty("disableDreadnautWatchdog") != null ? "disabled" : DREADNAUT_WATCHDOG_TIMEOUT_SECONDS + "s"));
 
         File root = new File("PlanarStudy/" + groupName);
         root.mkdirs();
@@ -167,6 +170,9 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Phase 1: Pair Filtering
         // --------------------------------------------------------
+        DreadnautWatchdog dreadnautWatchdog = new DreadnautWatchdog(DREADNAUT_WATCHDOG_TIMEOUT_SECONDS);
+        dreadnautWatchdog.start();
+        try {
         System.out.println("Starting Phase 1: Pair Filtering");
 
         List<String> lines2 = new ArrayList<>();
@@ -599,6 +605,116 @@ public class PlanarStudy {
         }
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + order + " found: " + Arrays.toString(found));
         System.out.println("Errors: " + errors);
+        } finally {
+            dreadnautWatchdog.stop();
+        }
+    }
+
+    /**
+     * Background thread that periodically finds dreadnaut processes running longer
+     * than {@link #DREADNAUT_WATCHDOG_TIMEOUT_SECONDS} and sends {@code kill PID}.
+     */
+    private static final class DreadnautWatchdog {
+        private final int timeoutSeconds;
+        private final AtomicBoolean running = new AtomicBoolean(false);
+        private Thread thread;
+
+        DreadnautWatchdog(int timeoutSeconds) {
+            this.timeoutSeconds = timeoutSeconds;
+        }
+
+        void start() {
+            if (timeoutSeconds <= 0) {
+                return;
+            }
+            running.set(true);
+            thread = new Thread(this::runLoop, "dreadnaut-watchdog");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        void stop() {
+            running.set(false);
+            if (thread != null) {
+                thread.interrupt();
+                try {
+                    thread.join(5000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        private void runLoop() {
+            while (running.get()) {
+                try {
+                    killStaleProcesses();
+                    Thread.sleep(DREADNAUT_WATCHDOG_INTERVAL_SECONDS * 1000L);
+                } catch (InterruptedException e) {
+                    if (!running.get()) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void killStaleProcesses() {
+            for (String pid : listDreadnautPids()) {
+                int elapsed = getProcessElapsedSeconds(pid);
+                if (elapsed >= 0 && elapsed > timeoutSeconds) {
+                    killProcess(pid, elapsed);
+                }
+            }
+        }
+
+        private List<String> listDreadnautPids() {
+            List<String> pids = new ArrayList<>();
+            try {
+                Process process = new ProcessBuilder("pgrep", "-x", DREADNAUT_COMM).start();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        line = line.trim();
+                        if (!line.isEmpty()) {
+                            pids.add(line);
+                        }
+                    }
+                }
+                process.waitFor();
+            } catch (IOException | InterruptedException e) {
+                System.err.println("Dreadnaut watchdog: failed to list processes: " + e.getMessage());
+            }
+            return pids;
+        }
+
+        private int getProcessElapsedSeconds(String pid) {
+            try {
+                Process process = new ProcessBuilder("ps", "-o", "etimes=", "-p", pid).start();
+                String elapsedLine;
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    elapsedLine = reader.readLine();
+                }
+                process.waitFor();
+                if (elapsedLine == null) {
+                    return -1;
+                }
+                return Integer.parseInt(elapsedLine.trim());
+            } catch (IOException | InterruptedException | NumberFormatException e) {
+                System.err.println("Dreadnaut watchdog: failed to read elapsed time for pid " + pid + ": " + e.getMessage());
+                return -1;
+            }
+        }
+
+        private void killProcess(String pid, int elapsedSeconds) {
+            try {
+                System.err.println("Dreadnaut watchdog: killing pid " + pid +
+                    " (running " + elapsedSeconds + "s, limit " + timeoutSeconds + "s)");
+                Process process = new ProcessBuilder("kill", pid).start();
+                process.waitFor();
+            } catch (IOException | InterruptedException e) {
+                System.err.println("Dreadnaut watchdog: failed to kill pid " + pid + ": " + e.getMessage());
+            }
+        }
     }
 
     /**
