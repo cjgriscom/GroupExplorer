@@ -22,7 +22,6 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
@@ -42,6 +41,7 @@ import io.chandler.gap.Generators;
 import io.chandler.gap.GroupExplorer;
 import io.chandler.gap.GroupExplorer.MemorySettings;
 import io.chandler.gap.PbinFile;
+import io.chandler.gap.graph.filter.*;
 import io.chandler.gap.graph.genus.MultiGenus;
 
 public class PlanarStudy {
@@ -82,7 +82,16 @@ public class PlanarStudy {
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
         int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
-        AbstractResultFilter resultFilter = new NoOpResultFilter(resultFilterQueueSize);
+        AbstractResultFilter resultFilter;
+        /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
+        resultFilter = CongestionResultFilter.builder(resultFilterQueueSize)
+            .seeds(41, 129)
+            .checkpoints(100, 200, 500, 1000, 1500, 2500)
+            .thresholds(7.5, 4.9, 4.5, 4.25, 3.5, 2.6)
+            .nRotations(10)
+            .threads(Runtime.getRuntime().availableProcessors())
+            .build();
+
 
         MemorySettings mem = MemorySettings.COMPRESS_LONG;
 
@@ -114,7 +123,8 @@ public class PlanarStudy {
             (INCLUDE_QUOTIENT > 1 ? " (also accept |G|/" + INCLUDE_QUOTIENT + ")" : " (full order only)"));
         System.out.println("Directed: " + directed);
         System.out.println("Result filter: " + resultFilter.getClass().getSimpleName() +
-            " (queue size " + resultFilterQueueSize + ")");
+            " (queue size " + resultFilterQueueSize +
+            ", threads " + resultFilter.threadCount() + ")");
         System.out.println("Generate: " + generate);
         System.out.println("Sort candidates: " + SORT_CANDIDATES);
         if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
@@ -691,235 +701,6 @@ public class PlanarStudy {
         if (line == null) return null;
         int idx = line.indexOf(" # ");
         return idx < 0 ? line : line.substring(0, idx);
-    }
-
-    /**
-     * Decision returned by {@link AbstractResultFilter#process(String)}.
-     */
-    static final class FilterDecision {
-        enum Kind { ACCEPT, REJECT_TO_CANDIDATES, REJECT_DISCARD }
-
-        final Kind kind;
-        /** Optional comment appended as {@code " # " + comment} when accepting. */
-        final String comment;
-
-        private FilterDecision(Kind kind, String comment) {
-            this.kind = kind;
-            this.comment = comment;
-        }
-
-        static FilterDecision accept() {
-            return accept(null);
-        }
-
-        static FilterDecision accept(String comment) {
-            return new FilterDecision(Kind.ACCEPT, comment);
-        }
-
-        static FilterDecision rejectToCandidates() {
-            return new FilterDecision(Kind.REJECT_TO_CANDIDATES, null);
-        }
-
-        static FilterDecision rejectDiscard() {
-            return new FilterDecision(Kind.REJECT_DISCARD, null);
-        }
-
-        boolean isReject() {
-            return kind == Kind.REJECT_TO_CANDIDATES || kind == Kind.REJECT_DISCARD;
-        }
-    }
-
-    /**
-     * Async bounded queue that filters result strings before writing them to the
-     * output file. Subclasses implement {@link #process(String)} to accept
-     * (optionally with a comment), reject-to-candidates, or discard.
-     * <p>
-     * {@link #add(String, boolean, Runnable)} blocks when the queue is full.
-     * On {@code lastLoop}, reject-to-candidates is forced to discard.
-     */
-    abstract static class AbstractResultFilter {
-        private static final class QueuedResult {
-            final String result;
-            final boolean lastLoop;
-            final Runnable retainCandidate;
-
-            QueuedResult(String result, boolean lastLoop, Runnable retainCandidate) {
-                this.result = result;
-                this.lastLoop = lastLoop;
-                this.retainCandidate = retainCandidate;
-            }
-        }
-
-        private final ArrayBlockingQueue<QueuedResult> queue;
-        private final Thread worker;
-        private final AtomicInteger accepted = new AtomicInteger();
-        private final AtomicInteger rejected = new AtomicInteger();
-        private final AtomicInteger queued = new AtomicInteger();
-        private final Object drainLock = new Object();
-        private volatile PrintStream out;
-        private volatile boolean shutdown;
-
-        protected AbstractResultFilter(int maxQueueSize) {
-            if (maxQueueSize < 1) {
-                throw new IllegalArgumentException("maxQueueSize must be >= 1");
-            }
-            this.queue = new ArrayBlockingQueue<>(maxQueueSize);
-            this.worker = new Thread(this::runLoop, "planar-study-result-filter");
-            this.worker.setDaemon(true);
-            this.worker.start();
-        }
-
-        /** Subclasses decide accept / reject-to-candidates / discard for each result. */
-        protected abstract FilterDecision process(String result);
-
-        public final void setOutput(PrintStream out) {
-            this.out = out;
-        }
-
-        public final void resetStats(int acceptedSoFar) {
-            accepted.set(acceptedSoFar);
-            rejected.set(0);
-        }
-
-        public final int acceptedCount() { return accepted.get(); }
-        public final int rejectedCount() { return rejected.get(); }
-        public final int queuedCount() { return queued.get(); }
-
-        /**
-         * Enqueue a result for async filtering. Blocks if the queue is at capacity.
-         *
-         * @param result           generator result string
-         * @param lastLoop         when true, rejected results are always discarded
-         * @param retainCandidate  run if the result should remain a next-round candidate
-         *                         (accept, or reject-to-candidates when not lastLoop);
-         *                         may be null
-         */
-        public final void add(String result, boolean lastLoop, Runnable retainCandidate)
-                throws InterruptedException {
-            queued.incrementAndGet();
-            try {
-                queue.put(new QueuedResult(result, lastLoop, retainCandidate));
-            } catch (InterruptedException e) {
-                queued.decrementAndGet();
-                notifyDrainWaiters();
-                throw e;
-            }
-        }
-
-        /** {@link #add} wrapping {@link InterruptedException} as unchecked. */
-        public final void addUnchecked(String result, boolean lastLoop, Runnable retainCandidate) {
-            try {
-                add(result, lastLoop, retainCandidate);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("Interrupted while queueing result", e);
-            }
-        }
-
-        /** Block until all queued results have been processed. */
-        public final void drain() {
-            synchronized (drainLock) {
-                while (queued.get() > 0) {
-                    try {
-                        drainLock.wait(100L);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
-                }
-            }
-        }
-
-        public final void close() {
-            shutdown = true;
-            worker.interrupt();
-            try {
-                worker.join(5000L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
-        private void runLoop() {
-            while (!shutdown) {
-                QueuedResult item;
-                try {
-                    item = queue.take();
-                } catch (InterruptedException e) {
-                    if (shutdown) break;
-                    continue;
-                }
-                try {
-                    handle(item);
-                } finally {
-                    queued.decrementAndGet();
-                    notifyDrainWaiters();
-                }
-            }
-            // Drain anything left after shutdown so waiters are not stuck.
-            QueuedResult leftover;
-            while ((leftover = queue.poll()) != null) {
-                try {
-                    handle(leftover);
-                } finally {
-                    queued.decrementAndGet();
-                    notifyDrainWaiters();
-                }
-            }
-        }
-
-        private void handle(QueuedResult item) {
-            FilterDecision decision = process(item.result);
-            if (item.lastLoop && decision.isReject()) {
-                decision = FilterDecision.rejectDiscard();
-            }
-            switch (decision.kind) {
-                case ACCEPT: {
-                    PrintStream sink = out;
-                    if (sink != null) {
-                        if (decision.comment != null && !decision.comment.isEmpty()) {
-                            sink.println(item.result + " # " + decision.comment);
-                        } else {
-                            sink.println(item.result);
-                        }
-                    }
-                    accepted.incrementAndGet();
-                    if (item.retainCandidate != null) {
-                        item.retainCandidate.run();
-                    }
-                    break;
-                }
-                case REJECT_TO_CANDIDATES:
-                    rejected.incrementAndGet();
-                    if (item.retainCandidate != null) {
-                        item.retainCandidate.run();
-                    }
-                    break;
-                case REJECT_DISCARD:
-                    rejected.incrementAndGet();
-                    break;
-                default:
-                    throw new IllegalStateException("Unknown decision: " + decision.kind);
-            }
-        }
-
-        private void notifyDrainWaiters() {
-            synchronized (drainLock) {
-                drainLock.notifyAll();
-            }
-        }
-    }
-
-    /** Pass-through filter: never rejects and never adds a comment. */
-    static final class NoOpResultFilter extends AbstractResultFilter {
-        NoOpResultFilter(int maxQueueSize) {
-            super(maxQueueSize);
-        }
-
-        @Override
-        protected FilterDecision process(String result) {
-            return FilterDecision.accept();
-        }
     }
 
     /**
