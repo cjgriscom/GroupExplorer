@@ -9,6 +9,8 @@ public class GapInterface {
     private Process process;
     private BufferedWriter writer;
     private BufferedReader reader;
+    /** True after {@link #loadReferenceGroup(String)} succeeds in this session. */
+    private boolean referenceLoaded = false;
 
     private enum LaunchMode {
         DIRECT,
@@ -122,7 +124,8 @@ public class GapInterface {
 
     public void reset() throws IOException {
         if (process != null) try {close();} catch (IOException e) {}
-        
+        referenceLoaded = false;
+
         List<String> commands = new ArrayList<>();
         ProcessBuilder pb;
         
@@ -185,11 +188,45 @@ public class GapInterface {
         return count;
     }
 
+    /**
+     * Load a persistent reference group {@code G}, compute its stabilizer chain, and return {@code Size(G)}.
+     * Subsequent {@link #sizeOfSubgroup(String)} calls reuse this group via {@code SubgroupNC}.
+     */
+    public String loadReferenceGroup(String generator) throws IOException {
+        writer.write("G := Group(" + generator + ");; StabChain(G);; Print(Size(G), \"\\n\");");
+        writer.newLine();
+        writer.flush();
+        String size = readNonEmptyLine();
+        referenceLoaded = true;
+        return size;
+    }
+
+    /**
+     * {@code Size(SubgroupNC(G, gens))} for cycle-notation list {@code gens}
+     * (e.g. from {@link GroupExplorer#generatorsToString(int[][][])}).
+     * Requires {@link #loadReferenceGroup(String)} first.
+     */
+    public String sizeOfSubgroup(String gensNotation) {
+        if (!referenceLoaded) {
+            throw new IllegalStateException("loadReferenceGroup() must be called before sizeOfSubgroup()");
+        }
+        try {
+            writer.write("Print(Size(SubgroupNC(G, " + gensNotation + ")), \"\\n\");");
+            writer.newLine();
+            writer.flush();
+            return readNonEmptyLine();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
     public String getConjugacyClasses(String generator) {
         try {
-            writer.write("g := Group(" + generator + ");;");
-            writer.newLine();
-            writer.write("Print(ConjugacyClasses(g),\"\\n\");");
+            if (!referenceLoaded) {
+                loadReferenceGroup(generator);
+            }
+            writer.write("Print(ConjugacyClasses(G),\"\\n\");");
             writer.newLine();
             writer.flush();
 
@@ -213,6 +250,16 @@ public class GapInterface {
             e.printStackTrace();
         }
         return null;
+    }
+
+    private String readNonEmptyLine() throws IOException {
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (!line.trim().isEmpty()) {
+                return line.trim();
+            }
+        }
+        throw new IOException("GAP process ended unexpectedly");
     }
 
     public List<String> runGapCommands(String generator, int readNLines) {

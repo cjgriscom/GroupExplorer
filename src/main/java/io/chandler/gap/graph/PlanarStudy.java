@@ -105,8 +105,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.mcl_2; 
-        String groupName = "mcl_2";
+        String generator = Generators.sp_8_2_136; 
+        String groupName = "sp_8_2_136";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -208,8 +208,17 @@ public class PlanarStudy {
              CycleSource lines3 = CycleSource.open(root, conj[phase2Indices[0]])) {
         System.out.println("Starting Phase 1: Pair Filtering");
 
-        // instantiate GAP to check group order.
-        ThreadLocal<GapInterface> gapL = ThreadLocal.withInitial(() -> { try { return new GapInterface(); } catch (IOException e) { throw new RuntimeException("Failed to create GapInterface", e); } });
+        // instantiate GAP to check group order (each thread keeps a live reference group G).
+        final String referenceGenerator = generator;
+        ThreadLocal<GapInterface> gapL = ThreadLocal.withInitial(() -> {
+            try {
+                GapInterface gap = new GapInterface();
+                gap.loadReferenceGroup(referenceGenerator);
+                return gap;
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to create GapInterface", e);
+            }
+        });
         ThreadLocal<DreadnautInterface> dreadnautL = ThreadLocal.withInitial(() -> new DreadnautInterface(DREADNAUT_PATH, USE_TRACES));
 
         // Create a list to save unique candidate pairs.
@@ -328,7 +337,7 @@ public class PlanarStudy {
 
                 String size = null;
                 if (!allowSubgroups) {
-                    size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
+                    size = gapL.get().sizeOfSubgroup(GroupExplorer.generatorsToString(combinedPair));
                     if (!acceptedFullOrder.contains(size)) {
                         return;
                     }
@@ -361,7 +370,7 @@ public class PlanarStudy {
                 
                 //if (Math.random() < 0.01) Collections.shuffle(pairGraphs);
                 if (size == null) {
-                    size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(combinedPair), 2).get(1).trim();
+                    size = gapL.get().sizeOfSubgroup(GroupExplorer.generatorsToString(combinedPair));
                 }
 
                 // Only apply the geometry automorphism filters to accepted final result orders.
@@ -572,7 +581,7 @@ public class PlanarStudy {
 
                     String size = null;
                     if (!allowSubgroups || lastLoop) {
-                        size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
+                        size = gapL.get().sizeOfSubgroup(GroupExplorer.generatorsToString(newCandidate));
                         // Intermediate rounds: full order only. Final round: also |G|/INCLUDE_QUOTIENT.
                         Set<String> accepted = lastLoop ? acceptedFinalOrders : acceptedFullOrder;
                         if (!accepted.contains(size)) {
@@ -603,7 +612,7 @@ public class PlanarStudy {
                     }
                     
                     if (size == null) {
-                        size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
+                        size = gapL.get().sizeOfSubgroup(GroupExplorer.generatorsToString(newCandidate));
                     }
 
                     // Only apply the geometry automorphism filters to accepted final result orders.
