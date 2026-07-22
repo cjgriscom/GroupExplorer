@@ -237,6 +237,7 @@ public class PlanarStudy {
                 }
             }
         }
+        final int nPointsFinal = nPoints;
 
         // Get an exemplary cycle from each matching conjugacy class
         List<String> lines1 = new ArrayList<>();
@@ -316,11 +317,12 @@ public class PlanarStudy {
                     return;
                 }
 
-                Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, directed);
+                boolean actualDirected = directed && !generatorsAreAllTwoCycles(combinedPair);
+                Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, actualDirected);
 
                 // Check for isomorphic duplicates.
                 String canonicalLabeling = getCanonicalLabelingOrQuarantine(
-                    dreadnautL.get(), combinedPair, directed, phase1Quarantine, null);
+                    dreadnautL.get(), candGraph, combinedPair, actualDirected, phase1Quarantine, null);
                 if (canonicalLabeling == null) {
                     return;
                 }
@@ -474,6 +476,7 @@ public class PlanarStudy {
                 AtomicBoolean skipCurrentP2 = new AtomicBoolean(false);
                 AtomicInteger roundCountAtomic = new AtomicInteger(0);
                 AtomicInteger p2InnerCount = new AtomicInteger(0);
+                AtomicInteger disjointRejected = new AtomicInteger(0);
 
                 // Inner loop: iterate over individual lines from file3 in parallel.
                 lines3.forEachParallel(l -> {
@@ -483,6 +486,7 @@ public class PlanarStudy {
                         System.out.println("Progress (Phase 2, round " + rFinal + "):");
                         System.out.println("  candidate: " + iDisp + " / " + sizeDisp);
                         System.out.println("  inner generators: " + p2InnerCount.get() + " / " + lines3.size());
+                        System.out.println("  disjoint rejected: " + disjointRejected.get() + " / " + p2InnerCount.get());
                         System.out.println("  results this round: " + found[rFinal]);
                         System.out.println("  new candidates: " + newCandidates.size());
                     });
@@ -508,6 +512,17 @@ public class PlanarStudy {
                         return;
                     }
 
+                    // Build the dreadnaut graph once; reuse for connectivity, GAP gate, and canonical labeling.
+                    boolean actualDirected = directed && !generatorsAreAllTwoCycles(newCandidate);
+                    Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, actualDirected);
+
+                    // Final results only: incomplete/disconnected support cannot generate |G| or |G|/q.
+                    // Missing ambient points are treated as floating isolated vertices.
+                    if (lastLoop && isDisjointOrIncompleteSupport(candGraph, nPointsFinal)) {
+                        disjointRejected.incrementAndGet();
+                        return;
+                    }
+
                     String size = null;
                     if (!allowSubgroups || lastLoop) {
                         size = gapL.get().runGapSizeCommand(GroupExplorer.generatorsToString(newCandidate), 2).get(1).trim();
@@ -518,11 +533,9 @@ public class PlanarStudy {
                         }
                     }
 
-                    Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, directed);
-
                     // Check for isomorphic duplicates.
                     String canonicalLabeling = getCanonicalLabelingOrQuarantine(
-                        dreadnautL.get(), newCandidate, directed, roundQuarantine, errors);
+                        dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
                     if (canonicalLabeling == null) {
                         return;
                     }
@@ -1014,8 +1027,21 @@ public class PlanarStudy {
         QuarantineLog quarantine,
         AtomicInteger errors
     ) {
+        boolean actualDirected = directed && !generatorsAreAllTwoCycles(candidate);
+        Graph<Integer, DefaultEdge> graph = buildGraphFromCombinedGen(candidate, actualDirected);
+        return getCanonicalLabelingOrQuarantine(dreadnaut, graph, candidate, actualDirected, quarantine, errors);
+    }
+
+    private static String getCanonicalLabelingOrQuarantine(
+        DreadnautInterface dreadnaut,
+        Graph<Integer, DefaultEdge> graph,
+        int[][][] candidate,
+        boolean directed,
+        QuarantineLog quarantine,
+        AtomicInteger errors
+    ) {
         try {
-            return dreadnaut.getCanonicalLabeling(candidate, directed);
+            return dreadnaut.getCanonicalLabeling(graph, directed);
         } catch (RuntimeException e) {
             if (isAbnormalDreadnautExit(e)) {
                 quarantine.logFailure(GroupExplorer.generatorsToString(candidate), e.getMessage());
@@ -1027,6 +1053,42 @@ public class PlanarStudy {
             }
             return null;
         }
+    }
+
+    /** Same rule as {@link DreadnautInterface}: all-2-cycles graphs are treated as undirected. */
+    private static boolean generatorsAreAllTwoCycles(int[][][] combinedGen) {
+        for (int[][] cycle : combinedGen) {
+            for (int[] polygon : cycle) {
+                if (polygon.length != 2) return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Final-result support check: reject if the generator graph omits any ambient
+     * point ({@code vertexCount < nPoints}, i.e. floating fixed points) or if its
+     * undirected view has more than one weak component.
+     */
+    private static boolean isDisjointOrIncompleteSupport(
+            Graph<Integer, DefaultEdge> graph, int nPoints) {
+        int n = graph.vertexSet().size();
+        if (n < nPoints) return true;
+        if (n <= 1) return false;
+        Set<Integer> seen = new HashSet<>(Math.max(16, n * 2));
+        Queue<Integer> q = new ArrayDeque<>();
+        Integer start = graph.vertexSet().iterator().next();
+        q.add(start);
+        seen.add(start);
+        while (!q.isEmpty()) {
+            Integer u = q.remove();
+            for (Integer v : Graphs.neighborListOf(graph, u)) {
+                if (seen.add(v)) {
+                    q.add(v);
+                }
+            }
+        }
+        return seen.size() < n;
     }
 
     private static File resolveResumeFile(File root, String resumePhase2ResultsFile) {
