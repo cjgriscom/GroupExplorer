@@ -63,7 +63,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS = 300; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS =  40; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -72,7 +72,7 @@ public class PlanarStudy {
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         // On final result aggregation, also accept |G_result| = |G| / INCLUDE_QUOTIENT.
         // 0 or 1 = only full group order (normal behavior).
-        int INCLUDE_QUOTIENT = 2;
+        int INCLUDE_QUOTIENT = 0;
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         boolean SORT_CANDIDATES = true; // sort Phase 1 pairs before Phase 2 for stable indices
@@ -93,8 +93,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.he2; 
-        String groupName = "he2";
+        String generator = Generators.sp_8_2_136; 
+        String groupName = "sp_8_2_136";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -273,6 +273,7 @@ public class PlanarStudy {
             AtomicBoolean skipCurrent = new AtomicBoolean(false);
 
             lines2.forEachParallel(l2 -> {
+                waitWhilePaused();
                 if (skipCurrent.get() || skipRemaining.get()) return;
                 GroupExplorer ge = geL.get();
                 int[][][] parsed2 = GroupExplorer.parseOperationsArr(l2);
@@ -480,6 +481,7 @@ public class PlanarStudy {
 
                 // Inner loop: iterate over individual lines from file3 in parallel.
                 lines3.forEachParallel(l -> {
+                    waitWhilePaused();
                     if (skipCurrentP2.get() || skipRemainingP2.get()) return;
                     p2InnerCount.incrementAndGet();
                     pollInteractiveCommand(skipCurrentP2, skipRemainingP2, () -> {
@@ -641,18 +643,41 @@ public class PlanarStudy {
     }
 
     private static final Object STDIN_LOCK = new Object();
+    private static final AtomicBoolean PAUSED = new AtomicBoolean(false);
+
+    /**
+     * Block the calling thread in 1s sleeps while {@link #PAUSED} is set.
+     * Polls stdin between sleeps so {@code resume} can still be handled.
+     */
+    private static void waitWhilePaused() {
+        while (PAUSED.get()) {
+            // Must poll stdin here — otherwise all workers sleep forever and never see "resume".
+            pollInteractiveCommand(null, null, null);
+            if (!PAUSED.get()) return;
+            try {
+                Thread.sleep(1000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
 
     private static void printInteractiveHelp() {
         System.out.println("Commands:");
         System.out.println("  skip_current    skip rest of current conjugacy class / candidate");
         System.out.println("  skip_remaining  skip all remaining work in this phase");
         System.out.println("  progress        print current progress");
+        System.out.println("  pause           pause worker threads (1s sleep loop)");
+        System.out.println("  resume          resume worker threads");
         System.out.println("  (anything else) show this help");
     }
 
     /**
      * If a full line is waiting on stdin, read and dispatch it.
      * Safe to call from many worker threads; only one reads/handles at a time.
+     * When {@code skipCurrent}/{@code skipRemaining}/{@code printProgress} are null
+     * (pause wait loop), only pause/resume/help are handled.
      */
     private static void pollInteractiveCommand(
             AtomicBoolean skipCurrent,
@@ -671,16 +696,36 @@ public class PlanarStudy {
                 if (cmd.isEmpty()) return;
                 switch (cmd.toLowerCase()) {
                     case "skip_current":
+                        if (skipCurrent == null) {
+                            System.out.println("Command: skip_current (ignored while pausing)");
+                            break;
+                        }
                         System.out.println("Command: skip_current");
                         skipCurrent.set(true);
                         break;
                     case "skip_remaining":
+                        if (skipCurrent == null || skipRemaining == null) {
+                            System.out.println("Command: skip_remaining (ignored while pausing)");
+                            break;
+                        }
                         System.out.println("Command: skip_remaining");
                         skipCurrent.set(true);
                         skipRemaining.set(true);
                         break;
                     case "progress":
+                        if (printProgress == null) {
+                            System.out.println("Paused (no progress callback in wait loop)");
+                            break;
+                        }
                         printProgress.run();
+                        break;
+                    case "pause":
+                        System.out.println("Command: pause");
+                        PAUSED.set(true);
+                        break;
+                    case "resume":
+                        System.out.println("Command: resume");
+                        PAUSED.set(false);
                         break;
                     default:
                         System.out.println("Unknown command: " + cmd);
@@ -690,6 +735,11 @@ public class PlanarStudy {
             } catch (IOException e) {
                 System.err.println("Failed to read interactive command: " + e.getMessage());
             }
+        }
+        // After handling a command (including pause), park if needed — but only when
+        // called from worker loops with a progress callback, not from waitWhilePaused itself.
+        if (printProgress != null) {
+            waitWhilePaused();
         }
     }
 
@@ -770,6 +820,7 @@ public class PlanarStudy {
         void forEachParallel(java.util.function.Consumer<String> action,
                              java.util.function.BooleanSupplier cancelled) {
             IntStream.of(order).parallel().forEach(i -> {
+                waitWhilePaused();
                 if (cancelled.getAsBoolean()) return;
                 action.accept(lines.get(i));
             });
@@ -818,9 +869,11 @@ public class PlanarStudy {
             int blockSize = pbin.getBlockSize();
             int n = pbin.size();
             IntStream.of(blockOrder).parallel().forEach(b -> {
+                waitWhilePaused();
                 if (cancelled.getAsBoolean()) return;
                 String[] entries = loadBlockEntries(b, blockSize, n);
                 for (String entry : entries) {
+                    waitWhilePaused();
                     if (cancelled.getAsBoolean()) return;
                     action.accept(entry);
                 }
@@ -889,6 +942,7 @@ public class PlanarStudy {
 
         private void runLoop() {
             while (running.get()) {
+                waitWhilePaused();
                 try {
                     killStaleProcesses();
                     Thread.sleep(DREADNAUT_WATCHDOG_INTERVAL_SECONDS * 1000L);
@@ -1149,6 +1203,7 @@ public class PlanarStudy {
         QuarantineLog quarantine
     ) {
         batch.parallelStream().forEach(line -> {
+            waitWhilePaused();
             int[][][] candidate = GroupExplorer.parseOperationsArr(line);
             String canonicalLabeling = getCanonicalLabelingOrQuarantine(
                 dreadnautL.get(), candidate, directed, quarantine, errors);
