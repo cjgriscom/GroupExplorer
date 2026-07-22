@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
@@ -80,6 +81,8 @@ public class PlanarStudy {
         String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
+        int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
+        AbstractResultFilter resultFilter = new NoOpResultFilter(resultFilterQueueSize);
 
         MemorySettings mem = MemorySettings.COMPRESS_LONG;
 
@@ -93,8 +96,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.sp_8_2_136; 
-        String groupName = "sp_8_2_136";
+        String generator = Generators.mcl_2; 
+        String groupName = "mcl_2";
 
         // Print configuration
         System.out.println("Group: " + groupName);
@@ -110,6 +113,8 @@ public class PlanarStudy {
         System.out.println("Include quotient: " + INCLUDE_QUOTIENT +
             (INCLUDE_QUOTIENT > 1 ? " (also accept |G|/" + INCLUDE_QUOTIENT + ")" : " (full order only)"));
         System.out.println("Directed: " + directed);
+        System.out.println("Result filter: " + resultFilter.getClass().getSimpleName() +
+            " (queue size " + resultFilterQueueSize + ")");
         System.out.println("Generate: " + generate);
         System.out.println("Sort candidates: " + SORT_CANDIDATES);
         if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
@@ -225,6 +230,9 @@ public class PlanarStudy {
         PrintStream phase1Out = new PrintStream(phase1FilePath);
         QuarantineLog phase1Quarantine = new QuarantineLog(phase1FilePath);
         int[] found = new int[repetitions + 1];
+        final boolean phase1LastLoop = repetitions == 0;
+        resultFilter.setOutput(phase1Out);
+        resultFilter.resetStats(0);
 
         AtomicInteger p1_1_count = new AtomicInteger(0);
 
@@ -289,7 +297,10 @@ public class PlanarStudy {
                     System.out.println("Progress (Phase 1):");
                     System.out.println("  conjugacy class: " + p1_1_count.get() + " / " + lines1.size());
                     System.out.println("  inner pairs: " + p1_2_count.get() + " / " + lines2.size());
-                    System.out.println("  candidates so far: " + candidatePairs.size());
+                    System.out.println("  " + resultFilter.acceptedCount() + " results, " +
+                        resultFilter.queuedCount() + " queued, " +
+                        resultFilter.rejectedCount() + " rej., " +
+                        candidatePairs.size() + " cand.");
                 });
                 if (skipCurrent.get() || skipRemaining.get()) return;
                 // Combine the two generators into a pair.
@@ -372,18 +383,33 @@ public class PlanarStudy {
                 }
                 final boolean passesGeometryFilterFinal = passesGeometryFilter;
 
+                boolean submitResult = false;
                 synchronized (phase1Lock) {
                     // Prevent duplicates while lock is released
                     if (!canonicalGraphs.add(canonicalLabeling)) return;
-                    candidatePairs.add(combinedPair);
-                    pairGraphs.add(candGraph);
                     if (acceptedFinalOrders.contains(size) && passesGeometryFilterFinal) {
-                        phase1Out.println(GroupExplorer.generatorsToString(combinedPair));
-                        found[0]++;
+                        submitResult = true;
+                    } else if (!phase1LastLoop) {
+                        candidatePairs.add(combinedPair);
+                        pairGraphs.add(candGraph);
                     }
-
-                    System.out.println("    Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[0] + " results and " + candidatePairs.size() + " candidates");
                 }
+                if (submitResult) {
+                    resultFilter.addUnchecked(
+                        GroupExplorer.generatorsToString(combinedPair),
+                        phase1LastLoop,
+                        phase1LastLoop ? null : () -> {
+                            synchronized (phase1Lock) {
+                                candidatePairs.add(combinedPair);
+                                pairGraphs.add(candGraph);
+                            }
+                        });
+                }
+                System.out.println("    Found new"+(requirePlanar ?" planar ":" ")+"graph with order " + size + " - " +
+                    resultFilter.acceptedCount() + " results, " +
+                    resultFilter.queuedCount() + " queued, " +
+                    resultFilter.rejectedCount() + " rej., " +
+                    candidatePairs.size() + " cand.");
             }, () -> skipCurrent.get() || skipRemaining.get());
             if (skipCurrent.get() && !skipRemaining.get()) {
                 System.out.println("  Skipped rest of conjugacy class " + p1_1_count.get());
@@ -393,9 +419,14 @@ public class PlanarStudy {
                 break;
             }
         }
+        resultFilter.drain();
+        found[0] = resultFilter.acceptedCount();
         phase1Out.close();
         phase1Quarantine.close();
-        System.out.println("Phase 1 completed. Unique candidate pairs: " + candidatePairs.size());
+        System.out.println("Phase 1 completed. Unique candidate pairs: " + candidatePairs.size() +
+            " - " + resultFilter.acceptedCount() + " results, " +
+            resultFilter.rejectedCount() + " rej., " +
+            candidatePairs.size() + " cand.");
         if (SORT_CANDIDATES) {
             candidatePairs.sort(Comparator.comparing(pair -> GroupExplorer.generatorsToString(pair)));
             System.out.println("Sorted candidate pairs for stable Phase 2 indices: " + candidatePairs.size());
@@ -463,6 +494,8 @@ public class PlanarStudy {
             PrintStream phase2RoundOut = resumeThisRound
                 ? new PrintStream(new FileOutputStream(roundFilePath, true))
                 : new PrintStream(roundFilePath);
+            resultFilter.setOutput(phase2RoundOut);
+            resultFilter.resetStats(resumeThisRound ? found[rFinal] : 0);
             if (resumeThisRound) {
                 System.out.println("Appending to " + roundFileName + ", starting at candidate " + startCandidate +
                     " of " + currentCandidates.size());
@@ -489,8 +522,10 @@ public class PlanarStudy {
                         System.out.println("  candidate: " + iDisp + " / " + sizeDisp);
                         System.out.println("  inner generators: " + p2InnerCount.get() + " / " + lines3.size());
                         System.out.println("  disjoint rejected: " + disjointRejected.get() + " / " + p2InnerCount.get());
-                        System.out.println("  results this round: " + found[rFinal]);
-                        System.out.println("  new candidates: " + newCandidates.size());
+                        System.out.println("  " + resultFilter.acceptedCount() + " results, " +
+                            resultFilter.queuedCount() + " queued, " +
+                            resultFilter.rejectedCount() + " rej., " +
+                            newCandidates.size() + " cand.");
                     });
                     if (skipCurrentP2.get() || skipRemainingP2.get()) return;
                     // Parse the line from file2 and use its generator (index 0).
@@ -590,20 +625,35 @@ public class PlanarStudy {
                     }
                     final boolean passesGeometryFilterFinal = passesGeometryFilter;
 
+                    boolean submitResult = false;
                     synchronized (phase1Lock) {
                         // Prevent duplicates while lock is released
                         if (!canonicalGraphs.add(canonicalLabeling)) return;
-                        if (!lastLoop) newCandidates.add(newCandidate); // COMMENT OUT if too many candidates
-                        if (!lastLoop) newCandidateGraphs.add(candGraph);
                         if (acceptedFinalOrders.contains(size) && passesGeometryFilterFinal) {
-                            phase2RoundOut.println(GroupExplorer.generatorsToString(newCandidate));
-                            found[rFinal]++;
-                            System.out.println("    ("+(iDisp)+"/"+sizeDisp+") Found new "+(!requirePlanar ? "non-" : "")+"planar graph with order " + size + " - " + found[rFinal] + " results and " + newCandidates.size() + " candidates");
-
+                            submitResult = true;
+                        } else if (!lastLoop) {
+                            newCandidates.add(newCandidate);
+                            newCandidateGraphs.add(candGraph);
                         }
                         roundCountAtomic.incrementAndGet();
-
                     }
+                    if (submitResult) {
+                        resultFilter.addUnchecked(
+                            GroupExplorer.generatorsToString(newCandidate),
+                            lastLoop,
+                            lastLoop ? null : () -> {
+                                synchronized (phase1Lock) {
+                                    newCandidates.add(newCandidate);
+                                    newCandidateGraphs.add(candGraph);
+                                }
+                            });
+                        System.out.println("    ("+(iDisp)+"/"+sizeDisp+") Found new"+(requirePlanar ?" planar ":" ")+"graph with order " + size + " - " +
+                            resultFilter.acceptedCount() + " results, " +
+                            resultFilter.queuedCount() + " queued, " +
+                            resultFilter.rejectedCount() + " rej., " +
+                            newCandidates.size() + " cand.");
+                    }
+
                 }, () -> skipCurrentP2.get() || skipRemainingP2.get());
                 roundCount += roundCountAtomic.get();
                 System.out.println("  Completed inner loop for candidate " + i + " of " + currentCandidates.size());
@@ -615,15 +665,260 @@ public class PlanarStudy {
                     break;
                 }
             }
+            resultFilter.drain();
+            found[rFinal] = resultFilter.acceptedCount();
             phase2RoundOut.close();
             roundQuarantine.close();
-            System.out.println("Round " + r + " completed. Unique new candidates: " + roundCount);
+            System.out.println("Round " + r + " completed. Unique new candidates: " + roundCount +
+                " - " + resultFilter.acceptedCount() + " results, " +
+                resultFilter.rejectedCount() + " rej., " +
+                newCandidates.size() + " cand.");
             currentCandidates = newCandidates;
         }
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + groupOrderFinal + " found: " + Arrays.toString(found));
         System.out.println("Errors: " + errors);
         } finally {
+            resultFilter.close();
             dreadnautWatchdog.stop();
+        }
+    }
+
+    /**
+     * Strip an optional trailing filter comment from a results line.
+     * Comments are delimited by {@code " # "} (see {@link AbstractResultFilter}).
+     */
+    static String stripResultComment(String line) {
+        if (line == null) return null;
+        int idx = line.indexOf(" # ");
+        return idx < 0 ? line : line.substring(0, idx);
+    }
+
+    /**
+     * Decision returned by {@link AbstractResultFilter#process(String)}.
+     */
+    static final class FilterDecision {
+        enum Kind { ACCEPT, REJECT_TO_CANDIDATES, REJECT_DISCARD }
+
+        final Kind kind;
+        /** Optional comment appended as {@code " # " + comment} when accepting. */
+        final String comment;
+
+        private FilterDecision(Kind kind, String comment) {
+            this.kind = kind;
+            this.comment = comment;
+        }
+
+        static FilterDecision accept() {
+            return accept(null);
+        }
+
+        static FilterDecision accept(String comment) {
+            return new FilterDecision(Kind.ACCEPT, comment);
+        }
+
+        static FilterDecision rejectToCandidates() {
+            return new FilterDecision(Kind.REJECT_TO_CANDIDATES, null);
+        }
+
+        static FilterDecision rejectDiscard() {
+            return new FilterDecision(Kind.REJECT_DISCARD, null);
+        }
+
+        boolean isReject() {
+            return kind == Kind.REJECT_TO_CANDIDATES || kind == Kind.REJECT_DISCARD;
+        }
+    }
+
+    /**
+     * Async bounded queue that filters result strings before writing them to the
+     * output file. Subclasses implement {@link #process(String)} to accept
+     * (optionally with a comment), reject-to-candidates, or discard.
+     * <p>
+     * {@link #add(String, boolean, Runnable)} blocks when the queue is full.
+     * On {@code lastLoop}, reject-to-candidates is forced to discard.
+     */
+    abstract static class AbstractResultFilter {
+        private static final class QueuedResult {
+            final String result;
+            final boolean lastLoop;
+            final Runnable retainCandidate;
+
+            QueuedResult(String result, boolean lastLoop, Runnable retainCandidate) {
+                this.result = result;
+                this.lastLoop = lastLoop;
+                this.retainCandidate = retainCandidate;
+            }
+        }
+
+        private final ArrayBlockingQueue<QueuedResult> queue;
+        private final Thread worker;
+        private final AtomicInteger accepted = new AtomicInteger();
+        private final AtomicInteger rejected = new AtomicInteger();
+        private final AtomicInteger queued = new AtomicInteger();
+        private final Object drainLock = new Object();
+        private volatile PrintStream out;
+        private volatile boolean shutdown;
+
+        protected AbstractResultFilter(int maxQueueSize) {
+            if (maxQueueSize < 1) {
+                throw new IllegalArgumentException("maxQueueSize must be >= 1");
+            }
+            this.queue = new ArrayBlockingQueue<>(maxQueueSize);
+            this.worker = new Thread(this::runLoop, "planar-study-result-filter");
+            this.worker.setDaemon(true);
+            this.worker.start();
+        }
+
+        /** Subclasses decide accept / reject-to-candidates / discard for each result. */
+        protected abstract FilterDecision process(String result);
+
+        public final void setOutput(PrintStream out) {
+            this.out = out;
+        }
+
+        public final void resetStats(int acceptedSoFar) {
+            accepted.set(acceptedSoFar);
+            rejected.set(0);
+        }
+
+        public final int acceptedCount() { return accepted.get(); }
+        public final int rejectedCount() { return rejected.get(); }
+        public final int queuedCount() { return queued.get(); }
+
+        /**
+         * Enqueue a result for async filtering. Blocks if the queue is at capacity.
+         *
+         * @param result           generator result string
+         * @param lastLoop         when true, rejected results are always discarded
+         * @param retainCandidate  run if the result should remain a next-round candidate
+         *                         (accept, or reject-to-candidates when not lastLoop);
+         *                         may be null
+         */
+        public final void add(String result, boolean lastLoop, Runnable retainCandidate)
+                throws InterruptedException {
+            queued.incrementAndGet();
+            try {
+                queue.put(new QueuedResult(result, lastLoop, retainCandidate));
+            } catch (InterruptedException e) {
+                queued.decrementAndGet();
+                notifyDrainWaiters();
+                throw e;
+            }
+        }
+
+        /** {@link #add} wrapping {@link InterruptedException} as unchecked. */
+        public final void addUnchecked(String result, boolean lastLoop, Runnable retainCandidate) {
+            try {
+                add(result, lastLoop, retainCandidate);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while queueing result", e);
+            }
+        }
+
+        /** Block until all queued results have been processed. */
+        public final void drain() {
+            synchronized (drainLock) {
+                while (queued.get() > 0) {
+                    try {
+                        drainLock.wait(100L);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+
+        public final void close() {
+            shutdown = true;
+            worker.interrupt();
+            try {
+                worker.join(5000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private void runLoop() {
+            while (!shutdown) {
+                QueuedResult item;
+                try {
+                    item = queue.take();
+                } catch (InterruptedException e) {
+                    if (shutdown) break;
+                    continue;
+                }
+                try {
+                    handle(item);
+                } finally {
+                    queued.decrementAndGet();
+                    notifyDrainWaiters();
+                }
+            }
+            // Drain anything left after shutdown so waiters are not stuck.
+            QueuedResult leftover;
+            while ((leftover = queue.poll()) != null) {
+                try {
+                    handle(leftover);
+                } finally {
+                    queued.decrementAndGet();
+                    notifyDrainWaiters();
+                }
+            }
+        }
+
+        private void handle(QueuedResult item) {
+            FilterDecision decision = process(item.result);
+            if (item.lastLoop && decision.isReject()) {
+                decision = FilterDecision.rejectDiscard();
+            }
+            switch (decision.kind) {
+                case ACCEPT: {
+                    PrintStream sink = out;
+                    if (sink != null) {
+                        if (decision.comment != null && !decision.comment.isEmpty()) {
+                            sink.println(item.result + " # " + decision.comment);
+                        } else {
+                            sink.println(item.result);
+                        }
+                    }
+                    accepted.incrementAndGet();
+                    if (item.retainCandidate != null) {
+                        item.retainCandidate.run();
+                    }
+                    break;
+                }
+                case REJECT_TO_CANDIDATES:
+                    rejected.incrementAndGet();
+                    if (item.retainCandidate != null) {
+                        item.retainCandidate.run();
+                    }
+                    break;
+                case REJECT_DISCARD:
+                    rejected.incrementAndGet();
+                    break;
+                default:
+                    throw new IllegalStateException("Unknown decision: " + decision.kind);
+            }
+        }
+
+        private void notifyDrainWaiters() {
+            synchronized (drainLock) {
+                drainLock.notifyAll();
+            }
+        }
+    }
+
+    /** Pass-through filter: never rejects and never adds a comment. */
+    static final class NoOpResultFilter extends AbstractResultFilter {
+        NoOpResultFilter(int maxQueueSize) {
+            super(maxQueueSize);
+        }
+
+        @Override
+        protected FilterDecision process(String result) {
+            return FilterDecision.accept();
         }
     }
 
@@ -772,6 +1067,7 @@ public class PlanarStudy {
             try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
+                    line = stripResultComment(line);
                     if (!line.trim().isEmpty()) {
                         lines.add(line);
                     }
@@ -1169,6 +1465,7 @@ public class PlanarStudy {
         try (BufferedReader reader = new BufferedReader(new FileReader(resumeFile))) {
             String line;
             while ((line = reader.readLine()) != null) {
+                line = stripResultComment(line);
                 if (line.trim().isEmpty()) {
                     continue;
                 }
