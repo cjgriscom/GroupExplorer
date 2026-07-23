@@ -23,6 +23,10 @@ end of line). The encoder joins such continuations before parsing each generator
 Blank lines within a continued generator are ignored; blank lines between
 generators are still skipped.
 
+Trailing comments are ignored on encode: text after the first `#` character
+(with index > 0) is stripped before parsing. Comments are not preserved on
+decode.
+
 ---
 
 ## Binary layout
@@ -35,16 +39,18 @@ significant group first.
 ```
 ┌─────────────────── HEADER ───────────────────┐
 │ bytes[4]  magic         "PBIN"               │
-│ uint8     version       0x01                 │
+│ uint8     version       0x01 or 0x02         │
 │ uint8     flags         bit 0: bare format   │
 │ uint8     compression   0=none, 1=zlib       │
 │ varint    blockSize     generators per block  │
 │ varint    N             max 1-indexed point   │
 │ varint    M             total generators      │
 ├─────────────────── DIRECTORY ────────────────┤
-│ uint32[B] offsets       B = ⌈M / blockSize⌉  │
+│ offset[B]               B = ⌈M / blockSize⌉  │
 │                         byte offset from file │
 │                         start to each block   │
+│   v1 (0x01): uint32[B]  (files must be <4GiB) │
+│   v2 (0x02): uint64[B]  (supports ≥4GiB)      │
 ├─────────────────── BLOCKS ───────────────────┤
 │ block[0]                                      │
 │ block[1]                                      │
@@ -52,6 +58,9 @@ significant group first.
 │ block[B−1]                                    │
 └──────────────────────────────────────────────┘
 ```
+
+Version **0x02** is the current write format. Readers accept both v1 and v2.
+v1 cannot represent block offsets ≥ 2³²; files at or above 4 GiB must use v2.
 
 ### Flags byte
 
@@ -153,12 +162,16 @@ pbin -dk <file.pbin>            Decode, keep original
 Encode options:
   -c MODE       Compression: 0=none, 1=zlib (default: 1)
   -b BLOCKSIZE  Generators per block (default: 16)
+  -j THREADS    Parallel encode threads (default: CPU count; 0=auto)
 ```
 
 Both the encoder and decoder are streaming: only one block of generators is
-held in memory at a time. The encoder makes two passes over the text input
-(count/scan, then encode). The decoder reads the header and directory, then
-seeks to each block in turn.
+held in memory at a time. The encoder makes a lightweight first pass over the
+text input (count generators, find N, detect bare vs bracketed format), then a
+second pass that parses and encodes in parallel batches. The decoder reads the
+header and directory, then seeks to each block in turn.
+
+Run `make test` in the `pbin/` directory for round-trip regression tests.
 
 In Java, use `PbinFile.open(path)` for random access without loading the
 entire file. `PbinFile.get(index)` decodes one generator on demand, caching

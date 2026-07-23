@@ -1,6 +1,6 @@
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wpedantic
-LDLIBS    = -lz
+LDLIBS    = -lz -pthread
 
 PREFIX   ?= /usr/local
 
@@ -14,4 +14,7 @@ install: pbin
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 755 pbin $(DESTDIR)$(PREFIX)/bin/
 
-.PHONY: clean install
+test: pbin
+	./roundtrip_test.sh
+
+.PHONY: clean install test

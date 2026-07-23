@@ -2,15 +2,17 @@
 // See PBIN.md for format specification.
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #include <zlib.h>
 
@@ -178,58 +180,105 @@ struct Generator {
 // Text ↔ data model
 // ================================================================
 
-static std::vector<int> parse_cycle_str(const std::string &s) {
-    std::string cleaned;
-    for (char c : s)
-        if (c != '(' && c != ')') cleaned += c;
-    std::vector<int> pts;
-    if (cleaned.empty()) return pts;
-    std::istringstream iss(cleaned);
-    std::string tok;
-    while (std::getline(iss, tok, ','))
-        pts.push_back(std::stoi(tok));
-    return pts;
+static const char *skip_ws(const char *p, const char *end) {
+    while (p < end && std::isspace(static_cast<unsigned char>(*p))) ++p;
+    return p;
 }
 
-static CycleSet parse_cycle_set_str(const std::string &s) {
+static int parse_int(const char *&p, const char *end) {
+    p = skip_ws(p, end);
+    if (p >= end || !std::isdigit(static_cast<unsigned char>(*p)))
+        throw std::runtime_error("expected integer in cycle notation");
+    int val = 0;
+    while (p < end && std::isdigit(static_cast<unsigned char>(*p))) {
+        val = val * 10 + (*p - '0');
+        ++p;
+    }
+    return val;
+}
+
+static void parse_cycle(const char *&p, const char *end, std::vector<int> &cyc) {
+    p = skip_ws(p, end);
+    if (p >= end || *p != '(')
+        throw std::runtime_error("expected '(' starting cycle");
+    ++p;
+    cyc.clear();
+    for (;;) {
+        p = skip_ws(p, end);
+        if (p >= end)
+            throw std::runtime_error("unclosed cycle");
+        if (*p == ')') {
+            ++p;
+            return;
+        }
+        cyc.push_back(parse_int(p, end));
+        p = skip_ws(p, end);
+        if (p < end && *p == ',') {
+            ++p;
+            continue;
+        }
+        if (p < end && *p == ')') {
+            ++p;
+            return;
+        }
+        throw std::runtime_error("malformed cycle");
+    }
+}
+
+static CycleSet parse_cycle_set(const char *&p, const char *end) {
     CycleSet cs;
-    size_t pos = 0;
-    while (pos < s.size()) {
-        size_t nxt = s.find(")(", pos);
-        std::string part = (nxt == std::string::npos)
-            ? s.substr(pos) : s.substr(pos, nxt - pos);
-        auto cyc = parse_cycle_str(part);
+    for (;;) {
+        p = skip_ws(p, end);
+        if (p >= end || *p != '(') break;
+        std::vector<int> cyc;
+        parse_cycle(p, end, cyc);
         if (!cyc.empty()) cs.cycles.push_back(std::move(cyc));
-        if (nxt == std::string::npos) break;
-        pos = nxt + 2;
+        p = skip_ws(p, end);
+        if (p < end && *p == '(') continue;
+        break;
     }
     return cs;
 }
 
 static Generator parse_generator(const std::string &line) {
     Generator gen;
-    std::string s = line;
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))  s.pop_back();
-    if (s.empty()) return gen;
+    const char *p = line.data();
+    const char *end = p + line.size();
+    p = skip_ws(p, end);
+    if (p >= end) return gen;
 
-    bool bracketed = (s.front() == '[');
-    if (bracketed) s = s.substr(1, s.size() - 2);
+    const bool bracketed = (*p == '[');
+    if (bracketed) ++p;
 
     if (bracketed) {
-        size_t pos = 0;
-        while (pos < s.size()) {
-            size_t nxt = s.find("),(", pos);
-            std::string part = (nxt == std::string::npos)
-                ? s.substr(pos) : s.substr(pos, nxt - pos);
-            auto cs = parse_cycle_set_str(part);
+        for (;;) {
+            p = skip_ws(p, end);
+            if (p >= end) break;
+            if (*p == ']') {
+                ++p;
+                break;
+            }
+            auto cs = parse_cycle_set(p, end);
             if (!cs.cycles.empty()) gen.cycle_sets.push_back(std::move(cs));
-            if (nxt == std::string::npos) break;
-            pos = nxt + 3;
+            p = skip_ws(p, end);
+            if (p < end && *p == ',') {
+                ++p;
+                p = skip_ws(p, end);
+                if (p < end && *p == '(') continue;
+            }
+            if (p < end && *p == ']') {
+                ++p;
+                break;
+            }
+            if (p >= end) break;
+            throw std::runtime_error("malformed bracketed generator");
         }
     } else {
-        auto cs = parse_cycle_set_str(s);
+        auto cs = parse_cycle_set(p, end);
         if (!cs.cycles.empty()) gen.cycle_sets.push_back(std::move(cs));
+        p = skip_ws(p, end);
+        if (p < end)
+            throw std::runtime_error("trailing garbage in generator line");
     }
     return gen;
 }
@@ -394,7 +443,10 @@ static std::vector<uint8_t> zlib_decompress(const uint8_t *data, size_t len) {
 // ================================================================
 
 static constexpr char     PBIN_MAGIC[4] = {'P','B','I','N'};
-static constexpr uint8_t  PBIN_VERSION  = 0x01;
+// v1: uint32 directory offsets (files must be < 4 GiB)
+// v2: uint64 directory offsets (supports files >= 4 GiB)
+static constexpr uint8_t  PBIN_VERSION  = 0x02;
+static constexpr uint8_t  PBIN_VERSION_V1 = 0x01;
 static constexpr size_t   IO_BUF_SIZE   = 1 << 20; // 1 MiB
 
 static uint32_t read_u32_le(const uint8_t *p) {
@@ -402,6 +454,11 @@ static uint32_t read_u32_le(const uint8_t *p) {
           (static_cast<uint32_t>(p[1]) << 8) |
           (static_cast<uint32_t>(p[2]) << 16)|
           (static_cast<uint32_t>(p[3]) << 24);
+}
+
+static uint64_t read_u64_le(const uint8_t *p) {
+    return static_cast<uint64_t>(read_u32_le(p)) |
+          (static_cast<uint64_t>(read_u32_le(p + 4)) << 32);
 }
 
 static void write_u32_le(std::ostream &os, uint32_t v) {
@@ -412,6 +469,11 @@ static void write_u32_le(std::ostream &os, uint32_t v) {
         static_cast<char>((v >> 24) & 0xFF),
     };
     os.write(b, 4);
+}
+
+static void write_u64_le(std::ostream &os, uint64_t v) {
+    write_u32_le(os, static_cast<uint32_t>(v));
+    write_u32_le(os, static_cast<uint32_t>(v >> 32));
 }
 
 static void write_varint(std::ostream &os, uint32_t val) {
@@ -427,6 +489,62 @@ static void trim_line(std::string &line) {
     while (!line.empty() &&
            std::isspace(static_cast<unsigned char>(line.back())))
         line.pop_back();
+}
+
+// Strip trailing comments: first '#' with index > 0 (GraphVisualizer rule).
+static void strip_comment(std::string &line) {
+    for (size_t i = 0; i < line.size(); ++i) {
+        if (line[i] == '#' && i > 0) {
+            size_t end = i;
+            while (end > 0 &&
+                   std::isspace(static_cast<unsigned char>(line[end - 1])))
+                --end;
+            line.resize(end);
+            return;
+        }
+    }
+}
+
+static void light_scan_line(const char *p, const char *end,
+                            int &max_point, bool &all_bare) {
+    p = skip_ws(p, end);
+    if (p >= end) return;
+    if (*p == '[') all_bare = false;
+    while (p < end) {
+        if (std::isdigit(static_cast<unsigned char>(*p))) {
+            int val = 0;
+            while (p < end && std::isdigit(static_cast<unsigned char>(*p))) {
+                val = val * 10 + (*p - '0');
+                ++p;
+            }
+            if (val > max_point) max_point = val;
+        } else {
+            ++p;
+        }
+    }
+}
+
+static bool read_logical_line(std::ifstream &ifs, std::string &line);
+
+static void light_pass1(const std::string &in_path,
+                        uint32_t &M, int &max_point, bool &all_bare) {
+    M = 0;
+    max_point = 0;
+    all_bare = true;
+    std::ifstream ifs(in_path);
+    if (!ifs) throw std::runtime_error("cannot open " + in_path);
+    std::vector<char> in_buf(IO_BUF_SIZE);
+    ifs.rdbuf()->pubsetbuf(in_buf.data(),
+                           static_cast<std::streamsize>(in_buf.size()));
+    std::string line;
+    while (read_logical_line(ifs, line)) {
+        strip_comment(line);
+        trim_line(line);
+        if (line.empty()) continue;
+        ++M;
+        light_scan_line(line.data(), line.data() + line.size(),
+                        max_point, all_bare);
+    }
 }
 
 // Read one logical input line, joining physical lines that end with '\'.
@@ -456,11 +574,20 @@ static bool read_logical_line(std::ifstream &ifs, std::string &line) {
     }
 }
 
-static void update_max_point(const Generator &gen, int &max_point) {
-    for (auto &cs : gen.cycle_sets)
-        for (auto &cyc : cs.cycles)
-            for (int p : cyc)
-                if (p > max_point) max_point = p;
+static std::vector<uint8_t> build_block_payload(
+        const std::vector<std::vector<uint8_t>> &block_raw) {
+    std::vector<uint8_t> payload;
+    write_varint(payload, static_cast<uint32_t>(block_raw.size()));
+    for (const auto &raw : block_raw)
+        write_varint(payload, static_cast<uint32_t>(raw.size()));
+    for (const auto &raw : block_raw)
+        payload.insert(payload.end(), raw.begin(), raw.end());
+    return payload;
+}
+
+static unsigned default_thread_count() {
+    const unsigned n = std::thread::hardware_concurrency();
+    return n > 0 ? n : 4;
 }
 
 // Read varints from an ifstream at the current position.
@@ -486,6 +613,13 @@ static uint32_t read_u32_le_stream(std::ifstream &ifs) {
     return read_u32_le(reinterpret_cast<uint8_t *>(b));
 }
 
+static uint64_t read_u64_le_stream(std::ifstream &ifs) {
+    char b[8];
+    ifs.read(b, 8);
+    if (ifs.gcount() != 8) throw std::runtime_error("truncated u64");
+    return read_u64_le(reinterpret_cast<uint8_t *>(b));
+}
+
 // Optionally compress a payload according to compression mode
 static std::vector<uint8_t> maybe_compress(const std::vector<uint8_t> &data,
                                             uint8_t compression) {
@@ -502,38 +636,30 @@ static std::vector<uint8_t> maybe_decompress(const uint8_t *data, size_t len,
     return {data, data + len};
 }
 
-// ── encode (two-pass, one block in memory) ──────────────────
+// ── encode (light pass 1, threaded pass 2) ──────────────────
 
 static void encode_file(const std::string &in_path,
                          const std::string &out_path,
                          uint8_t compression,
-                         uint32_t block_size) {
-    // Pass 1: count generators and find N
+                         uint32_t block_size,
+                         unsigned num_threads) {
+    if (num_threads == 0) num_threads = default_thread_count();
+
+    uint32_t M = 0;
     int max_point = 0;
     bool all_bare = true;
-    uint32_t M = 0;
-    {
-        std::ifstream ifs(in_path);
-        if (!ifs) throw std::runtime_error("cannot open " + in_path);
-        std::vector<char> in_buf(IO_BUF_SIZE);
-        ifs.rdbuf()->pubsetbuf(in_buf.data(), static_cast<std::streamsize>(in_buf.size()));
-        std::string line;
-        while (read_logical_line(ifs, line)) {
-            if (line.empty()) continue;
-            ++M;
-            if (!line.empty() && line.front() == '[') all_bare = false;
-            update_max_point(parse_generator(line), max_point);
-        }
-    }
+    light_pass1(in_path, M, max_point, all_bare);
     if (M == 0) throw std::runtime_error("input file is empty");
 
-    int N = max_point;
-    uint32_t num_blocks = (M + block_size - 1) / block_size;
+    const int N = max_point;
+    const uint32_t num_blocks = (M + block_size - 1) / block_size;
+    const uint32_t batch_lines = num_threads * block_size * 4;
 
     std::ofstream ofs(out_path, std::ios::binary);
     if (!ofs) throw std::runtime_error("cannot create " + out_path);
     std::vector<char> out_buf(IO_BUF_SIZE);
-    ofs.rdbuf()->pubsetbuf(out_buf.data(), static_cast<std::streamsize>(out_buf.size()));
+    ofs.rdbuf()->pubsetbuf(out_buf.data(),
+                           static_cast<std::streamsize>(out_buf.size()));
 
     ofs.write(PBIN_MAGIC, 4);
     ofs.put(static_cast<char>(PBIN_VERSION));
@@ -545,64 +671,108 @@ static void encode_file(const std::string &in_path,
 
     const std::streampos dir_off = ofs.tellp();
     for (uint32_t b = 0; b < num_blocks; ++b)
-        write_u32_le(ofs, 0);
+        write_u64_le(ofs, 0);
 
-    // Pass 2: encode and write blocks
     std::ifstream ifs(in_path);
     if (!ifs) throw std::runtime_error("cannot reopen " + in_path);
     std::vector<char> in_buf(IO_BUF_SIZE);
-    ifs.rdbuf()->pubsetbuf(in_buf.data(), static_cast<std::streamsize>(in_buf.size()));
+    ifs.rdbuf()->pubsetbuf(in_buf.data(),
+                           static_cast<std::streamsize>(in_buf.size()));
 
-    std::vector<std::vector<uint8_t>> block_raw;
-    block_raw.reserve(block_size);
     uint32_t block_idx = 0;
 
-    auto flush_block = [&]() {
-        if (block_raw.empty()) return;
-
-        std::vector<uint8_t> payload;
-        write_varint(payload, static_cast<uint32_t>(block_raw.size()));
-        for (auto &raw : block_raw)
-            write_varint(payload, static_cast<uint32_t>(raw.size()));
-        for (auto &raw : block_raw)
-            payload.insert(payload.end(), raw.begin(), raw.end());
-
-        std::vector<uint8_t> blob = maybe_compress(payload, compression);
-        const uint32_t off = static_cast<uint32_t>(ofs.tellp());
-        ofs.seekp(dir_off + static_cast<std::streamoff>(block_idx) * 4);
-        write_u32_le(ofs, off);
-        ofs.seekp(off);
+    auto write_block = [&](const std::vector<uint8_t> &blob) {
+        const uint64_t off = static_cast<uint64_t>(ofs.tellp());
+        ofs.seekp(dir_off + static_cast<std::streamoff>(block_idx) * 8);
+        write_u64_le(ofs, off);
+        ofs.seekp(static_cast<std::streamoff>(off));
         ofs.write(reinterpret_cast<const char *>(blob.data()),
                   static_cast<std::streamsize>(blob.size()));
-
-        block_raw.clear();
         ++block_idx;
     };
 
     std::string line;
-    while (read_logical_line(ifs, line)) {
-        if (line.empty()) continue;
+    while (true) {
+        std::vector<std::string> lines;
+        lines.reserve(batch_lines);
+        while (lines.size() < batch_lines && read_logical_line(ifs, line)) {
+            strip_comment(line);
+            trim_line(line);
+            if (line.empty()) continue;
+            lines.push_back(std::move(line));
+        }
+        if (lines.empty()) break;
 
-        block_raw.push_back(encode_generator(parse_generator(line), N));
-        if (block_raw.size() >= block_size)
-            flush_block();
+        std::vector<std::vector<uint8_t>> encoded(lines.size());
+        std::atomic<size_t> next_line{0};
+        const auto encode_worker = [&]() {
+            for (;;) {
+                const size_t i =
+                    next_line.fetch_add(1, std::memory_order_relaxed);
+                if (i >= lines.size()) break;
+                encoded[i] =
+                    encode_generator(parse_generator(lines[i]), N);
+            }
+        };
+
+        std::vector<std::thread> workers;
+        workers.reserve(num_threads);
+        for (unsigned t = 0; t < num_threads; ++t)
+            workers.emplace_back(encode_worker);
+        for (auto &w : workers) w.join();
+
+        struct PendingBlock {
+            std::vector<uint8_t> payload;
+        };
+        std::vector<PendingBlock> pending;
+        pending.reserve((lines.size() + block_size - 1) / block_size);
+
+        for (size_t i = 0; i < lines.size(); i += block_size) {
+            const size_t end =
+                std::min(i + static_cast<size_t>(block_size), lines.size());
+            std::vector<std::vector<uint8_t>> block_raw;
+            block_raw.reserve(end - i);
+            for (size_t j = i; j < end; ++j)
+                block_raw.push_back(std::move(encoded[j]));
+            pending.push_back({build_block_payload(block_raw)});
+        }
+
+        std::vector<std::vector<uint8_t>> blobs(pending.size());
+        std::atomic<size_t> next_block{0};
+        const auto compress_worker = [&]() {
+            for (;;) {
+                const size_t b =
+                    next_block.fetch_add(1, std::memory_order_relaxed);
+                if (b >= pending.size()) break;
+                blobs[b] = maybe_compress(pending[b].payload, compression);
+            }
+        };
+
+        workers.clear();
+        workers.reserve(num_threads);
+        for (unsigned t = 0; t < num_threads; ++t)
+            workers.emplace_back(compress_worker);
+        for (auto &w : workers) w.join();
+
+        for (size_t b = 0; b < blobs.size(); ++b)
+            write_block(blobs[b]);
     }
-    flush_block();
 
     ofs.close();
     ifs.close();
 
     std::ifstream sz_ifs(in_path, std::ios::binary | std::ios::ate);
-    auto in_size = sz_ifs.tellg();
+    const auto in_size = sz_ifs.tellg();
     sz_ifs.close();
     std::ifstream out_sz(out_path, std::ios::binary | std::ios::ate);
-    auto out_size = out_sz.tellg();
+    const auto out_size = out_sz.tellg();
     out_sz.close();
 
     const char *comp_name[] = {"none", "zlib"};
     std::cerr << "Encoded " << M << " generators (N=" << N
               << ", block=" << block_size
-              << ", compression=" << comp_name[compression] << ")\n"
+              << ", compression=" << comp_name[compression]
+              << ", threads=" << num_threads << ")\n"
               << "  " << in_path << " (" << in_size << " B) -> "
               << out_path << " (" << out_size << " B)\n";
 }
@@ -626,9 +796,10 @@ static void decode_file(const std::string &in_path,
     char version_c;
     ifs.get(version_c);
     const uint8_t version = static_cast<uint8_t>(version_c);
-    if (version != PBIN_VERSION)
+    if (version != PBIN_VERSION && version != PBIN_VERSION_V1)
         throw std::runtime_error("unsupported PBIN version " +
                                  std::to_string(version));
+    const int offset_width = (version == PBIN_VERSION_V1) ? 4 : 8;
 
     char flags_c, compression_c;
     ifs.get(flags_c);
@@ -642,14 +813,16 @@ static void decode_file(const std::string &in_path,
     const uint32_t num_blocks = (M + block_size - 1) / block_size;
 
     const auto dir_start = ifs.tellg();
-    ifs.seekg(dir_start + static_cast<std::streamoff>(num_blocks) * 4);
+    ifs.seekg(dir_start + static_cast<std::streamoff>(num_blocks) * offset_width);
     if (static_cast<uint64_t>(ifs.tellg()) > file_size)
         throw std::runtime_error("truncated directory");
 
     ifs.seekg(dir_start);
-    std::vector<uint32_t> offsets(num_blocks);
+    std::vector<uint64_t> offsets(num_blocks);
     for (uint32_t b = 0; b < num_blocks; ++b)
-        offsets[b] = read_u32_le_stream(ifs);
+        offsets[b] = (offset_width == 4)
+            ? static_cast<uint64_t>(read_u32_le_stream(ifs))
+            : read_u64_le_stream(ifs);
 
     std::ofstream ofs(out_path);
     if (!ofs) throw std::runtime_error("cannot create " + out_path);
@@ -714,7 +887,8 @@ static void usage(const char *prog) {
         << "  " << prog << " -dk <file.pbin>            Decode (keep original)\n"
         << "\nEncode options:\n"
         << "  -c MODE       Compression: 0=none, 1=zlib (default: 1)\n"
-        << "  -b BLOCKSIZE  Generators per block (default: 16)\n";
+        << "  -b BLOCKSIZE  Generators per block (default: 16)\n"
+        << "  -j THREADS    Parallel encode threads (default: CPU count; 0=auto)\n";
 }
 
 int main(int argc, char *argv[]) {
@@ -730,6 +904,7 @@ int main(int argc, char *argv[]) {
     // Parse remaining args: optional flags then the filename (last arg)
     uint8_t  compression = 1;
     uint32_t block_size  = 16;
+    unsigned num_threads = 0;
     std::string input;
 
     for (int i = 2; i < argc; ++i) {
@@ -748,6 +923,13 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             block_size = static_cast<uint32_t>(b);
+        } else if (a == "-j" && i + 1 < argc) {
+            int j = std::atoi(argv[++i]);
+            if (j < 0) {
+                std::cerr << "Error: thread count must be >= 0\n";
+                return 1;
+            }
+            num_threads = static_cast<unsigned>(j);
         } else if (input.empty()) {
             input = a;
         } else {
@@ -762,7 +944,7 @@ int main(int argc, char *argv[]) {
     try {
         if (do_encode) {
             std::string output = input + ".pbin";
-            encode_file(input, output, compression, block_size);
+            encode_file(input, output, compression, block_size, num_threads);
             if (!keep) {
                 if (std::remove(input.c_str()) == 0)
                     std::cerr << "Removed " << input << "\n";

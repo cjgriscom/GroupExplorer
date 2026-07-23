@@ -20,7 +20,8 @@ public final class PbinFile implements Closeable {
     private final int blockSize;
     private final int compression;
     private final boolean bare;
-    private final int[] offsets;
+    /** Absolute file offsets of each compressed block (unsigned, may exceed 2^31). */
+    private final long[] offsets;
     private final int numBlocks;
 
     private int cachedBlock = -1;
@@ -28,7 +29,7 @@ public final class PbinFile implements Closeable {
 
     private PbinFile(RandomAccessFile raf, long fileLen, int M, int N,
                      int blockSize, int compression, boolean bare,
-                     int[] offsets) {
+                     long[] offsets) {
         this.raf = raf;
         this.fileLen = fileLen;
         this.M = M;
@@ -50,8 +51,11 @@ public final class PbinFile implements Closeable {
             raf.readFully(header);
             if (header[0] != 'P' || header[1] != 'B' || header[2] != 'I' || header[3] != 'N')
                 throw new IOException("Not a PBIN file");
-            if ((header[4] & 0xFF) != 0x01)
-                throw new IOException("Unsupported PBIN version " + (header[4] & 0xFF));
+            int version = header[4] & 0xFF;
+            // v1: uint32 offsets (< 4 GiB). v2: uint64 offsets (large files).
+            if (version != 0x01 && version != 0x02)
+                throw new IOException("Unsupported PBIN version " + version);
+            int offsetWidth = (version == 0x01) ? 4 : 8;
 
             int flags       = header[5] & 0xFF;
             int compression = header[6] & 0xFF;
@@ -68,11 +72,14 @@ public final class PbinFile implements Closeable {
             int numBlocks = (M + blockSize - 1) / blockSize;
 
             raf.seek(dirStart);
-            byte[] dirBuf = new byte[numBlocks * 4];
+            byte[] dirBuf = new byte[numBlocks * offsetWidth];
             raf.readFully(dirBuf);
-            int[] offsets = new int[numBlocks];
-            for (int b = 0; b < numBlocks; b++)
-                offsets[b] = readU32LE(dirBuf, b * 4);
+            long[] offsets = new long[numBlocks];
+            for (int b = 0; b < numBlocks; b++) {
+                offsets[b] = (offsetWidth == 4)
+                    ? readU32LE(dirBuf, b * 4)
+                    : readU64LE(dirBuf, b * 8);
+            }
 
             return new PbinFile(raf, fileLen, M, N, blockSize, compression, bare, offsets);
         } catch (IOException | RuntimeException e) {
@@ -128,10 +135,15 @@ public final class PbinFile implements Closeable {
     public byte[] readRawBlock(int b) throws IOException {
         if (b < 0 || b >= numBlocks)
             throw new IndexOutOfBoundsException("block " + b + ", numBlocks " + numBlocks);
-        int bStart = offsets[b];
-        int bEnd   = (b + 1 < numBlocks) ? offsets[b + 1] : (int) fileLen;
+        long bStart = offsets[b];
+        long bEnd   = (b + 1 < numBlocks) ? offsets[b + 1] : fileLen;
+        if (bStart < 0 || bEnd <= bStart || bEnd > fileLen)
+            throw new IOException("bad block offset at " + b + ": [" + bStart + ", " + bEnd + ")");
+        long blen = bEnd - bStart;
+        if (blen > Integer.MAX_VALUE)
+            throw new IOException("block " + b + " too large (" + blen + " bytes)");
         raf.seek(bStart);
-        byte[] blockData = new byte[bEnd - bStart];
+        byte[] blockData = new byte[(int) blen];
         raf.readFully(blockData);
         return blockData;
     }
@@ -166,12 +178,7 @@ public final class PbinFile implements Closeable {
     }
 
     private void loadBlock(int b) throws IOException {
-        int bStart = offsets[b];
-        int bEnd   = (b + 1 < numBlocks) ? offsets[b + 1] : (int) fileLen;
-
-        raf.seek(bStart);
-        byte[] blockData = new byte[bEnd - bStart];
-        raf.readFully(blockData);
+        byte[] blockData = readRawBlock(b);
 
         byte[] payload = (compression == 1)
             ? zlibDecompress(blockData) : blockData;
@@ -210,11 +217,16 @@ public final class PbinFile implements Closeable {
         return val;
     }
 
-    private static int readU32LE(byte[] data, int pos) {
-        return (data[pos] & 0xFF)
-             | ((data[pos + 1] & 0xFF) << 8)
-             | ((data[pos + 2] & 0xFF) << 16)
-             | ((data[pos + 3] & 0xFF) << 24);
+    /** Reads an unsigned 32-bit little-endian value as a non-negative long. */
+    private static long readU32LE(byte[] data, int pos) {
+        return (data[pos] & 0xFFL)
+             | ((data[pos + 1] & 0xFFL) << 8)
+             | ((data[pos + 2] & 0xFFL) << 16)
+             | ((data[pos + 3] & 0xFFL) << 24);
+    }
+
+    private static long readU64LE(byte[] data, int pos) {
+        return readU32LE(data, pos) | (readU32LE(data, pos + 4) << 32);
     }
 
     // ── zlib ────────────────────────────────────────────────
