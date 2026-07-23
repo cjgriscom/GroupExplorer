@@ -106,6 +106,7 @@ public class GraphVisualizer extends Application {
 	private Label numSharedLinesLabel;
     private Button genusButton;
     private Button autButton;
+    private Button qAutButton;
     private Label fitLabel;
     // New checkbox to toggle the display of circles
     private CheckBox showCirclesCheckBox;
@@ -270,6 +271,7 @@ public class GraphVisualizer extends Application {
         numSharedLinesLabel = new Label("Shared Lines: 0");
         genusButton = new Button("Genus: ?");
         autButton = new Button("Aut: ?");
+        qAutButton = new Button("QAut: ?");
         fitLabel = new Label("");
 
         // Create a trackball control for full 3D rotation.
@@ -640,7 +642,7 @@ public class GraphVisualizer extends Application {
 
         paginator.getChildren().addAll(removeDupButton, removeFoldedButton, filterShareButton,
                 filterByFitButton, filterByCongestionButton, showGeneratorButton,
-                numSharedLinesLabel, genusButton, autButton, fitLabel);
+                numSharedLinesLabel, genusButton, autButton, qAutButton, fitLabel);
 
         root.setBottom(paginator);
 
@@ -754,6 +756,18 @@ public class GraphVisualizer extends Application {
             autButton.setText("Aut: ?");
         }
 
+        // --- Quotient (global) automorphism score |Aut(Q)| ---
+        if (maxVertex > 0 && maxVertex < 150) {
+            try {
+                BigInteger qAutOrder = GraphSymm.quotientAutomorphismGroupOrder(generator, false);
+                qAutButton.setText("QAut: " + qAutOrder);
+            } catch (RuntimeException ex) {
+                qAutButton.setText("QAut: err");
+            }
+        } else {
+            qAutButton.setText("QAut: ?");
+        }
+
         // If |Aut(G)| is unknown, compute it on demand; otherwise open the min-Aut filter dialog.
         autButton.setOnAction(e -> {
             if (!isAutCalculated()) {
@@ -771,6 +785,26 @@ public class GraphVisualizer extends Application {
             } else {
                 Stage owner = (Stage) autButton.getScene().getWindow();
                 showFilterByMinAutDialog(owner, pageLabel);
+            }
+        });
+
+        // If |Aut(Q)| is unknown, compute on demand; otherwise open the min-QAut filter dialog.
+        qAutButton.setOnAction(e -> {
+            if (!isQAutCalculated()) {
+                try {
+                    BigInteger qAutOrder = GraphSymm.quotientAutomorphismGroupOrder(generator, false);
+                    qAutButton.setText("QAut: " + qAutOrder);
+                } catch (RuntimeException ex) {
+                    qAutButton.setText("QAut: err");
+                    Alert alert = new Alert(Alert.AlertType.ERROR);
+                    alert.setTitle("Quotient automorphism computation failed");
+                    alert.setHeaderText("Failed to compute |Aut(Q)|");
+                    alert.setContentText(ex.getMessage());
+                    alert.showAndWait();
+                }
+            } else {
+                Stage owner = (Stage) qAutButton.getScene().getWindow();
+                showFilterByMinQAutDialog(owner, pageLabel);
             }
         });
 
@@ -2660,9 +2694,24 @@ public class GraphVisualizer extends Application {
         return isAutCalculated(autButton.getText());
     }
 
+    private static boolean isQAutCalculated(String qAutButtonText) {
+        if (!qAutButtonText.startsWith("QAut: ")) return false;
+        String value = qAutButtonText.substring(6);
+        return !"?".equals(value) && !"err".equals(value);
+    }
+
+    private boolean isQAutCalculated() {
+        return isQAutCalculated(qAutButton.getText());
+    }
+
     private static BigInteger parseAutButtonValue(String autButtonText) {
         if (!isAutCalculated(autButtonText)) return BigInteger.ONE;
         return new BigInteger(autButtonText.substring(5));
+    }
+
+    private static BigInteger parseQAutButtonValue(String qAutButtonText) {
+        if (!isQAutCalculated(qAutButtonText)) return BigInteger.ONE;
+        return new BigInteger(qAutButtonText.substring(6));
     }
 
     private static BigInteger computeAutOrderForLine(String line) {
@@ -2670,7 +2719,26 @@ public class GraphVisualizer extends Application {
         return GraphSymm.automorphismGroupOrder(generator, false);
     }
 
+    private static BigInteger computeQAutOrderForLine(String line) {
+        int[][][] generator = GroupExplorer.parseOperationsArr(line);
+        return GraphSymm.quotientAutomorphismGroupOrder(generator, false);
+    }
+
     private void showFilterByMinAutDialog(Stage owner, Label pageLabel) {
+        showFilterByMinOrderDialog(owner, pageLabel, "Aut", "|Aut|",
+                parseAutButtonValue(autButton.getText()),
+                GraphVisualizer::computeAutOrderForLine);
+    }
+
+    private void showFilterByMinQAutDialog(Stage owner, Label pageLabel) {
+        showFilterByMinOrderDialog(owner, pageLabel, "QAut", "|Aut(Q)|",
+                parseQAutButtonValue(qAutButton.getText()),
+                GraphVisualizer::computeQAutOrderForLine);
+    }
+
+    private void showFilterByMinOrderDialog(Stage owner, Label pageLabel,
+            String shortName, String orderLabel, BigInteger defaultMin,
+            java.util.function.Function<String, BigInteger> orderFn) {
         if (graphLinesEmpty()) return;
 
         List<String> linesToProcess = new ArrayList<>(graphLineCount());
@@ -2681,7 +2749,7 @@ public class GraphVisualizer extends Application {
 
         Stage dialog = new Stage();
         dialog.initOwner(owner);
-        dialog.setTitle("Filter by min Aut (" + total + " generators)");
+        dialog.setTitle("Filter by min " + shortName + " (" + total + " generators)");
 
         ObservableList<String> resultItems = FXCollections.observableArrayList();
         ListView<String> listView = new ListView<>(resultItems);
@@ -2690,12 +2758,12 @@ public class GraphVisualizer extends Application {
 
         Label progressLabel = new Label("0 / " + total + " completed");
         Button stopButton = new Button("Stop");
-        TextField minAutField = new TextField(parseAutButtonValue(autButton.getText()).toString());
-        minAutField.setPrefWidth(120);
+        TextField minOrderField = new TextField(defaultMin.toString());
+        minOrderField.setPrefWidth(120);
         Button applyFilterButton = new Button("Keep At Least");
 
         HBox controlBar = new HBox(10, progressLabel, stopButton,
-                new Label("Min |Aut|:"), minAutField, applyFilterButton);
+                new Label("Min " + orderLabel + ":"), minOrderField, applyFilterButton);
         controlBar.setStyle("-fx-padding: 5; -fx-alignment: center-left;");
 
         VBox dialogRoot = new VBox(5, controlBar, listView);
@@ -2703,7 +2771,7 @@ public class GraphVisualizer extends Application {
 
         dialog.setScene(new Scene(dialogRoot, 720, 480));
 
-        List<Object[]> autResults = Collections.synchronizedList(new ArrayList<>());
+        List<Object[]> orderResults = Collections.synchronizedList(new ArrayList<>());
 
         int nThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
         ExecutorService executor = Executors.newFixedThreadPool(nThreads);
@@ -2715,15 +2783,15 @@ public class GraphVisualizer extends Application {
             final String line = linesToProcess.get(i);
             futures.add(executor.submit(() -> {
                 if (Thread.currentThread().isInterrupted()) return;
-                BigInteger autOrder = null;
+                BigInteger order = null;
                 try {
-                    autOrder = computeAutOrderForLine(line);
+                    order = orderFn.apply(line);
                 } catch (RuntimeException ignored) {
                 }
-                autResults.add(new Object[]{autOrder, idx});
+                orderResults.add(new Object[]{order, idx});
                 int done = completed.incrementAndGet();
                 if (done % Math.max(1, total / 100) == 0 || done == total) {
-                    Platform.runLater(() -> refreshAutList(resultItems, autResults, linesToProcess, progressLabel, done, total));
+                    Platform.runLater(() -> refreshAutList(resultItems, orderResults, linesToProcess, progressLabel, done, total));
                 }
             }));
         }
@@ -2733,13 +2801,13 @@ public class GraphVisualizer extends Application {
             executor.shutdownNow();
             stopButton.setDisable(true);
             stopButton.setText("Stopped");
-            Platform.runLater(() -> refreshAutList(resultItems, autResults, linesToProcess, progressLabel, completed.get(), total));
+            Platform.runLater(() -> refreshAutList(resultItems, orderResults, linesToProcess, progressLabel, completed.get(), total));
         });
 
         applyFilterButton.setOnAction(ev -> {
-            BigInteger minAut;
+            BigInteger minOrder;
             try {
-                minAut = new BigInteger(minAutField.getText().trim());
+                minOrder = new BigInteger(minOrderField.getText().trim());
             } catch (NumberFormatException ex) {
                 return;
             }
@@ -2747,8 +2815,8 @@ public class GraphVisualizer extends Application {
             executor.shutdownNow();
 
             List<Object[]> snapshot;
-            synchronized (autResults) {
-                snapshot = new ArrayList<>(autResults);
+            synchronized (orderResults) {
+                snapshot = new ArrayList<>(orderResults);
             }
             snapshot.sort((a, b) -> {
                 BigInteger left = (BigInteger) a[0];
@@ -2761,8 +2829,8 @@ public class GraphVisualizer extends Application {
 
             List<String> filtered = new ArrayList<>();
             for (Object[] entry : snapshot) {
-                BigInteger autOrder = (BigInteger) entry[0];
-                if (autOrder != null && autOrder.compareTo(minAut) >= 0) {
+                BigInteger order = (BigInteger) entry[0];
+                if (order != null && order.compareTo(minOrder) >= 0) {
                     filtered.add(linesToProcess.get((int) entry[1]));
                 }
             }
