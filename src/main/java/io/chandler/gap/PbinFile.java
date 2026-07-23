@@ -4,6 +4,8 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.math.BigInteger;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
 
@@ -26,6 +28,20 @@ public final class PbinFile implements Closeable {
 
     private int cachedBlock = -1;
     private String[] cachedLines;
+
+    /**
+     * Small LRU of decompressed payloads. CongestionBatch processes shuffled PBIN
+     * blocks contiguously, so this avoids duplicate inflation without retaining a
+     * multi-gigabyte dataset in memory.
+     */
+    private static final int DECOMPRESSED_CACHE_BLOCKS = 16;
+    private final Map<Integer, byte[]> decompressedBlockCache =
+            new LinkedHashMap<Integer, byte[]>(DECOMPRESSED_CACHE_BLOCKS, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<Integer, byte[]> eldest) {
+                    return size() > DECOMPRESSED_CACHE_BLOCKS;
+                }
+            };
 
     private PbinFile(RandomAccessFile raf, long fileLen, int M, int N,
                      int blockSize, int compression, boolean bare,
@@ -155,6 +171,27 @@ public final class PbinFile implements Closeable {
      */
     public byte[] decompressBlock(byte[] rawBlock) throws IOException {
         return (compression == 1) ? zlibDecompress(rawBlock) : rawBlock;
+    }
+
+    /**
+     * Returns the decompressed payload for block {@code blockIndex}, caching by block
+     * so randomized generator order does not repeat zlib inflation for the same block.
+     * {@code rawBlock} must be the compressed bytes for {@code blockIndex} (from
+     * {@link #readRawBlock}); callers on a single producer thread read raw blocks serially.
+     */
+    public synchronized byte[] getDecompressedPayload(int blockIndex, byte[] rawBlock) throws IOException {
+        byte[] cached = decompressedBlockCache.get(blockIndex);
+        if (cached != null) {
+            return cached;
+        }
+        byte[] payload = decompressBlock(rawBlock);
+        decompressedBlockCache.put(blockIndex, payload);
+        return payload;
+    }
+
+    /** Number of blocks whose decompressed payloads are currently cached. */
+    public synchronized int decompressedBlockCacheSize() {
+        return decompressedBlockCache.size();
     }
 
     /**

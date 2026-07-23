@@ -43,10 +43,14 @@ public class CongestionBatch {
     private final String outputFile;
     private final boolean randomize;
     private final long shuffleSeed;
+    private final boolean useGpu;
+    private final double guardBand;
     private final CongestionEvaluator evaluator;
+    private final CongestionEvaluatorGPU gpuEvaluator;
 
     private final Object csvLock = new Object();
     private boolean csvHeaderWritten = false;
+    private int gpuGuardBandFallbacks;
 
     /** Best congestion (min over seeds/rotations) at last evaluated checkpoint, indexed by generator. */
     private final List<Double> bestScores = new ArrayList<>();
@@ -59,6 +63,13 @@ public class CongestionBatch {
     public CongestionBatch(String inputFile, int batchSize, int threads, long[] seeds, int[] checkpoints,
             Double[] thresholds, int nRotations, String plotFile, String outputFile,
             boolean randomize, long shuffleSeed) {
+        this(inputFile, batchSize, threads, seeds, checkpoints, thresholds, nRotations, plotFile, outputFile,
+                randomize, shuffleSeed, false, 0.1);
+    }
+
+    public CongestionBatch(String inputFile, int batchSize, int threads, long[] seeds, int[] checkpoints,
+            Double[] thresholds, int nRotations, String plotFile, String outputFile,
+            boolean randomize, long shuffleSeed, boolean useGpu, double guardBand) {
         this.inputFile = inputFile;
         this.batchSize = batchSize;
         this.threads = threads;
@@ -70,7 +81,12 @@ public class CongestionBatch {
         this.outputFile = outputFile;
         this.randomize = randomize;
         this.shuffleSeed = shuffleSeed;
+        this.useGpu = useGpu;
+        this.guardBand = guardBand;
         this.evaluator = new CongestionEvaluator(seeds, checkpoints, thresholds, nRotations);
+        this.gpuEvaluator = useGpu
+                ? new CongestionEvaluatorGPU(seeds, checkpoints, thresholds, nRotations, guardBand)
+                : null;
     }
 
     public void run() throws IOException {
@@ -89,6 +105,14 @@ public class CongestionBatch {
                 + (randomize ? " (seed " + shuffleSeed + ")" : ""));
         System.out.println("  Plot file: " + (plotFile != null ? plotFile : "(none)"));
         System.out.println("  Output file: " + (outputFile != null ? outputFile : "(none)"));
+        if (useGpu) {
+            if (CongestionCuda.isAvailable()) {
+                System.out.println("  GPU: enabled (" + CongestionCuda.deviceName() + ")");
+                System.out.println("  Guard band: " + guardBand);
+            } else {
+                System.out.println("  GPU: requested but unavailable — falling back to CPU");
+            }
+        }
         System.out.println();
 
         if (plotFile != null) {
@@ -115,7 +139,14 @@ public class CongestionBatch {
 
         finalizeAndWriteSurvivors();
 
+        if (useGpu && gpuGuardBandFallbacks > 0) {
+            System.out.println("  GPU guard-band CPU fallbacks: " + gpuGuardBandFallbacks);
+        }
         System.out.println("\nCongestionBatch finished.");
+    }
+
+    private boolean gpuActive() {
+        return useGpu && CongestionCuda.isAvailable() && gpuEvaluator != null;
     }
 
     private void runPbin() throws IOException {
@@ -124,7 +155,7 @@ public class CongestionBatch {
             System.out.println("  Generators: " + total);
             ensureScoreCapacity(total);
 
-            List<Integer> order = buildProcessingOrder(total);
+            List<Integer> order = buildProcessingOrder(total, pbin.getBlockSize());
             int prefetch = Math.max(batchSize, threads * 4);
             ExecutorService executor = Executors.newFixedThreadPool(threads);
 
@@ -137,25 +168,40 @@ public class CongestionBatch {
             byte[][] cachedRawBytes = { null };
 
             try {
-                slidingWindowProcess(executor, total, prefetch,
-                        pos -> {
-                            int index = order.get(pos);
-                            int b = pbin.blockOf(index);
-                            int off = pbin.offsetInBlock(index);
-                            if (b != cachedRawBlock[0]) {
-                                cachedRawBytes[0] = pbin.readRawBlock(b);
-                                cachedRawBlock[0] = b;
-                            }
-                            byte[] raw = cachedRawBytes[0];
-                            // Expensive work (zlib decompress + single-entry
-                            // BigInteger decode) runs on the worker thread, in
-                            // parallel, instead of on this producer thread.
-                            return executor.submit(() -> {
-                                byte[] payload = pbin.decompressBlock(raw);
-                                String line = pbin.decodeEntry(payload, off);
-                                return processGenerator(index, line);
-                            });
+                if (gpuActive()) {
+                    slidingWindowDecodeThenGpu(executor, total, prefetch, pos -> {
+                        int index = order.get(pos);
+                        int b = pbin.blockOf(index);
+                        int off = pbin.offsetInBlock(index);
+                        if (b != cachedRawBlock[0]) {
+                            cachedRawBytes[0] = pbin.readRawBlock(b);
+                            cachedRawBlock[0] = b;
+                        }
+                        byte[] raw = cachedRawBytes[0];
+                        return executor.submit(() -> {
+                            byte[] payload = pbin.getDecompressedPayload(b, raw);
+                            String line = pbin.decodeEntry(payload, off);
+                            return new DecodedGenerator(index, line);
                         });
+                    });
+                } else {
+                    slidingWindowProcess(executor, total, prefetch,
+                            pos -> {
+                                int index = order.get(pos);
+                                int b = pbin.blockOf(index);
+                                int off = pbin.offsetInBlock(index);
+                                if (b != cachedRawBlock[0]) {
+                                    cachedRawBytes[0] = pbin.readRawBlock(b);
+                                    cachedRawBlock[0] = b;
+                                }
+                                byte[] raw = cachedRawBytes[0];
+                                return executor.submit(() -> {
+                                    byte[] payload = pbin.getDecompressedPayload(b, raw);
+                                    String line = pbin.decodeEntry(payload, off);
+                                    return processGenerator(index, line);
+                                });
+                            });
+                }
             } finally {
                 executor.shutdown();
                 executor.awaitTermination(365, TimeUnit.DAYS);
@@ -166,13 +212,34 @@ public class CongestionBatch {
         }
     }
 
-    private List<Integer> buildProcessingOrder(int total) {
+    private List<Integer> buildProcessingOrder(int total, int blockSize) {
         List<Integer> order = new ArrayList<>(total);
-        for (int i = 0; i < total; i++) {
-            order.add(i);
+        if (!randomize) {
+            for (int i = 0; i < total; i++) {
+                order.add(i);
+            }
+            return order;
         }
-        if (randomize) {
-            Collections.shuffle(order, new Random(shuffleSeed));
+
+        // Shuffle at block granularity, then shuffle entries inside each block.
+        // This preserves randomized coverage while each compressed PBIN block is
+        // read and inflated once instead of once per randomly selected entry.
+        int blockCount = (total + blockSize - 1) / blockSize;
+        List<Integer> blocks = new ArrayList<>(blockCount);
+        for (int b = 0; b < blockCount; b++) {
+            blocks.add(b);
+        }
+        Random rng = new Random(shuffleSeed);
+        Collections.shuffle(blocks, rng);
+        for (int b : blocks) {
+            int start = b * blockSize;
+            int end = Math.min(total, start + blockSize);
+            List<Integer> entries = new ArrayList<>(end - start);
+            for (int i = start; i < end; i++) {
+                entries.add(i);
+            }
+            Collections.shuffle(entries, rng);
+            order.addAll(entries);
         }
         return order;
     }
@@ -263,6 +330,72 @@ public class CongestionBatch {
     @FunctionalInterface
     private interface TaskSubmitter {
         Future<GeneratorResult> submit(int position) throws IOException;
+    }
+
+    @FunctionalInterface
+    private interface DecodeSubmitter {
+        Future<DecodedGenerator> submit(int position) throws IOException;
+    }
+
+    /**
+     * Decodes generators in parallel, then evaluates each flush chunk on the GPU.
+     */
+    private void slidingWindowDecodeThenGpu(ExecutorService executor, int total,
+            int prefetch, DecodeSubmitter submitter) throws IOException {
+        List<Future<DecodedGenerator>> window = new ArrayList<>(prefetch);
+        int nextSubmit = 0;
+        int processed = 0;
+
+        int initialFill = Math.min(total, prefetch);
+        for (int i = 0; i < initialFill; i++) {
+            window.add(submitter.submit(nextSubmit++));
+        }
+
+        int drainCursor = 0;
+        while (drainCursor < window.size()) {
+            int chunkEnd = Math.min(drainCursor + batchSize, window.size());
+            List<DecodedGenerator> decoded = new ArrayList<>(chunkEnd - drainCursor);
+            for (int i = drainCursor; i < chunkEnd; i++) {
+                try {
+                    decoded.add(window.get(i).get());
+                } catch (Exception e) {
+                    throw new IOException("Batch decode failed", e);
+                }
+                window.set(i, null);
+            }
+            Collections.sort(decoded, (a, b) -> Integer.compare(a.index, b.index));
+            List<GeneratorResult> chunk = evaluateDecodedBatchGpu(decoded);
+            processed += chunk.size();
+            flushBatchResults(chunk, processed, total);
+            drainCursor = chunkEnd;
+
+            while (nextSubmit < total && (window.size() - drainCursor) < prefetch) {
+                window.add(submitter.submit(nextSubmit++));
+            }
+        }
+    }
+
+    private List<GeneratorResult> evaluateDecodedBatchGpu(List<DecodedGenerator> decoded) throws IOException {
+        List<String> lines = new ArrayList<>(decoded.size());
+        for (DecodedGenerator d : decoded) {
+            lines.add(d.line);
+        }
+        try {
+            CongestionEvaluatorGPU.BatchOutcome outcome = gpuEvaluator.evaluateBatch(lines);
+            gpuGuardBandFallbacks += outcome.guardBandFallbacks;
+            List<GeneratorResult> results = new ArrayList<>(decoded.size());
+            for (int i = 0; i < decoded.size(); i++) {
+                CongestionEvaluator.Result eval = outcome.results[i];
+                results.add(new GeneratorResult(decoded.get(i).index, eval.cells, eval.survived, eval.bestScore));
+            }
+            return results;
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            List<GeneratorResult> results = new ArrayList<>(decoded.size());
+            for (DecodedGenerator d : decoded) {
+                results.add(processGenerator(d.index, d.line));
+            }
+            return results;
+        }
     }
 
     /**
@@ -547,6 +680,8 @@ public class CongestionBatch {
         System.err.println("  --output-file PATH   Text output for surviving generators");
         System.err.println("  --randomize          Shuffle processing order (all generators still run)");
         System.err.println("  --shuffle-seed N     RNG seed for --randomize (default: 42)");
+        System.err.println("  --gpu                Use CUDA backend (requires libcongestion_cuda.so)");
+        System.err.println("  --guard-band X       CPU fallback when GPU score within X of threshold (default: 0.1)");
     }
 
     public static void main(String[] args) {
@@ -561,6 +696,8 @@ public class CongestionBatch {
         String inputFile = null;
         boolean randomize = false;
         long shuffleSeed = 42L;
+        boolean useGpu = false;
+        double guardBand = 0.1;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -594,6 +731,12 @@ public class CongestionBatch {
                     break;
                 case "--shuffle-seed":
                     shuffleSeed = Long.parseLong(requireArg(args, ++i, arg));
+                    break;
+                case "--gpu":
+                    useGpu = true;
+                    break;
+                case "--guard-band":
+                    guardBand = Double.parseDouble(requireArg(args, ++i, arg));
                     break;
                 case "--help":
                 case "-h":
@@ -650,13 +793,17 @@ public class CongestionBatch {
 
         CongestionBatch batch = new CongestionBatch(
                 inputFile, batchSize, threads, seeds, checkpoints, thresholds, nRotations, plotFile, outputFile,
-                randomize, shuffleSeed);
+                randomize, shuffleSeed, useGpu, guardBand);
         try {
             batch.run();
         } catch (IOException e) {
             System.err.println("CongestionBatch failed: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
+        } finally {
+            if (useGpu) {
+                CongestionCuda.shutdown();
+            }
         }
     }
 
@@ -674,6 +821,16 @@ public class CongestionBatch {
         final String line;
 
         BatchEntry(int index, String line) {
+            this.index = index;
+            this.line = line;
+        }
+    }
+
+    private static final class DecodedGenerator {
+        final int index;
+        final String line;
+
+        DecodedGenerator(int index, String line) {
             this.index = index;
             this.line = line;
         }
