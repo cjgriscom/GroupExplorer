@@ -843,6 +843,8 @@ public class GraphVisualizer extends Application {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (!line.trim().isEmpty()) {
+                    int commentPos = line.indexOf("#");
+                    if (commentPos > 0) line = line.substring(0, commentPos).trim();
                     lines.add(line);
                 }   
             }
