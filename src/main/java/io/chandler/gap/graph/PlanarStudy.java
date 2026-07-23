@@ -74,6 +74,13 @@ public class PlanarStudy {
         // On final result aggregation, also accept |G_result| = |G| / INCLUDE_QUOTIENT.
         // 0 or 1 = only full group order (normal behavior).
         int INCLUDE_QUOTIENT = 0;
+        // lastLoop only: dynamically choose GAP-then-dreadnaut vs dreadnaut-then-GAP.
+        // Occasional dual-path probes pick the cheaper order for the rest of that candidate
+        // (and optionally re-probe mid-candidate as the iso cache warms).
+        boolean DYNAMIC_LASTLOOP_ORDER = true;
+        int LASTLOOP_PROBE_SAMPLES = 24;           // disjoint-passing samples per probe window
+        int LASTLOOP_PROBE_EVERY_CANDIDATES = 1;   // 1 = probe each candidate; raise to probe less often
+        int LASTLOOP_REPROBE_EVERY_DISJOINT = 8000; // 0 = no mid-candidate re-probe
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         boolean SORT_CANDIDATES = true; // sort Phase 1 pairs before Phase 2 for stable indices
@@ -81,6 +88,7 @@ public class PlanarStudy {
         String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
+
         int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
         AbstractResultFilter resultFilter;
         /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
@@ -121,6 +129,13 @@ public class PlanarStudy {
         System.out.println("Min geometry Aut(G) order: " + minGeometryAutOrder);
         System.out.println("Include quotient: " + INCLUDE_QUOTIENT +
             (INCLUDE_QUOTIENT > 1 ? " (also accept |G|/" + INCLUDE_QUOTIENT + ")" : " (full order only)"));
+        System.out.println("Dynamic lastLoop order: " + DYNAMIC_LASTLOOP_ORDER +
+            (DYNAMIC_LASTLOOP_ORDER
+                ? " (probe " + LASTLOOP_PROBE_SAMPLES + " every " + LASTLOOP_PROBE_EVERY_CANDIDATES +
+                  " cand" + (LASTLOOP_REPROBE_EVERY_DISJOINT > 0
+                    ? ", re-probe every " + LASTLOOP_REPROBE_EVERY_DISJOINT + " disjoint"
+                    : "") + ")"
+                : ""));
         System.out.println("Directed: " + directed);
         System.out.println("Result filter: " + resultFilter.getClass().getSimpleName() +
             " (queue size " + resultFilterQueueSize +
@@ -520,6 +535,12 @@ public class PlanarStudy {
                     " of " + currentCandidates.size());
             }
             int roundCount = 0;
+            final boolean dynamicLastLoopOrder = DYNAMIC_LASTLOOP_ORDER;
+            final int lastLoopProbeSamples = LASTLOOP_PROBE_SAMPLES;
+            final int lastLoopProbeEveryCandidates = Math.max(1, LASTLOOP_PROBE_EVERY_CANDIDATES);
+            final int lastLoopReprobeEveryDisjoint = LASTLOOP_REPROBE_EVERY_DISJOINT;
+            final LastLoopOrderSelector lastLoopOrderSelector = new LastLoopOrderSelector(
+                lastLoopProbeSamples, lastLoopReprobeEveryDisjoint);
             // For each candidate from the previous round, combine with each line from file3.
             for (int i = startCandidate; i < currentCandidates.size(); i++) {
                 if (skipRemainingP2.get()) break;
@@ -530,6 +551,15 @@ public class PlanarStudy {
                 AtomicInteger roundCountAtomic = new AtomicInteger(0);
                 AtomicInteger p2InnerCount = new AtomicInteger(0);
                 AtomicInteger disjointRejected = new AtomicInteger(0);
+                AtomicInteger disjointPassed = new AtomicInteger(0);
+                boolean probeThisCandidate = lastLoop && dynamicLastLoopOrder
+                    && ((i - startCandidate) % lastLoopProbeEveryCandidates == 0);
+                lastLoopOrderSelector.beginCandidate(iDisp, probeThisCandidate);
+                if (DEBUG.get() && lastLoop && dynamicLastLoopOrder) {
+                    System.out.println("  Candidate " + i + " lastLoop order: " +
+                        lastLoopOrderSelector.mode() +
+                        (probeThisCandidate ? " (will probe)" : " (reuse)"));
+                }
 
                 // Inner loop: iterate over individual lines from file3 in parallel.
                 lines3.forEachParallel(l -> {
@@ -541,6 +571,10 @@ public class PlanarStudy {
                         System.out.println("  candidate: " + iDisp + " / " + sizeDisp);
                         System.out.println("  inner generators: " + p2InnerCount.get() + " / " + lines3.size());
                         System.out.println("  disjoint rejected: " + disjointRejected.get() + " / " + p2InnerCount.get());
+                        if (DEBUG.get() && lastLoop && dynamicLastLoopOrder) {
+                            System.out.println("  lastLoop order: " + lastLoopOrderSelector.mode() +
+                                " (disjoint-pass " + disjointPassed.get() + ")");
+                        }
                         System.out.println("  " + resultFilter.acceptedCount() + " results, " +
                             resultFilter.queuedCount() + " queued, " +
                             resultFilter.rejectedCount() + " rej., " +
@@ -580,24 +614,74 @@ public class PlanarStudy {
                     }
 
                     String size = null;
-                    if (!allowSubgroups || lastLoop) {
-                        size = gapL.get().sizeOfSubgroup(GroupExplorer.generatorsToString(newCandidate));
-                        // Intermediate rounds: full order only. Final round: also |G|/INCLUDE_QUOTIENT.
-                        Set<String> accepted = lastLoop ? acceptedFinalOrders : acceptedFullOrder;
-                        if (!accepted.contains(size)) {
+                    String canonicalLabeling = null;
+                    Set<String> acceptedOrdersGate = lastLoop ? acceptedFinalOrders : acceptedFullOrder;
+
+                    if (lastLoop && dynamicLastLoopOrder) {
+                        int dp = disjointPassed.incrementAndGet();
+                        boolean probe = lastLoopOrderSelector.offerProbeSlot(dp);
+                        String genStr = GroupExplorer.generatorsToString(newCandidate);
+
+                        if (probe) {
+                            // Dual-path timing: run both ops once, attribute costs to each order.
+                            long t0 = System.nanoTime();
+                            size = gapL.get().sizeOfSubgroup(genStr);
+                            long gapNs = System.nanoTime() - t0;
+                            boolean sizeOk = acceptedOrdersGate.contains(size);
+
+                            t0 = System.nanoTime();
+                            canonicalLabeling = getCanonicalLabelingOrQuarantine(
+                                dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
+                            long dreadNs = System.nanoTime() - t0;
+                            if (canonicalLabeling == null) return;
+
+                            boolean isoHit;
+                            synchronized (canonicalGraphs) {
+                                isoHit = canonicalGraphs.contains(canonicalLabeling);
+                            }
+                            lastLoopOrderSelector.recordProbe(gapNs, dreadNs, sizeOk, isoHit);
+
+                            if (!sizeOk) return;
+                            if (isoHit) return;
+                        } else if (lastLoopOrderSelector.mode() == LastLoopOrderSelector.Mode.DREAD_THEN_GAP) {
+                            canonicalLabeling = getCanonicalLabelingOrQuarantine(
+                                dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
+                            if (canonicalLabeling == null) return;
+                            synchronized (canonicalGraphs) {
+                                if (canonicalGraphs.contains(canonicalLabeling)) return;
+                            }
+                            size = gapL.get().sizeOfSubgroup(genStr);
+                            if (!acceptedOrdersGate.contains(size)) return;
+                        } else {
+                            // GAP_THEN_DREAD (default / current)
+                            size = gapL.get().sizeOfSubgroup(genStr);
+                            if (!acceptedOrdersGate.contains(size)) return;
+                            canonicalLabeling = getCanonicalLabelingOrQuarantine(
+                                dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
+                            if (canonicalLabeling == null) return;
+                            synchronized (canonicalGraphs) {
+                                if (canonicalGraphs.contains(canonicalLabeling)) return;
+                            }
+                        }
+                    } else {
+                        if (!allowSubgroups || lastLoop) {
+                            size = gapL.get().sizeOfSubgroup(GroupExplorer.generatorsToString(newCandidate));
+                            // Intermediate rounds: full order only. Final round: also |G|/INCLUDE_QUOTIENT.
+                            if (!acceptedOrdersGate.contains(size)) {
+                                return;
+                            }
+                        }
+
+                        // Check for isomorphic duplicates.
+                        canonicalLabeling = getCanonicalLabelingOrQuarantine(
+                            dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
+                        if (canonicalLabeling == null) {
                             return;
                         }
-                    }
-
-                    // Check for isomorphic duplicates.
-                    String canonicalLabeling = getCanonicalLabelingOrQuarantine(
-                        dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
-                    if (canonicalLabeling == null) {
-                        return;
-                    }
-                    synchronized (canonicalGraphs) {
-                        if (canonicalGraphs.contains(canonicalLabeling)) {
-                            return;
+                        synchronized (canonicalGraphs) {
+                            if (canonicalGraphs.contains(canonicalLabeling)) {
+                                return;
+                            }
                         }
                     }
                     
@@ -675,7 +759,10 @@ public class PlanarStudy {
 
                 }, () -> skipCurrentP2.get() || skipRemainingP2.get());
                 roundCount += roundCountAtomic.get();
-                System.out.println("  Completed inner loop for candidate " + i + " of " + currentCandidates.size());
+                System.out.println("  Completed inner loop for candidate " + i + " of " + currentCandidates.size() +
+                    (DEBUG.get() && lastLoop && dynamicLastLoopOrder
+                        ? " [order=" + lastLoopOrderSelector.mode() + ", probes=" + lastLoopOrderSelector.probeWindowsCompleted() + "]"
+                        : ""));
                 if (skipCurrentP2.get() && !skipRemainingP2.get()) {
                     System.out.println("  Skipped rest of candidate " + i);
                 }
@@ -699,6 +786,123 @@ public class PlanarStudy {
         } finally {
             resultFilter.close();
             dreadnautWatchdog.stop();
+        }
+    }
+
+    /**
+     * Chooses GAP-then-dreadnaut vs dreadnaut-then-GAP on lastLoop by occasionally
+     * dual-timing both orders on disjoint-passing samples.
+     */
+    private static final class LastLoopOrderSelector {
+        enum Mode { GAP_THEN_DREAD, DREAD_THEN_GAP }
+
+        private final int probeSamples;
+        private final int reprobeEveryDisjoint;
+        private final Object lock = new Object();
+
+        private volatile Mode mode = Mode.GAP_THEN_DREAD;
+        private int candidateIndex = -1;
+        private int probeLeft;
+        private int probeSamplesRecorded;
+        private int probeSamplesExpected;
+        private long costGapThenDreadNs;
+        private long costDreadThenGapNs;
+        private int probeWindowsCompleted;
+        private boolean decisionLogged;
+
+        LastLoopOrderSelector(int probeSamples, int reprobeEveryDisjoint) {
+            this.probeSamples = Math.max(1, probeSamples);
+            this.reprobeEveryDisjoint = Math.max(0, reprobeEveryDisjoint);
+        }
+
+        void beginCandidate(int candidateIdx, boolean probeThisCandidate) {
+            synchronized (lock) {
+                this.candidateIndex = candidateIdx;
+                this.probeLeft = 0;
+                this.probeSamplesRecorded = 0;
+                this.probeSamplesExpected = 0;
+                this.costGapThenDreadNs = 0;
+                this.costDreadThenGapNs = 0;
+                this.decisionLogged = false;
+                if (probeThisCandidate) {
+                    // First disjoint-passing sample opens the initial probe window.
+                    openProbeWindow();
+                }
+            }
+        }
+
+        Mode mode() {
+            return mode;
+        }
+
+        int probeWindowsCompleted() {
+            synchronized (lock) {
+                return probeWindowsCompleted;
+            }
+        }
+
+        /**
+         * @param disjointIndex 1-based count of disjoint-passing items for this candidate
+         * @return true if this item should run a dual-path probe sample
+         */
+        boolean offerProbeSlot(int disjointIndex) {
+            synchronized (lock) {
+                if (reprobeEveryDisjoint > 0
+                        && disjointIndex > 1
+                        && (disjointIndex - 1) % reprobeEveryDisjoint == 0
+                        && probeLeft == 0
+                        && probeSamplesRecorded == probeSamplesExpected) {
+                    // Mid-candidate re-probe as the iso cache warms.
+                    openProbeWindow();
+                }
+                if (probeLeft <= 0) return false;
+                probeLeft--;
+                return true;
+            }
+        }
+
+        private void openProbeWindow() {
+            probeLeft = probeSamples;
+            probeSamplesExpected = probeSamples;
+            probeSamplesRecorded = 0;
+            costGapThenDreadNs = 0;
+            costDreadThenGapNs = 0;
+            decisionLogged = false;
+        }
+
+        void recordProbe(long gapNs, long dreadNs, boolean sizeOk, boolean isoHit) {
+            Mode chosen;
+            int cand;
+            int samples;
+            long aNs;
+            long bNs;
+            synchronized (lock) {
+                // A: always GAP; dreadnaut only if size accepted
+                costGapThenDreadNs += gapNs + (sizeOk ? dreadNs : 0);
+                // B: always dreadnaut; GAP only if not already-seen iso
+                costDreadThenGapNs += dreadNs + (isoHit ? 0 : gapNs);
+                probeSamplesRecorded++;
+                // Slots may be reserved before their workers finish. Decide only after
+                // every reserved sample has recorded, never based on completion order.
+                if (probeSamplesRecorded < probeSamplesExpected || decisionLogged) {
+                    return;
+                }
+                mode = costDreadThenGapNs < costGapThenDreadNs
+                    ? Mode.DREAD_THEN_GAP
+                    : Mode.GAP_THEN_DREAD;
+                decisionLogged = true;
+                probeWindowsCompleted++;
+                chosen = mode;
+                cand = candidateIndex;
+                samples = probeSamplesRecorded;
+                aNs = costGapThenDreadNs;
+                bNs = costDreadThenGapNs;
+            }
+            if (DEBUG.get()) {
+                System.out.printf(java.util.Locale.ROOT,
+                    "  lastLoop probe cand=%d samples=%d: GAP-then-dread=%.1fms dread-then-GAP=%.1fms -> %s%n",
+                    cand, samples, aNs / 1e6, bNs / 1e6, chosen);
+            }
         }
     }
 
@@ -729,6 +933,8 @@ public class PlanarStudy {
 
     private static final Object STDIN_LOCK = new Object();
     private static final AtomicBoolean PAUSED = new AtomicBoolean(false);
+    /** Toggled by interactive {@code toggle_debug}; gates probe chatter. */
+    private static final AtomicBoolean DEBUG = new AtomicBoolean(false);
 
     /**
      * Block the calling thread in 1s sleeps while {@link #PAUSED} is set.
@@ -755,6 +961,7 @@ public class PlanarStudy {
         System.out.println("  progress        print current progress");
         System.out.println("  pause           pause worker threads (1s sleep loop)");
         System.out.println("  resume          resume worker threads");
+        System.out.println("  toggle_debug    toggle probe debug output (now " + (DEBUG.get() ? "on" : "off") + ")");
         System.out.println("  (anything else) show this help");
     }
 
@@ -811,6 +1018,11 @@ public class PlanarStudy {
                     case "resume":
                         System.out.println("Command: resume");
                         PAUSED.set(false);
+                        break;
+                    case "toggle_debug":
+                        boolean on = !DEBUG.get();
+                        DEBUG.set(on);
+                        System.out.println("Command: toggle_debug -> " + (on ? "on" : "off"));
                         break;
                     default:
                         System.out.println("Unknown command: " + cmd);
