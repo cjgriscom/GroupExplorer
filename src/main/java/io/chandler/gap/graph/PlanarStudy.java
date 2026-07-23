@@ -68,41 +68,18 @@ public class PlanarStudy {
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
-        int enforceLoopMultiples = 0; // For planar grid stuff, set to 1 for normal operation
+        
+        int enforceLoopMultiples = 0; // For square/hex grid loop filtering, set to 0/1 for normal operation
         long minGeometryAutOrder = 1; // Minimum |Aut(geometry)|; 1 disables this filter
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         // On final result aggregation, also accept |G_result| = |G| / INCLUDE_QUOTIENT.
         // 0 or 1 = only full group order (normal behavior).
         int INCLUDE_QUOTIENT = 0;
-        // lastLoop only: dynamically choose GAP-then-dreadnaut vs dreadnaut-then-GAP.
-        // Occasional dual-path probes pick the cheaper order for the rest of that candidate
-        // (and optionally re-probe mid-candidate as the iso cache warms).
-        boolean DYNAMIC_LASTLOOP_ORDER = true;
-        int LASTLOOP_PROBE_SAMPLES = 24;           // disjoint-passing samples per probe window
-        int LASTLOOP_PROBE_EVERY_CANDIDATES = 1;   // 1 = probe each candidate; raise to probe less often
-        int LASTLOOP_REPROBE_EVERY_DISJOINT = 8000; // 0 = no mid-candidate re-probe
+
+        boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
-        boolean SORT_CANDIDATES = true; // sort Phase 1 pairs before Phase 2 for stable indices
-        int resumePhase2FromCandidate = 0; // 0 = normal full run, n = start from final results candidate n
-        String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         
-        boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
-
-        int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
-        AbstractResultFilter resultFilter;
-        /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
-        resultFilter = CongestionResultFilter.builder(resultFilterQueueSize)
-            .seeds(41, 129)
-            .checkpoints(100, 200, 500, 1000, 1500, 2500)
-            .thresholds(7.5, 4.9, 4.5, 4.25, 3.5, 2.6)
-            .nRotations(10)
-            .threads(Runtime.getRuntime().availableProcessors())
-            .build();
-
-
-        MemorySettings mem = MemorySettings.COMPRESS_LONG;
-
         // We use two cycle descriptions for the candidate pairs.
 
         // Either use a complete description like "6p 3-cycles" or a partial description like "5-cycles" for 5-cycles only
@@ -116,6 +93,32 @@ public class PlanarStudy {
         String generator = Generators.sp_8_2_136; 
         String groupName = "sp_8_2_136";
 
+        // Resume behavior
+        boolean SORT_PH1_CANDIDATES = true; // sort Phase 1 pairs by canonical key before Phase 2 for stable indices
+        int resumePhase2FromCandidate = 0; // 0 = normal full run, n = start from final results candidate n
+        String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
+        
+        int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
+        AbstractResultFilter resultFilter;
+        /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
+        resultFilter = CongestionResultFilter.builder(resultFilterQueueSize)
+            .seeds(41, 129)
+            .checkpoints(100, 200, 500, 1000, 1500, 2500)
+            .thresholds(7.5, 4.9, 4.5, 4.25, 3.5, 2.6)
+            .nRotations(10)
+            .threads(Runtime.getRuntime().availableProcessors())
+            .build();
+
+        // lastLoop only: dynamically choose GAP-then-dreadnaut vs dreadnaut-then-GAP.
+        // Occasional dual-path probes pick the cheaper order for the rest of that candidate
+        // (and optionally re-probe mid-candidate as the iso cache warms).
+        boolean DYNAMIC_LASTLOOP_ORDER = true;
+        int LASTLOOP_PROBE_SAMPLES = 24;           // disjoint-passing samples per probe window
+        int LASTLOOP_PROBE_EVERY_CANDIDATES = 1;   // 1 = probe each candidate; raise to probe less often
+        int LASTLOOP_REPROBE_EVERY_DISJOINT = 8000; // 0 = no mid-candidate re-probe
+
+        MemorySettings mem = MemorySettings.COMPRESS_LONG;
+
         // Print configuration
         System.out.println("Group: " + groupName);
         System.out.println("Generator: " + generator);
@@ -125,29 +128,29 @@ public class PlanarStudy {
         System.out.println("Max duplicate polygons: " + MAX_DUPLICATE_POLYGONS);
         System.out.println("Planar: " + requirePlanar);
         if (!requirePlanar) System.out.println("Max genus: " + discardOverGenusN);
+        System.out.println("Directed: " + directed);
         System.out.println("Loop multiples: " + enforceLoopMultiples);
         System.out.println("Min geometry Aut(G) order: " + minGeometryAutOrder);
         System.out.println("Include quotient: " + INCLUDE_QUOTIENT +
             (INCLUDE_QUOTIENT > 1 ? " (also accept |G|/" + INCLUDE_QUOTIENT + ")" : " (full order only)"));
-        System.out.println("Dynamic lastLoop order: " + DYNAMIC_LASTLOOP_ORDER +
+        System.out.println("Result filter: " + resultFilter.getClass().getSimpleName() +
+            " (queue size " + resultFilterQueueSize +
+            ", threads " + resultFilter.threadCount() + ")");
+        System.out.println("Generate: " + generate);
+        System.out.println("Sort phase 1 candidates: " + SORT_PH1_CANDIDATES);
+        if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
+        if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 results file: " +
+            (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty() ? "(none)" : resumePhase2ResultsFile));
+        System.out.println("Dreadnaut watchdog timeout: " +
+            (DREADNAUT_WATCHDOG_TIMEOUT_SECONDS <= 0 || System.getProperty("disableDreadnautWatchdog") != null ? "disabled" : DREADNAUT_WATCHDOG_TIMEOUT_SECONDS + "s"));
+        System.out.println("Dynamic lastLoop checks: " + DYNAMIC_LASTLOOP_ORDER +
             (DYNAMIC_LASTLOOP_ORDER
                 ? " (probe " + LASTLOOP_PROBE_SAMPLES + " every " + LASTLOOP_PROBE_EVERY_CANDIDATES +
                   " cand" + (LASTLOOP_REPROBE_EVERY_DISJOINT > 0
                     ? ", re-probe every " + LASTLOOP_REPROBE_EVERY_DISJOINT + " disjoint"
                     : "") + ")"
                 : ""));
-        System.out.println("Directed: " + directed);
-        System.out.println("Result filter: " + resultFilter.getClass().getSimpleName() +
-            " (queue size " + resultFilterQueueSize +
-            ", threads " + resultFilter.threadCount() + ")");
-        System.out.println("Generate: " + generate);
-        System.out.println("Sort candidates: " + SORT_CANDIDATES);
-        if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
-        if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 results file: " +
-            (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty() ? "(none)" : resumePhase2ResultsFile));
-        System.out.println("Dreadnaut watchdog timeout: " +
-            (DREADNAUT_WATCHDOG_TIMEOUT_SECONDS <= 0 || System.getProperty("disableDreadnautWatchdog") != null ? "disabled" : DREADNAUT_WATCHDOG_TIMEOUT_SECONDS + "s"));
-
+        
         File root = new File("PlanarStudy/" + groupName);
         root.mkdirs();
 
@@ -461,9 +464,10 @@ public class PlanarStudy {
             " - " + resultFilter.acceptedCount() + " results, " +
             resultFilter.rejectedCount() + " rej., " +
             candidatePairs.size() + " cand.");
-        if (SORT_CANDIDATES) {
-            candidatePairs.sort(Comparator.comparing(pair -> GroupExplorer.generatorsToString(pair)));
-            System.out.println("Sorted candidate pairs for stable Phase 2 indices: " + candidatePairs.size());
+        if (SORT_PH1_CANDIDATES) {
+            sortCandidatesByCanonicalKey(candidatePairs, dreadnautL, directed);
+            System.out.println("Sorted candidate pairs by canonical key for stable Phase 2 indices: " +
+                candidatePairs.size());
         }
         
         // --------------------------------------------------------
@@ -1441,6 +1445,32 @@ public class PlanarStudy {
             }
         }
         return seen.size() < n;
+    }
+
+    private static void sortCandidatesByCanonicalKey(
+        List<int[][][]> candidatePairs,
+        ThreadLocal<DreadnautInterface> dreadnautL,
+        boolean directed
+    ) {
+        int n = candidatePairs.size();
+        if (n <= 1) {
+            return;
+        }
+        String[] keys = new String[n];
+        IntStream.range(0, n).parallel().forEach(i -> {
+            int[][][] pair = candidatePairs.get(i);
+            String key = getCanonicalLabelingOrQuarantine(
+                dreadnautL.get(), pair, directed, null, null);
+            keys[i] = key != null ? key : GroupExplorer.generatorsToString(pair);
+        });
+        Integer[] order = IntStream.range(0, n).boxed().toArray(Integer[]::new);
+        Arrays.sort(order, Comparator.comparing(i -> keys[i]));
+        List<int[][][]> sorted = new ArrayList<>(n);
+        for (int i : order) {
+            sorted.add(candidatePairs.get(i));
+        }
+        candidatePairs.clear();
+        candidatePairs.addAll(sorted);
     }
 
     private static File resolveResumeFile(File root, String resumePhase2ResultsFile) {
