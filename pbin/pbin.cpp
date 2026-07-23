@@ -395,6 +395,7 @@ static std::vector<uint8_t> zlib_decompress(const uint8_t *data, size_t len) {
 
 static constexpr char     PBIN_MAGIC[4] = {'P','B','I','N'};
 static constexpr uint8_t  PBIN_VERSION  = 0x01;
+static constexpr size_t   IO_BUF_SIZE   = 1 << 20; // 1 MiB
 
 static uint32_t read_u32_le(const uint8_t *p) {
     return static_cast<uint32_t>(p[0])       |
@@ -514,6 +515,8 @@ static void encode_file(const std::string &in_path,
     {
         std::ifstream ifs(in_path);
         if (!ifs) throw std::runtime_error("cannot open " + in_path);
+        std::vector<char> in_buf(IO_BUF_SIZE);
+        ifs.rdbuf()->pubsetbuf(in_buf.data(), static_cast<std::streamsize>(in_buf.size()));
         std::string line;
         while (read_logical_line(ifs, line)) {
             if (line.empty()) continue;
@@ -529,6 +532,8 @@ static void encode_file(const std::string &in_path,
 
     std::ofstream ofs(out_path, std::ios::binary);
     if (!ofs) throw std::runtime_error("cannot create " + out_path);
+    std::vector<char> out_buf(IO_BUF_SIZE);
+    ofs.rdbuf()->pubsetbuf(out_buf.data(), static_cast<std::streamsize>(out_buf.size()));
 
     ofs.write(PBIN_MAGIC, 4);
     ofs.put(static_cast<char>(PBIN_VERSION));
@@ -545,6 +550,8 @@ static void encode_file(const std::string &in_path,
     // Pass 2: encode and write blocks
     std::ifstream ifs(in_path);
     if (!ifs) throw std::runtime_error("cannot reopen " + in_path);
+    std::vector<char> in_buf(IO_BUF_SIZE);
+    ifs.rdbuf()->pubsetbuf(in_buf.data(), static_cast<std::streamsize>(in_buf.size()));
 
     std::vector<std::vector<uint8_t>> block_raw;
     block_raw.reserve(block_size);
@@ -604,6 +611,8 @@ static void decode_file(const std::string &in_path,
                          const std::string &out_path) {
     std::ifstream ifs(in_path, std::ios::binary);
     if (!ifs) throw std::runtime_error("cannot open " + in_path);
+    std::vector<char> in_buf(IO_BUF_SIZE);
+    ifs.rdbuf()->pubsetbuf(in_buf.data(), static_cast<std::streamsize>(in_buf.size()));
 
     ifs.seekg(0, std::ios::end);
     const auto file_size = static_cast<uint64_t>(ifs.tellg());
@@ -644,6 +653,8 @@ static void decode_file(const std::string &in_path,
 
     std::ofstream ofs(out_path);
     if (!ofs) throw std::runtime_error("cannot create " + out_path);
+    std::vector<char> out_buf(IO_BUF_SIZE);
+    ofs.rdbuf()->pubsetbuf(out_buf.data(), static_cast<std::streamsize>(out_buf.size()));
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         const uint64_t b_start = offsets[b];
