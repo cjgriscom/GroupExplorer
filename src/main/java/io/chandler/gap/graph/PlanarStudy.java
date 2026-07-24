@@ -90,8 +90,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.sp_8_2_136; 
-        String groupName = "sp_8_2_136";
+        String generator = Generators.suz2; 
+        String groupName = "suz2";
 
         // Resume behavior
         boolean SORT_PH1_CANDIDATES = true; // sort Phase 1 pairs by canonical key before Phase 2 for stable indices
@@ -103,8 +103,8 @@ public class PlanarStudy {
         /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
         resultFilter = CongestionResultFilter.builder(resultFilterQueueSize)
             .seeds(41, 129)
-            .checkpoints(100, 200, 500, 1000, 1500, 2500)
-            .thresholds(7.5, 4.9, 4.5, 4.25, 3.5, 2.6)
+            .checkpoints(100, 200, 500, 1000)
+            .thresholds(7.5, 4.9, 4.5, 4.25)
             .nRotations(10)
             .threads(Runtime.getRuntime().availableProcessors())
             .build();
