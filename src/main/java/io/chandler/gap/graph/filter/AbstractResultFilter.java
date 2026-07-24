@@ -2,6 +2,7 @@ package io.chandler.gap.graph.filter;
 
 import java.io.PrintStream;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -16,10 +17,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * same queue so {@link #process(String)} can run in parallel.
  */
 public abstract class AbstractResultFilter {
-	private static final class QueuedResult {
-		final String result;
-		final boolean lastLoop;
-		final Runnable retainCandidate;
+	protected static final class QueuedResult {
+		public final String result;
+		public final boolean lastLoop;
+		public final Runnable retainCandidate;
 
 		QueuedResult(String result, boolean lastLoop, Runnable retainCandidate) {
 			this.result = result;
@@ -125,7 +126,7 @@ public abstract class AbstractResultFilter {
 		}
 	}
 
-	public final void close() {
+	public void close() {
 		shutdown = true;
 		for (Thread worker : workers) {
 			worker.interrupt();
@@ -139,7 +140,33 @@ public abstract class AbstractResultFilter {
 		}
 	}
 
-	private void runLoop() {
+	protected final boolean isShutdown() {
+		return shutdown;
+	}
+
+	protected final QueuedResult poll(long timeout, TimeUnit unit) throws InterruptedException {
+		return queue.poll(timeout, unit);
+	}
+
+	protected final QueuedResult take() throws InterruptedException {
+		return queue.take();
+	}
+
+	protected final QueuedResult pollNonBlocking() {
+		return queue.poll();
+	}
+
+	/** True when no results are waiting in the input queue (may still be in a batch buffer). */
+	protected final boolean isInputQueueEmpty() {
+		return queue.isEmpty();
+	}
+
+	protected final void markProcessed() {
+		queued.decrementAndGet();
+		notifyDrainWaiters();
+	}
+
+	protected void runLoop() {
 		while (!shutdown) {
 			QueuedResult item;
 			try {
@@ -151,29 +178,32 @@ public abstract class AbstractResultFilter {
 			try {
 				handle(item);
 			} finally {
-				queued.decrementAndGet();
-				notifyDrainWaiters();
+				markProcessed();
 			}
 		}
-		// Drain anything left after shutdown so waiters are not stuck.
+		drainLeftoverQueue();
+	}
+
+	protected final void drainLeftoverQueue() {
 		QueuedResult leftover;
 		while ((leftover = queue.poll()) != null) {
 			try {
 				handle(leftover);
 			} finally {
-				queued.decrementAndGet();
-				notifyDrainWaiters();
+				markProcessed();
 			}
 		}
 	}
 
-	private void handle(QueuedResult item) {
-		// Heavy work (e.g. congestion scoring) may run in parallel across workers.
+	protected final void handle(QueuedResult item) {
 		FilterDecision decision = process(item.result);
+		applyDecision(item, decision);
+	}
+
+	protected final void applyDecision(QueuedResult item, FilterDecision decision) {
 		if (item.lastLoop && decision.isReject()) {
 			decision = FilterDecision.rejectDiscard();
 		}
-		// Serialize side effects so accepted/rejected counts and output stay consistent.
 		synchronized (handleLock) {
 			switch (decision.kind) {
 				case ACCEPT: {

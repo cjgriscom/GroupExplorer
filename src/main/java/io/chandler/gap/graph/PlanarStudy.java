@@ -99,15 +99,28 @@ public class PlanarStudy {
         String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         
         int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
+        boolean useGpuCongestionFilter = false; // set true to use CongestionResultFilterGPU
         AbstractResultFilter resultFilter;
         /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
-        resultFilter = CongestionResultFilter.builder(resultFilterQueueSize)
-            .seeds(41, 129)
-            .checkpoints(100, 200, 500, 1000)
-            .thresholds(7.5, 4.9, 4.5, 4.25)
-            .nRotations(10)
-            .threads(Runtime.getRuntime().availableProcessors())
-            .build();
+        if (useGpuCongestionFilter) {
+            resultFilter = CongestionResultFilterGPU.builder(resultFilterQueueSize)
+                .seeds(41, 129)
+                .checkpoints(100, 200, 500, 1000, 1500, 2500)
+                .thresholds(7.5, 4.9, 4.5, 4.25, 3.5, 2.6)
+                .nRotations(10)
+                .batchSize(256)
+                .batchWaitMs(30_000)
+                .guardBand(0.1)
+                .build();
+        } else {
+            resultFilter = CongestionResultFilter.builder(resultFilterQueueSize)
+                .seeds(41, 129)
+                .checkpoints(100, 200, 500, 1000, 1500, 2500)
+                .thresholds(7.5, 4.9, 4.5, 4.25, 3.5, 2.6)
+                .nRotations(10)
+                .threads(Runtime.getRuntime().availableProcessors())
+                .build();
+        }
 
         // lastLoop only: dynamically choose GAP-then-dreadnaut vs dreadnaut-then-GAP.
         // Occasional dual-path probes pick the cheaper order for the rest of that candidate
