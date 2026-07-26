@@ -567,10 +567,7 @@ public class CongestionBatch {
         if (lower.endsWith(".pbin")) {
             try (PbinFile pbin = PbinFile.open(inputFile);
                     BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile, false))) {
-                for (int index : survivorIndices) {
-                    writer.write(pbin.get(index));
-                    writer.newLine();
-                }
+                writePbinSurvivorsParallel(pbin, survivorIndices, writer);
             }
         } else {
             Map<Integer, String> linesByIndex = loadTextLinesByIndex(new java.util.HashSet<>(survivorIndices));
@@ -582,6 +579,58 @@ public class CongestionBatch {
                         writer.newLine();
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Decodes survivor PBIN entries in parallel batches while writing them in
+     * {@code survivorIndices} order. Raw block reads stay on this thread; workers
+     * only decompress and decode single entries.
+     */
+    private void writePbinSurvivorsParallel(PbinFile pbin, List<Integer> survivorIndices,
+            BufferedWriter writer) throws IOException {
+        int prefetch = Math.max(batchSize, threads * 4);
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        int[] cachedRawBlock = { -1 };
+        byte[][] cachedRawBytes = { null };
+
+        try {
+            for (int start = 0; start < survivorIndices.size(); start += prefetch) {
+                int end = Math.min(start + prefetch, survivorIndices.size());
+                List<Future<String>> futures = new ArrayList<>(end - start);
+                for (int i = start; i < end; i++) {
+                    int index = survivorIndices.get(i);
+                    int b = pbin.blockOf(index);
+                    int off = pbin.offsetInBlock(index);
+                    if (b != cachedRawBlock[0]) {
+                        cachedRawBytes[0] = pbin.readRawBlock(b);
+                        cachedRawBlock[0] = b;
+                    }
+                    byte[] raw = cachedRawBytes[0];
+                    final int block = b;
+                    final int entryOff = off;
+                    futures.add(executor.submit(() -> {
+                        byte[] payload = pbin.getDecompressedPayload(block, raw);
+                        return pbin.decodeEntry(payload, entryOff);
+                    }));
+                }
+                for (Future<String> future : futures) {
+                    try {
+                        writer.write(future.get());
+                        writer.newLine();
+                    } catch (Exception e) {
+                        throw new IOException("Failed to decode survivor for output", e);
+                    }
+                }
+            }
+        } finally {
+            executor.shutdown();
+            try {
+                executor.awaitTermination(365, TimeUnit.DAYS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while writing survivors", e);
             }
         }
     }
