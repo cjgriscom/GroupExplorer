@@ -1,15 +1,22 @@
 package io.chandler.gap.graph;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.Serializable;
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -55,6 +62,7 @@ public class PlanarStudy {
     private static final int DREADNAUT_WATCHDOG_TIMEOUT_SECONDS = 5*60;
     private static final int DREADNAUT_WATCHDOG_INTERVAL_SECONDS = 10;
     private static final String DREADNAUT_COMM = new File(DREADNAUT_PATH).getName();
+    private static final String PHASE2_RECOVERY_FILENAME = "phase2-recovery.ser";
 
     public static void main(String[] args) throws IOException {
         // --------------------------------------------------------
@@ -97,6 +105,9 @@ public class PlanarStudy {
         boolean SORT_PH1_CANDIDATES = true; // sort Phase 1 pairs by canonical key before Phase 2 for stable indices
         int resumePhase2FromCandidate = 0; // 0 = normal full run, n = start from final results candidate n
         String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
+        // Load Phase 2 recovery checkpoint (written when interactive command recovery_on is active).
+        // Skips Phase 1 and restores iso cache, round/candidate index, and candidate lists from phase2-recovery.ser.
+        boolean loadRecovery = false;
         
         int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
         boolean useGpuCongestionFilter = false; // set true to use CongestionResultFilterGPU
@@ -154,6 +165,7 @@ public class PlanarStudy {
         if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
         if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 results file: " +
             (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty() ? "(none)" : resumePhase2ResultsFile));
+        System.out.println("Load Phase 2 recovery: " + loadRecovery);
         System.out.println("Dreadnaut watchdog timeout: " +
             (DREADNAUT_WATCHDOG_TIMEOUT_SECONDS <= 0 || System.getProperty("disableDreadnautWatchdog") != null ? "disabled" : DREADNAUT_WATCHDOG_TIMEOUT_SECONDS + "s"));
         System.out.println("Dynamic lastLoop checks: " + DYNAMIC_LASTLOOP_ORDER +
@@ -231,13 +243,11 @@ public class PlanarStudy {
 
 
         // --------------------------------------------------------
-        // Phase 1: Pair Filtering
+        // Phase 1: Pair Filtering (skipped when loading Phase 2 recovery)
         // --------------------------------------------------------
         DreadnautWatchdog dreadnautWatchdog = new DreadnautWatchdog(DREADNAUT_WATCHDOG_TIMEOUT_SECONDS);
         dreadnautWatchdog.start();
-        try (CycleSource lines2 = CycleSource.open(root, conj[phase1Indices[1]]);
-             CycleSource lines3 = CycleSource.open(root, conj[phase2Indices[0]])) {
-        System.out.println("Starting Phase 1: Pair Filtering");
+        try (CycleSource lines3 = CycleSource.open(root, conj[phase2Indices[0]])) {
 
         // instantiate GAP to check group order (each thread keeps a live reference group G).
         final String referenceGenerator = generator;
@@ -252,9 +262,7 @@ public class PlanarStudy {
         });
         ThreadLocal<DreadnautInterface> dreadnautL = ThreadLocal.withInitial(() -> new DreadnautInterface(DREADNAUT_PATH, USE_TRACES));
 
-        // Create a list to save unique candidate pairs.
         List<int[][][]> candidatePairs = new ArrayList<>();
-        List<Graph<Integer, DefaultEdge>> pairGraphs = new ArrayList<>();
         Set<String> canonicalGraphs = Collections.synchronizedSet(new HashSet<>());
         Object phase1Lock = new Object();
         String geomAutTagCore = "";
@@ -269,6 +277,27 @@ public class PlanarStudy {
         }
         String geomAutTag = geomAutTagCore.isEmpty() ? "" : geomAutTagCore + "-";
         String andquotTag = INCLUDE_QUOTIENT > 1 ? "andquot" + INCLUDE_QUOTIENT + "-" : "";
+        int[] found = new int[repetitions + 1];
+
+        int nPoints = 0;
+        for (int[][] x : GroupExplorer.parseOperations(generator)) {
+            for (int[] y : x) {
+                for (int z : y) {
+                    nPoints = Math.max(nPoints, z);
+                }
+            }
+        }
+        final int nPointsFinal = nPoints;
+
+        if (loadRecovery) {
+            System.out.println("Skipping Phase 1: loading candidate list from " + PHASE2_RECOVERY_FILENAME);
+        } else {
+        final boolean phase1LastLoop = repetitions == 0;
+        try (CycleSource lines2 = CycleSource.open(root, conj[phase1Indices[1]])) {
+        System.out.println("Starting Phase 1: Pair Filtering");
+
+        // Create a list to save unique candidate pairs.
+        List<Graph<Integer, DefaultEdge>> pairGraphs = new ArrayList<>();
         String phase1FilePath =
             root.getAbsolutePath() + "/" +
             (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") +
@@ -279,23 +308,12 @@ public class PlanarStudy {
             conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt";
         PrintStream phase1Out = new PrintStream(phase1FilePath);
         QuarantineLog phase1Quarantine = new QuarantineLog(phase1FilePath);
-        int[] found = new int[repetitions + 1];
-        final boolean phase1LastLoop = repetitions == 0;
         resultFilter.setOutput(phase1Out);
         resultFilter.resetStats(0);
 
         AtomicInteger p1_1_count = new AtomicInteger(0);
 
         String allConjClasses = gapL.get().getConjugacyClasses(generator);
-        int nPoints = 0;
-        for (int[][] x : GroupExplorer.parseOperations(generator)) {
-            for (int[] y : x) {
-                for (int z : y) {
-                    nPoints = Math.max(nPoints, z);
-                }
-            }
-        }
-        final int nPointsFinal = nPoints;
 
         // Get an exemplary cycle from each matching conjugacy class
         List<String> lines1 = new ArrayList<>();
@@ -482,6 +500,8 @@ public class PlanarStudy {
             System.out.println("Sorted candidate pairs by canonical key for stable Phase 2 indices: " +
                 candidatePairs.size());
         }
+        } // end lines2
+        } // end !loadRecovery Phase 1
         
         // --------------------------------------------------------
         // Phase 2: Repetitions-based candidate generation.
@@ -500,20 +520,59 @@ public class PlanarStudy {
             geomAutTag +
             andquotTag +
             conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-" + conj[phase2Indices[0]];
-        
-        for (int r = 1; r <= repetitions; r++) {
+
+        File recoveryFile = new File(root, PHASE2_RECOVERY_FILENAME);
+        Phase2RecoveryState loadedRecovery = null;
+        int startRound = 1;
+        if (loadRecovery) {
+            loadedRecovery = readPhase2Recovery(recoveryFile);
+            if (!groupName.equals(loadedRecovery.groupName)) {
+                throw new IOException("Recovery groupName mismatch: file has '" + loadedRecovery.groupName +
+                    "', current is '" + groupName + "'");
+            }
+            if (!baseFileName.equals(loadedRecovery.baseFileName)) {
+                throw new IOException("Recovery baseFileName mismatch: file has '" + loadedRecovery.baseFileName +
+                    "', current is '" + baseFileName + "'");
+            }
+            synchronized (canonicalGraphs) {
+                canonicalGraphs.clear();
+                canonicalGraphs.addAll(loadedRecovery.canonicalGraphs);
+            }
+            currentCandidates = new ArrayList<>(loadedRecovery.currentCandidates);
+            startRound = loadedRecovery.round;
+            RECOVERY_ON.set(true);
+            System.out.println("Loaded Phase 2 recovery from " + recoveryFile.getAbsolutePath() +
+                ": round " + loadedRecovery.round +
+                ", candidate " + loadedRecovery.candidateIndex +
+                ", iso cache " + loadedRecovery.canonicalGraphs.size() +
+                ", currentCandidates " + currentCandidates.size() +
+                ", newCandidates so far " + loadedRecovery.newCandidates.size() +
+                ", accepted " + loadedRecovery.acceptedCount);
+        } else if (currentCandidates.isEmpty()) {
+            System.out.println("No Phase 1 candidates; Phase 2 has nothing to do.");
+        }
+        for (int r = startRound; r <= repetitions; r++) {
             boolean lastLoop = r == repetitions; 
             final int rFinal = r;
             System.out.println("Starting Phase 2, round " + r + "");
             AtomicBoolean skipRemainingP2 = new AtomicBoolean(false);
-            List<int[][][]> newCandidates = new ArrayList<>();
+            boolean recoverThisRound = loadedRecovery != null && loadedRecovery.round == r;
+            List<int[][][]> newCandidates = recoverThisRound
+                ? new ArrayList<>(loadedRecovery.newCandidates)
+                : new ArrayList<>();
             List<Graph<Integer, DefaultEdge>> newCandidateGraphs = new ArrayList<>();
+            if (recoverThisRound) {
+                for (int[][][] cand : newCandidates) {
+                    boolean actualDirected = directed && !generatorsAreAllTwoCycles(cand);
+                    newCandidateGraphs.add(buildGraphFromCombinedGen(cand, actualDirected));
+                }
+            }
             String roundFileName = baseFileName + "_R" + r + "-filtered.txt";
             String roundFilePath = root.getAbsolutePath() + "/" + roundFileName;
             File configuredResumeFile = (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty())
                 ? null
                 : resolveResumeFile(root, resumePhase2ResultsFile);
-            boolean resumeThisRound = lastLoop &&
+            boolean resumeThisRound = !recoverThisRound && lastLoop &&
                 configuredResumeFile != null &&
                 roundFileName.equals(configuredResumeFile.getName());
             QuarantineLog roundQuarantine = new QuarantineLog(roundFilePath);
@@ -535,23 +594,37 @@ public class PlanarStudy {
                 System.out.println("Seeded canonical labels from " + configuredResumeFile.getName() +
                     " (" + seededLines + " result lines)");
             }
-            int startCandidate = resumeThisRound ? resumePhase2FromCandidate : 0;
+            int startCandidate = recoverThisRound
+                ? loadedRecovery.candidateIndex
+                : (resumeThisRound ? resumePhase2FromCandidate : 0);
+            int roundCount = recoverThisRound ? loadedRecovery.roundCount : 0;
             if (startCandidate >= currentCandidates.size()) {
                 System.out.println("Resume start index " + startCandidate +
                     " >= candidate count " + currentCandidates.size() + "; skipping round " + r);
                 roundQuarantine.close();
+                if (recoverThisRound) loadedRecovery = null;
                 continue;
             }
-            PrintStream phase2RoundOut = resumeThisRound
+            boolean appendRoundOut = recoverThisRound || resumeThisRound;
+            PrintStream phase2RoundOut = appendRoundOut
                 ? new PrintStream(new FileOutputStream(roundFilePath, true))
                 : new PrintStream(roundFilePath);
             resultFilter.setOutput(phase2RoundOut);
-            resultFilter.resetStats(resumeThisRound ? found[rFinal] : 0);
-            if (resumeThisRound) {
+            int acceptedSeed = recoverThisRound
+                ? loadedRecovery.acceptedCount
+                : (resumeThisRound ? found[rFinal] : 0);
+            resultFilter.resetStats(acceptedSeed);
+            if (recoverThisRound) {
+                System.out.println("Recovering " + roundFileName + ", starting at candidate " + startCandidate +
+                    " of " + currentCandidates.size() +
+                    " (iso cache " + canonicalGraphs.size() +
+                    ", newCandidates " + newCandidates.size() +
+                    ", accepted " + acceptedSeed + ")");
+                loadedRecovery = null;
+            } else if (resumeThisRound) {
                 System.out.println("Appending to " + roundFileName + ", starting at candidate " + startCandidate +
                     " of " + currentCandidates.size());
             }
-            int roundCount = 0;
             final boolean dynamicLastLoopOrder = DYNAMIC_LASTLOOP_ORDER;
             final int lastLoopProbeSamples = LASTLOOP_PROBE_SAMPLES;
             final int lastLoopProbeEveryCandidates = Math.max(1, LASTLOOP_PROBE_EVERY_CANDIDATES);
@@ -572,6 +645,20 @@ public class PlanarStudy {
                 boolean probeThisCandidate = lastLoop && dynamicLastLoopOrder
                     && ((i - startCandidate) % lastLoopProbeEveryCandidates == 0);
                 lastLoopOrderSelector.beginCandidate(iDisp, probeThisCandidate);
+                if (RECOVERY_ON.get()) {
+                    resultFilter.drain();
+                    writePhase2Recovery(recoveryFile, new Phase2RecoveryState(
+                        groupName,
+                        baseFileName,
+                        r,
+                        i,
+                        roundCount,
+                        resultFilter.acceptedCount(),
+                        snapshotCanonicalGraphs(canonicalGraphs),
+                        new ArrayList<>(currentCandidates),
+                        new ArrayList<>(newCandidates)
+                    ));
+                }
                 if (DEBUG.get() && lastLoop && dynamicLastLoopOrder) {
                     System.out.println("  Candidate " + i + " lastLoop order: " +
                         lastLoopOrderSelector.mode() +
@@ -596,6 +683,9 @@ public class PlanarStudy {
                             resultFilter.queuedCount() + " queued, " +
                             resultFilter.rejectedCount() + " rej., " +
                             newCandidates.size() + " cand.");
+                        if (RECOVERY_ON.get()) {
+                            System.out.println("  recovery: on -> " + recoveryFile.getName());
+                        }
                     });
                     if (skipCurrentP2.get() || skipRemainingP2.get()) return;
                     // Parse the line from file2 and use its generator (index 0).
@@ -952,6 +1042,102 @@ public class PlanarStudy {
     private static final AtomicBoolean PAUSED = new AtomicBoolean(false);
     /** Toggled by interactive {@code toggle_debug}; gates probe chatter. */
     private static final AtomicBoolean DEBUG = new AtomicBoolean(false);
+    /** Toggled by interactive {@code recovery_on}/{@code recovery_off}; writes Phase 2 checkpoints. */
+    private static final AtomicBoolean RECOVERY_ON = new AtomicBoolean(false);
+
+    /**
+     * Serializable Phase 2 checkpoint written at the start of each candidate when recovery is on.
+     */
+    private static final class Phase2RecoveryState implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        final String groupName;
+        final String baseFileName;
+        final int round;
+        final int candidateIndex;
+        final int roundCount;
+        final int acceptedCount;
+        final HashSet<String> canonicalGraphs;
+        final ArrayList<int[][][]> currentCandidates;
+        final ArrayList<int[][][]> newCandidates;
+
+        Phase2RecoveryState(
+                String groupName,
+                String baseFileName,
+                int round,
+                int candidateIndex,
+                int roundCount,
+                int acceptedCount,
+                HashSet<String> canonicalGraphs,
+                ArrayList<int[][][]> currentCandidates,
+                ArrayList<int[][][]> newCandidates) {
+            this.groupName = groupName;
+            this.baseFileName = baseFileName;
+            this.round = round;
+            this.candidateIndex = candidateIndex;
+            this.roundCount = roundCount;
+            this.acceptedCount = acceptedCount;
+            this.canonicalGraphs = canonicalGraphs;
+            this.currentCandidates = currentCandidates;
+            this.newCandidates = newCandidates;
+        }
+    }
+
+    private static HashSet<String> snapshotCanonicalGraphs(Set<String> canonicalGraphs) {
+        synchronized (canonicalGraphs) {
+            return new HashSet<>(canonicalGraphs);
+        }
+    }
+
+    private static void writePhase2Recovery(File recoveryFile, Phase2RecoveryState state) {
+        File tmp = new File(recoveryFile.getAbsolutePath() + ".tmp");
+        try {
+            try (ObjectOutputStream oos = new ObjectOutputStream(new BufferedOutputStream(new FileOutputStream(tmp)))) {
+                oos.writeObject(state);
+                oos.flush();
+            }
+            Files.move(tmp.toPath(), recoveryFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            System.out.println("  Wrote Phase 2 recovery (round " + state.round +
+                ", candidate " + state.candidateIndex +
+                ", iso cache " + state.canonicalGraphs.size() +
+                ", accepted " + state.acceptedCount + ") -> " + recoveryFile.getName());
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            try {
+                Files.move(tmp.toPath(), recoveryFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                System.out.println("  Wrote Phase 2 recovery (round " + state.round +
+                    ", candidate " + state.candidateIndex +
+                    ", iso cache " + state.canonicalGraphs.size() +
+                    ", accepted " + state.acceptedCount + ") -> " + recoveryFile.getName());
+            } catch (IOException e2) {
+                System.err.println("Failed to write Phase 2 recovery: " + e2.getMessage());
+                if (tmp.exists() && !tmp.delete()) {
+                    System.err.println("  Also failed to delete temp recovery file: " + tmp.getAbsolutePath());
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Failed to write Phase 2 recovery: " + e.getMessage());
+            if (tmp.exists() && !tmp.delete()) {
+                System.err.println("  Also failed to delete temp recovery file: " + tmp.getAbsolutePath());
+            }
+        }
+    }
+
+    private static Phase2RecoveryState readPhase2Recovery(File recoveryFile) throws IOException {
+        if (!recoveryFile.isFile()) {
+            throw new IOException("Recovery file not found: " + recoveryFile.getAbsolutePath());
+        }
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(recoveryFile))) {
+            Object obj = ois.readObject();
+            if (!(obj instanceof Phase2RecoveryState)) {
+                throw new IOException("Unexpected recovery object type: " +
+                    (obj == null ? "null" : obj.getClass().getName()));
+            }
+            return (Phase2RecoveryState) obj;
+        } catch (ClassNotFoundException e) {
+            throw new IOException("Failed to deserialize Phase 2 recovery", e);
+        }
+    }
 
     /**
      * Block the calling thread in 1s sleeps while {@link #PAUSED} is set.
@@ -979,6 +1165,8 @@ public class PlanarStudy {
         System.out.println("  pause           pause worker threads (1s sleep loop)");
         System.out.println("  resume          resume worker threads");
         System.out.println("  toggle_debug    toggle probe debug output (now " + (DEBUG.get() ? "on" : "off") + ")");
+        System.out.println("  recovery_on     write Phase 2 recovery file at each new candidate");
+        System.out.println("  recovery_off    stop writing Phase 2 recovery files");
         System.out.println("  (anything else) show this help");
     }
 
@@ -1040,6 +1228,14 @@ public class PlanarStudy {
                         boolean on = !DEBUG.get();
                         DEBUG.set(on);
                         System.out.println("Command: toggle_debug -> " + (on ? "on" : "off"));
+                        break;
+                    case "recovery_on":
+                        RECOVERY_ON.set(true);
+                        System.out.println("Command: recovery_on (Phase 2 checkpoints at each new candidate)");
+                        break;
+                    case "recovery_off":
+                        RECOVERY_ON.set(false);
+                        System.out.println("Command: recovery_off");
                         break;
                     default:
                         System.out.println("Unknown command: " + cmd);
