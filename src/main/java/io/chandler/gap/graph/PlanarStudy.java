@@ -471,9 +471,11 @@ public class PlanarStudy {
                 final boolean passesGeometryFilterFinal = passesGeometryFilter;
 
                 boolean submitResult = false;
-                synchronized (phase1Lock) {
-                    // Prevent duplicates while lock is released
+                // Must share the canonicalGraphs monitor with contains(); phase1Lock alone is not enough.
+                synchronized (canonicalGraphs) {
                     if (!canonicalGraphs.add(canonicalLabeling)) return;
+                }
+                synchronized (phase1Lock) {
                     if (acceptedFinalOrders.contains(size) && passesGeometryFilterFinal) {
                         submitResult = true;
                     } else if (!phase1LastLoop) {
@@ -859,9 +861,11 @@ public class PlanarStudy {
                     final boolean passesGeometryFilterFinal = passesGeometryFilter;
 
                     boolean submitResult = false;
-                    synchronized (phase1Lock) {
-                        // Prevent duplicates while lock is released
+                    // Must share the canonicalGraphs monitor with contains(); phase1Lock alone is not enough.
+                    synchronized (canonicalGraphs) {
                         if (!canonicalGraphs.add(canonicalLabeling)) return;
+                    }
+                    synchronized (phase1Lock) {
                         if (acceptedFinalOrders.contains(size) && passesGeometryFilterFinal) {
                             submitResult = true;
                         } else if (!lastLoop) {

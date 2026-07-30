@@ -15,6 +15,9 @@ import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
  * Backed by fastutil's open hash set (no per-entry Node objects). On the wire,
  * entries are stored as a count plus {@link CanonicalGraphHash#PACKED_BYTES}-byte
  * records instead of Java Strings.
+ * <p>
+ * Public mutators/queries are synchronized so the set is safe as a shared iso
+ * cache under parallel Phase 1/2 workers (fastutil's open hash set is not).
  */
 public final class CanonicalGraphHashSet implements Serializable, Iterable<CanonicalGraphHash> {
     private static final long serialVersionUID = 1L;
@@ -34,25 +37,25 @@ public final class CanonicalGraphHashSet implements Serializable, Iterable<Canon
         addAll(values);
     }
 
-    public CanonicalGraphHashSet copy() {
+    public synchronized CanonicalGraphHashSet copy() {
         CanonicalGraphHashSet out = new CanonicalGraphHashSet(size());
         out.set.addAll(this.set);
         return out;
     }
 
-    public int size() {
+    public synchronized int size() {
         return set.size();
     }
 
-    public boolean isEmpty() {
+    public synchronized boolean isEmpty() {
         return set.isEmpty();
     }
 
-    public void clear() {
+    public synchronized void clear() {
         set.clear();
     }
 
-    public boolean add(CanonicalGraphHash hash) {
+    public synchronized boolean add(CanonicalGraphHash hash) {
         return set.add(hash);
     }
 
@@ -61,7 +64,7 @@ public final class CanonicalGraphHashSet implements Serializable, Iterable<Canon
         return add(CanonicalGraphHash.parse(dreadnautZ));
     }
 
-    public boolean contains(CanonicalGraphHash hash) {
+    public synchronized boolean contains(CanonicalGraphHash hash) {
         return set.contains(hash);
     }
 
@@ -69,7 +72,7 @@ public final class CanonicalGraphHashSet implements Serializable, Iterable<Canon
         return contains(CanonicalGraphHash.parse(dreadnautZ));
     }
 
-    public boolean addAll(Collection<CanonicalGraphHash> values) {
+    public synchronized boolean addAll(Collection<CanonicalGraphHash> values) {
         boolean changed = false;
         for (CanonicalGraphHash h : values) {
             changed |= set.add(h);
@@ -78,18 +81,38 @@ public final class CanonicalGraphHashSet implements Serializable, Iterable<Canon
     }
 
     public boolean addAll(CanonicalGraphHashSet other) {
-        return set.addAll(other.set);
+        // Snapshot under other's lock, then insert under ours — avoids deadlock and
+        // concurrent mutation of either backing set.
+        CanonicalGraphHash[] snapshot;
+        synchronized (other) {
+            snapshot = other.set.toArray(new CanonicalGraphHash[0]);
+        }
+        synchronized (this) {
+            boolean changed = false;
+            for (CanonicalGraphHash h : snapshot) {
+                changed |= set.add(h);
+            }
+            return changed;
+        }
     }
 
+    /**
+     * Iterator over a live view; not safe for concurrent mutation.
+     * Prefer {@link #copy()} when a stable snapshot is needed.
+     */
     @Override
-    public Iterator<CanonicalGraphHash> iterator() {
+    public synchronized Iterator<CanonicalGraphHash> iterator() {
         return set.iterator();
     }
 
     private void writeObject(ObjectOutputStream out) throws IOException {
         out.defaultWriteObject();
-        out.writeInt(set.size());
-        for (CanonicalGraphHash h : set) {
+        CanonicalGraphHash[] snapshot;
+        synchronized (this) {
+            snapshot = set.toArray(new CanonicalGraphHash[0]);
+        }
+        out.writeInt(snapshot.length);
+        for (CanonicalGraphHash h : snapshot) {
             h.writePacked(out);
         }
     }
