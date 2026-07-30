@@ -436,36 +436,6 @@ public class GroupExplorer implements AbstractGroupProperties {
         return Arrays.copyOf(cycles, cycleCount);
     }
 
-
-    // Renamed original method for testing
-    private static int[][] stateToCyclesOriginal(int[] state) {
-        boolean[] visited = new boolean[state.length];
-        int[][] cycles = new int[state.length][];  // Pre-allocate max possible size
-        int cycleCount = 0;
-        
-        for (int i = 0; i < state.length; i++) {
-            if (!visited[i]) {
-                int current = i;
-                int cycleSize = 0;
-                int[] cycle = new int[state.length];  // Pre-allocate max possible size
-                
-                do {
-                    visited[current] = true;
-                    cycle[cycleSize++] = current + 1;
-                    current = state[current] - 1;
-                } while (current != i);
-
-                // Only add non-trivial cycles (length > 1)
-                if (cycleSize > 1) {
-                    cycles[cycleCount] = Arrays.copyOf(cycle, cycleSize);
-                    cycleCount++;
-                }
-            }
-        }
-        
-        return Arrays.copyOf(cycles, cycleCount);
-    }
-
     public static String cyclesToNotation(int[][] cycles) {
         if (cycles.length == 0) {
             return "()";

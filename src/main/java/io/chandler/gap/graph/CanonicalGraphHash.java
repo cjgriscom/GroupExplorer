@@ -16,27 +16,17 @@ import java.io.Serializable;
 public final class CanonicalGraphHash implements Serializable, Comparable<CanonicalGraphHash> {
     private static final long serialVersionUID = 1L;
 
-    /** Packed on-disk / stream size: 1 engine byte + 12 hash bytes. */
-    public static final int PACKED_BYTES = 13;
+    /** Packed on-disk / stream size: 12 hash bytes. */
+    public static final int PACKED_BYTES = 12;
 
-    /** {@code 'T'} (Traces) or {@code 'N'} (nauty). */
-    private final byte engine;
     private final int w0;
     private final int w1;
     private final int w2;
 
-    public CanonicalGraphHash(char engine, int w0, int w1, int w2) {
-        if (engine != 'T' && engine != 'N') {
-            throw new IllegalArgumentException("engine must be T or N, got: " + engine);
-        }
-        this.engine = (byte) engine;
+    public CanonicalGraphHash(int w0, int w1, int w2) {
         this.w0 = w0;
         this.w1 = w1;
         this.w2 = w2;
-    }
-
-    public char engine() {
-        return (char) (engine & 0xff);
     }
 
     public int w0() { return w0; }
@@ -48,7 +38,7 @@ public final class CanonicalGraphHash implements Serializable, Comparable<Canoni
         if (s == null || s.length() < 8) return false;
         if (s.charAt(0) != '[') return false;
         char e = s.charAt(1);
-        return (e == 'T' || e == 'N') && s.charAt(s.length() - 1) == ']';
+        return (Character.isAlphabetic(e)) && s.charAt(s.length() - 1) == ']';
     }
 
     public static CanonicalGraphHash parse(String dreadnautZ) {
@@ -65,17 +55,16 @@ public final class CanonicalGraphHash implements Serializable, Comparable<Canoni
             throw new IllegalArgumentException(
                 "Expected 3 hex words in dreadnaut z hash, got " + parts.length + ": " + dreadnautZ);
         }
-        char engine = parts[0].charAt(0);
         int w0 = Integer.parseUnsignedInt(parts[0].substring(1), 16);
         int w1 = Integer.parseUnsignedInt(parts[1], 16);
         int w2 = Integer.parseUnsignedInt(parts[2], 16);
-        return new CanonicalGraphHash(engine, w0, w1, w2);
+        return new CanonicalGraphHash(w0, w1, w2);
     }
 
     /** Reconstruct the dreadnaut {@code z} string (hex words without leading-zero padding). */
     @Override
     public String toString() {
-        return "[" + engine()
+        return "[?" // Engine intentionally omitted
             + Integer.toHexString(w0) + " "
             + Integer.toHexString(w1) + " "
             + Integer.toHexString(w2) + "]";
@@ -86,25 +75,22 @@ public final class CanonicalGraphHash implements Serializable, Comparable<Canoni
         if (this == o) return true;
         if (!(o instanceof CanonicalGraphHash)) return false;
         CanonicalGraphHash other = (CanonicalGraphHash) o;
-        return engine == other.engine
-            && w0 == other.w0
+        return w0 == other.w0
             && w1 == other.w1
             && w2 == other.w2;
     }
 
     @Override
     public int hashCode() {
-        // Spread the 96-bit certificate; include engine so N/T never collide.
         int h = w0;
         h = 31 * h + w1;
         h = 31 * h + w2;
-        return 31 * h + (engine & 0xff);
+        return h;
     }
 
     @Override
     public int compareTo(CanonicalGraphHash o) {
-        int c = Byte.compare(this.engine, o.engine);
-        if (c != 0) return c;
+        int c;
         c = Integer.compareUnsigned(this.w0, o.w0);
         if (c != 0) return c;
         c = Integer.compareUnsigned(this.w1, o.w1);
@@ -113,14 +99,12 @@ public final class CanonicalGraphHash implements Serializable, Comparable<Canoni
     }
 
     public void writePacked(DataOutput out) throws IOException {
-        out.writeByte(engine);
         out.writeInt(w0);
         out.writeInt(w1);
         out.writeInt(w2);
     }
 
     public static CanonicalGraphHash readPacked(DataInput in) throws IOException {
-        char engine = (char) (in.readByte() & 0xff);
-        return new CanonicalGraphHash(engine, in.readInt(), in.readInt(), in.readInt());
+        return new CanonicalGraphHash(in.readInt(), in.readInt(), in.readInt());
     }
 }
