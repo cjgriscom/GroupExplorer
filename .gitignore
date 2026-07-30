@@ -1,3 +1,5 @@
+*.ser
+*.ser.bak
 atlas/
 *.sh
 /bin

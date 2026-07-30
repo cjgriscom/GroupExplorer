@@ -13,7 +13,6 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
-import java.io.Serializable;
 import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
@@ -21,7 +20,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -72,7 +70,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS =  13; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS =  300; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -82,13 +80,13 @@ public class PlanarStudy {
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         // On final result aggregation, also accept |G_result| = |G| / INCLUDE_QUOTIENT.
         // 0 or 1 = only full group order (normal behavior).
-        int INCLUDE_QUOTIENT = 0;
+        int INCLUDE_QUOTIENT = 2;
 
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
         // Reject generator sets whose components have different cycle types (sorted cycle-length
         // multisets). Heuristic for "same conjugacy class" when conj[] uses partial descriptions
         // like "2-cycles" that span several classes (e.g. 8p vs 6p 2-cycles).
-        boolean requireSameCycleType = true;
+        boolean requireSameCycleType = false;
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
@@ -102,8 +100,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.psl_3_2_nonsplit_ext; 
-        String groupName = "psl_3_2_nonsplit_ext";
+        String generator = Generators.suz2; 
+        String groupName = "suz2";
 
         // Resume behavior
         boolean SORT_PH1_CANDIDATES = true; // sort Phase 1 pairs by canonical key before Phase 2 for stable indices
@@ -111,24 +109,23 @@ public class PlanarStudy {
         String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         // Load Phase 2 recovery checkpoint (written when interactive command recovery_on is active).
         // Skips Phase 1 and restores iso cache, round/candidate index, and candidate lists from phase2-recovery.ser.
-        boolean loadRecovery = false;
+        boolean loadRecovery = true;
         
-        int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
+        int resultFilterQueueSize = 65535/2; // Max pending results in AbstractResultFilter before add() blocks
         AbstractResultFilter resultFilter;
-        /* TEMP: Delaby triality / no-duality filter (replaces congestion filter) */
-        resultFilter = TrialityResultFilter.builder(resultFilterQueueSize)
+        /*resultFilter = TrialityResultFilter.builder(resultFilterQueueSize)
             .referenceGroup(generator)
             .threads(Math.max(1, Runtime.getRuntime().availableProcessors() / 2))
-            .build();
+            .build();*/
         /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
-        /*
-        boolean useGpuCongestionFilter = false; // set true to use CongestionResultFilterGPU
+        
+        boolean useGpuCongestionFilter = true; // set true to use CongestionResultFilterGPU
         if (useGpuCongestionFilter) {
             resultFilter = CongestionResultFilterGPU.builder(resultFilterQueueSize)
                 .seeds(41, 129)
-                .checkpoints(100, 200, 500, 1000, 1500, 2500)
-                .thresholds(7.5, 4.9, 4.5, 4.25, 3.5, 2.6)
-                .nRotations(10)
+                .checkpoints(100,200,500,1000,1500)
+                .thresholds(8.5,6.9,5.5,4.75,4.25)
+                .nRotations(6)
                 .batchSize(256)
                 .batchWaitMs(30_000)
                 .guardBand(0.1)
@@ -136,13 +133,13 @@ public class PlanarStudy {
         } else {
             resultFilter = CongestionResultFilter.builder(resultFilterQueueSize)
                 .seeds(41, 129)
-                .checkpoints(100, 200, 500, 1000, 1500, 2500)
-                .thresholds(7.5, 4.9, 4.5, 4.25, 3.5, 2.6)
-                .nRotations(10)
+                .checkpoints(100,200,500,1000,1500)
+                .thresholds(8.5,6.9,5.5,4.75,4.25)
+                .nRotations(6)
                 .threads(Runtime.getRuntime().availableProcessors())
                 .build();
         }
-        */
+        
 
         String filterName = "filtered";
         if (resultFilter != null) {
@@ -280,7 +277,7 @@ public class PlanarStudy {
         ThreadLocal<DreadnautInterface> dreadnautL = ThreadLocal.withInitial(() -> new DreadnautInterface(DREADNAUT_PATH, USE_TRACES));
 
         List<int[][][]> candidatePairs = new ArrayList<>();
-        Set<String> canonicalGraphs = Collections.synchronizedSet(new HashSet<>());
+        CanonicalGraphHashSet canonicalGraphs = new CanonicalGraphHashSet();
         Object phase1Lock = new Object();
         String geomAutTagCore = "";
         if (minGeometryAutOrder > 1L) {
@@ -423,7 +420,7 @@ public class PlanarStudy {
                 Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, actualDirected);
 
                 // Check for isomorphic duplicates.
-                String canonicalLabeling = getCanonicalLabelingOrQuarantine(
+                CanonicalGraphHash canonicalLabeling = getCanonicalLabelingOrQuarantine(
                     dreadnautL.get(), candGraph, combinedPair, actualDirected, phase1Quarantine, null);
                 if (canonicalLabeling == null) {
                     return;
@@ -747,7 +744,7 @@ public class PlanarStudy {
                     }
 
                     String size = null;
-                    String canonicalLabeling = null;
+                    CanonicalGraphHash canonicalLabeling = null;
                     Set<String> acceptedOrdersGate = lastLoop ? acceptedFinalOrders : acceptedFullOrder;
 
                     if (lastLoop && dynamicLastLoopOrder) {
@@ -1071,47 +1068,11 @@ public class PlanarStudy {
     /** Toggled by interactive {@code recovery_on}/{@code recovery_off}; writes Phase 2 checkpoints. */
     private static final AtomicBoolean RECOVERY_ON = new AtomicBoolean(false);
 
-    /**
-     * Serializable Phase 2 checkpoint written at the start of each candidate when recovery is on.
-     */
-    private static final class Phase2RecoveryState implements Serializable {
-        private static final long serialVersionUID = 1L;
+    // Phase2RecoveryState lives in its own class (compact CanonicalGraphHashSet iso cache).
 
-        final String groupName;
-        final String baseFileName;
-        final int round;
-        final int candidateIndex;
-        final int roundCount;
-        final int acceptedCount;
-        final HashSet<String> canonicalGraphs;
-        final ArrayList<int[][][]> currentCandidates;
-        final ArrayList<int[][][]> newCandidates;
-
-        Phase2RecoveryState(
-                String groupName,
-                String baseFileName,
-                int round,
-                int candidateIndex,
-                int roundCount,
-                int acceptedCount,
-                HashSet<String> canonicalGraphs,
-                ArrayList<int[][][]> currentCandidates,
-                ArrayList<int[][][]> newCandidates) {
-            this.groupName = groupName;
-            this.baseFileName = baseFileName;
-            this.round = round;
-            this.candidateIndex = candidateIndex;
-            this.roundCount = roundCount;
-            this.acceptedCount = acceptedCount;
-            this.canonicalGraphs = canonicalGraphs;
-            this.currentCandidates = currentCandidates;
-            this.newCandidates = newCandidates;
-        }
-    }
-
-    private static HashSet<String> snapshotCanonicalGraphs(Set<String> canonicalGraphs) {
+    private static CanonicalGraphHashSet snapshotCanonicalGraphs(CanonicalGraphHashSet canonicalGraphs) {
         synchronized (canonicalGraphs) {
-            return new HashSet<>(canonicalGraphs);
+            return canonicalGraphs.copy();
         }
     }
 
@@ -1155,13 +1116,19 @@ public class PlanarStudy {
         }
         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(recoveryFile))) {
             Object obj = ois.readObject();
-            if (!(obj instanceof Phase2RecoveryState)) {
-                throw new IOException("Unexpected recovery object type: " +
-                    (obj == null ? "null" : obj.getClass().getName()));
+            if (obj instanceof Phase2RecoveryState) {
+                return (Phase2RecoveryState) obj;
             }
-            return (Phase2RecoveryState) obj;
+            throw new IOException("Unexpected recovery object type: " +
+                (obj == null ? "null" : obj.getClass().getName()) +
+                ". If this is an old String-cache recovery file, run ConvertPhase2Recovery first.");
         } catch (ClassNotFoundException e) {
             throw new IOException("Failed to deserialize Phase 2 recovery", e);
+        } catch (java.io.InvalidClassException e) {
+            throw new IOException(
+                "Recovery file is an older format. Run ConvertPhase2Recovery on " +
+                    recoveryFile.getAbsolutePath() + " first.",
+                e);
         }
     }
 
@@ -1611,7 +1578,7 @@ public class PlanarStudy {
         }
     }
 
-    private static String getCanonicalLabelingOrQuarantine(
+    private static CanonicalGraphHash getCanonicalLabelingOrQuarantine(
         DreadnautInterface dreadnaut,
         int[][][] candidate,
         boolean directed,
@@ -1623,7 +1590,7 @@ public class PlanarStudy {
         return getCanonicalLabelingOrQuarantine(dreadnaut, graph, candidate, actualDirected, quarantine, errors);
     }
 
-    private static String getCanonicalLabelingOrQuarantine(
+    private static CanonicalGraphHash getCanonicalLabelingOrQuarantine(
         DreadnautInterface dreadnaut,
         Graph<Integer, DefaultEdge> graph,
         int[][][] candidate,
@@ -1632,7 +1599,7 @@ public class PlanarStudy {
         AtomicInteger errors
     ) {
         try {
-            return dreadnaut.getCanonicalLabeling(graph, directed);
+            return CanonicalGraphHash.parse(dreadnaut.getCanonicalLabeling(graph, directed));
         } catch (RuntimeException e) {
             if (isAbnormalDreadnautExit(e)) {
                 quarantine.logFailure(GroupExplorer.generatorsToString(candidate), e.getMessage());
@@ -1717,15 +1684,26 @@ public class PlanarStudy {
         if (n <= 1) {
             return;
         }
-        String[] keys = new String[n];
+        CanonicalGraphHash[] keys = new CanonicalGraphHash[n];
+        String[] fallbackKeys = new String[n];
         IntStream.range(0, n).parallel().forEach(i -> {
             int[][][] pair = candidatePairs.get(i);
-            String key = getCanonicalLabelingOrQuarantine(
+            CanonicalGraphHash key = getCanonicalLabelingOrQuarantine(
                 dreadnautL.get(), pair, directed, null, null);
-            keys[i] = key != null ? key : GroupExplorer.generatorsToString(pair);
+            keys[i] = key;
+            if (key == null) {
+                fallbackKeys[i] = GroupExplorer.generatorsToString(pair);
+            }
         });
         Integer[] order = IntStream.range(0, n).boxed().toArray(Integer[]::new);
-        Arrays.sort(order, Comparator.comparing(i -> keys[i]));
+        Arrays.sort(order, (a, b) -> {
+            CanonicalGraphHash ka = keys[a];
+            CanonicalGraphHash kb = keys[b];
+            if (ka != null && kb != null) return ka.compareTo(kb);
+            if (ka != null) return -1;
+            if (kb != null) return 1;
+            return fallbackKeys[a].compareTo(fallbackKeys[b]);
+        });
         List<int[][][]> sorted = new ArrayList<>(n);
         for (int i : order) {
             sorted.add(candidatePairs.get(i));
@@ -1744,7 +1722,7 @@ public class PlanarStudy {
 
     private static int seedCanonicalGraphsFromResultsFile(
         File resumeFile,
-        Set<String> canonicalGraphs,
+        CanonicalGraphHashSet canonicalGraphs,
         ThreadLocal<DreadnautInterface> dreadnautL,
         boolean directed,
         AtomicInteger errors,
@@ -1785,7 +1763,7 @@ public class PlanarStudy {
 
     private static void processSeedBatch(
         List<String> batch,
-        Set<String> canonicalGraphs,
+        CanonicalGraphHashSet canonicalGraphs,
         ThreadLocal<DreadnautInterface> dreadnautL,
         boolean directed,
         AtomicInteger errors,
@@ -1795,7 +1773,7 @@ public class PlanarStudy {
         batch.parallelStream().forEach(line -> {
             waitWhilePaused();
             int[][][] candidate = GroupExplorer.parseOperationsArr(line);
-            String canonicalLabeling = getCanonicalLabelingOrQuarantine(
+            CanonicalGraphHash canonicalLabeling = getCanonicalLabelingOrQuarantine(
                 dreadnautL.get(), candidate, directed, quarantine, errors);
             if (canonicalLabeling == null) {
                 return;
