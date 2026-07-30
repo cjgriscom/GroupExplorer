@@ -55,6 +55,7 @@ import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
@@ -87,6 +88,8 @@ public class GraphVisualizer extends Application {
     private static final double NODE_RADIUS = 20;
 
     private String filePath;
+    /** {@code cong=} scores from trailing comments in the last-loaded text source, keyed by generator. */
+    private Map<String, Double> sourceCommentScores = Collections.emptyMap();
     private List<String> graphLines = Collections.emptyList();
     private PbinFile pbinFile;
     private int currentGraphIndex = 0;
@@ -635,7 +638,7 @@ public class GraphVisualizer extends Application {
         filterByFitButton.setOnAction(e -> showFilterByFitDialog(primaryStage, pageLabel));
 
         Button filterByCongestionButton = new Button("Congestion...");
-        filterByCongestionButton.setOnAction(e -> showFilterByCongestionDialog(primaryStage, pageLabel));
+        filterByCongestionButton.setOnAction(e -> onFilterByCongestion(primaryStage, pageLabel));
 
         Button showGeneratorButton = new Button("Show Generator");
         showGeneratorButton.setOnAction(e -> showGeneratorDialog(primaryStage));
@@ -860,32 +863,44 @@ public class GraphVisualizer extends Application {
      * Reads the input file. Text files are loaded into memory; PBIN files are
      * opened for random access (one block in memory at a time).
      */
-    private void readGraphLinesFromFile(String filePath) {
-        System.out.println("Reading file: " + filePath);
+    private void readGraphLinesFromFile(String path) {
+        System.out.println("Reading file: " + path);
+        this.filePath = path;
         closeGraphSource();
         graphLines = Collections.emptyList();
-        if (filePath.endsWith(".pbin")) {
+        sourceCommentScores = Collections.emptyMap();
+        if (path.endsWith(".pbin")) {
             try {
-                setPbinFile(PbinFile.open(filePath));
+                setPbinFile(PbinFile.open(path));
             } catch (Exception e) {
                 System.err.println("Failed to read PBIN file: " + e.getMessage());
             }
             return;
         }
         List<String> lines = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(new File(filePath)))) {
+        Map<String, Double> scores = new HashMap<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(new File(path)))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (!line.trim().isEmpty()) {
                     int commentPos = line.indexOf("#");
-                    if (commentPos > 0) line = line.substring(0, commentPos).trim();
+                    if (commentPos > 0) {
+                        String generator = line.substring(0, commentPos).trim();
+                        String comment = line.substring(commentPos + 1).trim();
+                        Double score = parseCongCommentScore(comment);
+                        if (score != null) {
+                            scores.put(generator, score);
+                        }
+                        line = generator;
+                    }
                     lines.add(line);
-                }   
+                }
             }
         } catch (IOException e) {
-            System.err.println("Failed to read file: " + filePath + " " + e.getMessage());
+            System.err.println("Failed to read file: " + path + " " + e.getMessage());
         }
         graphLines = lines;
+        sourceCommentScores = scores;
     }
 
     private void exportGraphLines(Stage owner) {
@@ -2420,6 +2435,132 @@ public class GraphVisualizer extends Application {
         return LayoutCongestion.compute(graph, algo.getResult());
     }
 
+    private void onFilterByCongestion(Stage owner, Label pageLabel) {
+        if (graphLinesEmpty()) return;
+        boolean hasComments = !sourceCommentScores.isEmpty()
+                || (filePath != null && !filePath.endsWith(".pbin") && sourceFileHasInlineComments(filePath));
+        if (hasComments) {
+            Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+            alert.setTitle("Congestion");
+            alert.setHeaderText(null);
+            alert.setContentText("Comments found, sort by comments instead?");
+            alert.getButtonTypes().setAll(ButtonType.YES, ButtonType.NO);
+            java.util.Optional<ButtonType> choice = alert.showAndWait();
+            if (!choice.isPresent()) return;
+            if (choice.get() == ButtonType.YES) {
+                showSortByCommentsDialog(owner, pageLabel);
+                return;
+            }
+        }
+        showFilterByCongestionDialog(owner, pageLabel);
+    }
+
+    /** True if the text source has any non-empty line with a trailing {@code #} comment. */
+    private static boolean sourceFileHasInlineComments(String path) {
+        try (BufferedReader reader = new BufferedReader(new FileReader(new File(path)))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                int commentPos = line.indexOf('#');
+                if (commentPos > 0) return true;
+            }
+        } catch (IOException e) {
+            System.err.println("Failed to scan for comments: " + path + " " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Map stripped generator text -> {@code cong=} score from trailing comments in the source file.
+     */
+    private static Map<String, Double> loadCongestionScoresFromSourceComments(String path) {
+        Map<String, Double> scores = new HashMap<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(new File(path)))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                int commentPos = line.indexOf('#');
+                if (commentPos <= 0) continue;
+                String generator = line.substring(0, commentPos).trim();
+                String comment = line.substring(commentPos + 1).trim();
+                Double score = parseCongCommentScore(comment);
+                if (score != null) {
+                    scores.put(generator, score);
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Failed to read comment scores: " + path + " " + e.getMessage());
+        }
+        return scores;
+    }
+
+    private static Double parseCongCommentScore(String comment) {
+        int congIdx = comment.indexOf("cong=");
+        if (congIdx < 0) return null;
+        String rest = comment.substring(congIdx + "cong=".length()).trim();
+        int end = 0;
+        while (end < rest.length()) {
+            char c = rest.charAt(end);
+            if ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E') {
+                end++;
+            } else {
+                break;
+            }
+        }
+        if (end == 0) return null;
+        try {
+            return Double.parseDouble(rest.substring(0, end));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private void showSortByCommentsDialog(Stage owner, Label pageLabel) {
+        Map<String, Double> scoreByGenerator = sourceCommentScores;
+        if (scoreByGenerator.isEmpty() && filePath != null) {
+            scoreByGenerator = loadCongestionScoresFromSourceComments(filePath);
+        }
+        List<String> linesToProcess = new ArrayList<>(graphLineCount());
+        List<double[]> scored = new ArrayList<>();
+        int matched = 0;
+        for (int i = 0; i < graphLineCount(); i++) {
+            String line = getGraphLine(i);
+            linesToProcess.add(line);
+            Double score = scoreByGenerator.get(line);
+            if (score != null) matched++;
+            scored.add(new double[]{score != null ? score : Double.MAX_VALUE, i});
+        }
+        if (matched == 0) {
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("Congestion");
+            alert.setHeaderText(null);
+            alert.setContentText("No cong= comment scores matched the loaded generators.");
+            alert.showAndWait();
+            return;
+        }
+        scored.sort((a, b) -> Double.compare(a[0], b[0]));
+
+        List<String> sortedLines = new ArrayList<>(scored.size());
+        List<double[]> congestionResults = Collections.synchronizedList(new ArrayList<>());
+        for (int rank = 0; rank < scored.size(); rank++) {
+            double[] entry = scored.get(rank);
+            sortedLines.add(linesToProcess.get((int) entry[1]));
+            congestionResults.add(new double[]{entry[0], rank});
+        }
+        setGraphLines(sortedLines);
+        currentGraphIndex = 0;
+        if (!graphLinesEmpty()) {
+            updateGraph(graphPane, pageLabel);
+            updateGraphInfo(getGraphLine(currentGraphIndex));
+        }
+        pageLabel.setText(" / " + graphLineCount());
+        pageIndexTextField.setText(String.valueOf(currentGraphIndex + 1));
+
+        showCongestionResultsDialog(owner, pageLabel,
+                "Congestion (from comments, " + matched + "/" + sortedLines.size() + " scored)",
+                sortedLines, congestionResults, null, null, null);
+    }
+
     private void showFilterByCongestionDialog(Stage owner, Label pageLabel) {
         if (graphLinesEmpty()) return;
 
@@ -2435,37 +2576,15 @@ public class GraphVisualizer extends Application {
         }
         int total = linesToProcess.size();
 
-        Stage dialog = new Stage();
-        dialog.initOwner(owner);
-        dialog.setTitle("Congestion (" + layoutName + ", " + total + " generators)");
-
-        ObservableList<String> resultItems = FXCollections.observableArrayList();
-        ListView<String> listView = new ListView<>(resultItems);
-        listView.setPrefHeight(400);
-        listView.setPrefWidth(700);
-
-        Label progressLabel = new Label("0 / " + total + " completed");
-        Label statsLabel = new Label("Avg: - | Min: - | Max: -");
-        Button stopButton = new Button("Stop");
-        TextField maxCongestionField = new TextField("1.0");
-        maxCongestionField.setPrefWidth(80);
-        Button applyFilterButton = new Button("Keep Below");
-
-        HBox controlBar = new HBox(10, progressLabel, statsLabel, stopButton,
-                new Label("Max:"), maxCongestionField, applyFilterButton);
-        controlBar.setStyle("-fx-padding: 5; -fx-alignment: center-left;");
-
-        VBox dialogRoot = new VBox(5, controlBar, listView);
-        dialogRoot.setStyle("-fx-padding: 10;");
-
-        dialog.setScene(new Scene(dialogRoot, 720, 480));
-
         List<double[]> congestionResults = Collections.synchronizedList(new ArrayList<>());
-
         int nThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
         ExecutorService executor = Executors.newFixedThreadPool(nThreads);
         AtomicInteger completed = new AtomicInteger(0);
         List<Future<?>> futures = new ArrayList<>();
+
+        CongestionDialogHandles handles = showCongestionResultsDialog(owner, pageLabel,
+                "Congestion (" + layoutName + ", " + total + " generators)",
+                linesToProcess, congestionResults, executor, futures, completed);
 
         for (int i = 0; i < total; i++) {
             final int idx = i;
@@ -2482,13 +2601,75 @@ public class GraphVisualizer extends Application {
                 congestionResults.add(new double[]{congestion, idx});
                 int done = completed.incrementAndGet();
                 if (done % Math.max(1, total / 100) == 0 || done == total) {
-                    Platform.runLater(() -> refreshCongestionList(resultItems, congestionResults,
-                            linesToProcess, progressLabel, statsLabel, done, total));
+                    Platform.runLater(() -> refreshCongestionList(handles.resultItems, congestionResults,
+                            linesToProcess, handles.progressLabel, handles.statsLabel, done, total));
                 }
             }));
         }
+    }
+
+    private static final class CongestionDialogHandles {
+        final ObservableList<String> resultItems;
+        final Label progressLabel;
+        final Label statsLabel;
+
+        CongestionDialogHandles(ObservableList<String> resultItems, Label progressLabel, Label statsLabel) {
+            this.resultItems = resultItems;
+            this.progressLabel = progressLabel;
+            this.statsLabel = statsLabel;
+        }
+    }
+
+    /**
+     * Shared congestion results UI. When {@code executor} is null, results are treated as already
+     * complete (e.g. scores loaded from source-file comments).
+     */
+    private CongestionDialogHandles showCongestionResultsDialog(Stage owner, Label pageLabel,
+            String title, List<String> linesToProcess, List<double[]> congestionResults,
+            ExecutorService executor, List<Future<?>> futures, AtomicInteger completed) {
+        int total = linesToProcess.size();
+        boolean fromComments = executor == null;
+
+        Stage dialog = new Stage();
+        dialog.initOwner(owner);
+        dialog.setTitle(title);
+
+        ObservableList<String> resultItems = FXCollections.observableArrayList();
+        ListView<String> listView = new ListView<>(resultItems);
+        listView.setPrefHeight(400);
+        listView.setPrefWidth(700);
+
+        Label progressLabel = new Label(fromComments
+                ? total + " / " + total + " from comments"
+                : "0 / " + total + " completed");
+        Label statsLabel = new Label("Avg: - | Min: - | Max: -");
+        Button stopButton = new Button("Stop");
+        if (fromComments) {
+            stopButton.setDisable(true);
+            stopButton.setText("Done");
+        }
+        TextField maxCongestionField = new TextField("1.0");
+        maxCongestionField.setPrefWidth(80);
+        Button applyFilterButton = new Button("Keep Below");
+
+        HBox controlBar = new HBox(10, progressLabel, statsLabel, stopButton,
+                new Label("Max:"), maxCongestionField, applyFilterButton);
+        controlBar.setStyle("-fx-padding: 5; -fx-alignment: center-left;");
+
+        VBox dialogRoot = new VBox(5, controlBar, listView);
+        dialogRoot.setStyle("-fx-padding: 10;");
+
+        dialog.setScene(new Scene(dialogRoot, 720, 480));
+
+        CongestionDialogHandles handles = new CongestionDialogHandles(resultItems, progressLabel, statsLabel);
+
+        if (fromComments) {
+            refreshCongestionList(resultItems, congestionResults,
+                    linesToProcess, progressLabel, statsLabel, total, total);
+        }
 
         stopButton.setOnAction(ev -> {
+            if (executor == null) return;
             for (Future<?> f : futures) f.cancel(true);
             executor.shutdownNow();
             stopButton.setDisable(true);
@@ -2504,8 +2685,10 @@ public class GraphVisualizer extends Application {
             } catch (NumberFormatException ex) {
                 return;
             }
-            for (Future<?> f : futures) f.cancel(true);
-            executor.shutdownNow();
+            if (executor != null) {
+                for (Future<?> f : futures) f.cancel(true);
+                executor.shutdownNow();
+            }
 
             List<double[]> snapshot;
             synchronized (congestionResults) {
@@ -2533,11 +2716,14 @@ public class GraphVisualizer extends Application {
         });
 
         dialog.setOnCloseRequest(ev -> {
-            for (Future<?> f : futures) f.cancel(true);
-            executor.shutdownNow();
+            if (executor != null) {
+                for (Future<?> f : futures) f.cancel(true);
+                executor.shutdownNow();
+            }
         });
 
         dialog.show();
+        return handles;
     }
 
     private static void refreshCongestionList(ObservableList<String> items, List<double[]> congestionResults,
