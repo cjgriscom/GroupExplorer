@@ -70,7 +70,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS =  300; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS = 100; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -80,7 +80,7 @@ public class PlanarStudy {
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         // On final result aggregation, also accept |G_result| = |G| / INCLUDE_QUOTIENT.
         // 0 or 1 = only full group order (normal behavior).
-        int INCLUDE_QUOTIENT = 2;
+        int INCLUDE_QUOTIENT = 1;
 
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
         // Reject generator sets whose components have different cycle types (sorted cycle-length
@@ -100,8 +100,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.suz2; 
-        String groupName = "suz2";
+        String generator = Generators.sp_6_3; 
+        String groupName = "sp_6_3";
 
         // Resume behavior
         boolean SORT_PH1_CANDIDATES = true; // sort Phase 1 pairs by canonical key before Phase 2 for stable indices
@@ -109,7 +109,7 @@ public class PlanarStudy {
         String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         // Load Phase 2 recovery checkpoint (written when interactive command recovery_on is active).
         // Skips Phase 1 and restores iso cache, round/candidate index, and candidate lists from phase2-recovery.ser.
-        boolean loadRecovery = true;
+        boolean loadRecovery = false;
         
         int resultFilterQueueSize = 65535/2; // Max pending results in AbstractResultFilter before add() blocks
         AbstractResultFilter resultFilter;
@@ -119,7 +119,7 @@ public class PlanarStudy {
             .build();*/
         /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
         
-        boolean useGpuCongestionFilter = true; // set true to use CongestionResultFilterGPU
+        boolean useGpuCongestionFilter = false; // set true to use CongestionResultFilterGPU
         if (useGpuCongestionFilter) {
             resultFilter = CongestionResultFilterGPU.builder(resultFilterQueueSize)
                 .seeds(41, 129)
@@ -210,6 +210,7 @@ public class PlanarStudy {
                       !groupName.startsWith("tf42") &&
                       !groupName.startsWith("l7_2") &&
                       !groupName.startsWith("sp_8_2") &&
+                      !groupName.startsWith("sp_6_3") &&
                       !groupName.startsWith("l5_3") &&
                       !groupName.startsWith("tg") &&
                       !groupName.startsWith("he") &&
@@ -311,7 +312,6 @@ public class PlanarStudy {
         System.out.println("Starting Phase 1: Pair Filtering");
 
         // Create a list to save unique candidate pairs.
-        List<Graph<Integer, DefaultEdge>> pairGraphs = new ArrayList<>();
         String phase1FilePath =
             root.getAbsolutePath() + "/" +
             (MAX_DUPLICATE_POLYGONS > 0 ? "d" + MAX_DUPLICATE_POLYGONS + "-" : "") +
@@ -436,7 +436,6 @@ public class PlanarStudy {
                     return;
                 }
                 
-                //if (Math.random() < 0.01) Collections.shuffle(pairGraphs);
                 if (size == null) {
                     size = gapL.get().sizeOfSubgroup(GroupExplorer.generatorsToString(combinedPair));
                 }
@@ -480,7 +479,6 @@ public class PlanarStudy {
                         submitResult = true;
                     } else if (!phase1LastLoop) {
                         candidatePairs.add(combinedPair);
-                        pairGraphs.add(candGraph);
                     }
                 }
                 if (submitResult) {
@@ -490,7 +488,6 @@ public class PlanarStudy {
                         phase1LastLoop ? null : () -> {
                             synchronized (phase1Lock) {
                                 candidatePairs.add(combinedPair);
-                                pairGraphs.add(candGraph);
                             }
                         });
                 }
@@ -581,13 +578,6 @@ public class PlanarStudy {
             List<int[][][]> newCandidates = recoverThisRound
                 ? new ArrayList<>(loadedRecovery.newCandidates)
                 : new ArrayList<>();
-            List<Graph<Integer, DefaultEdge>> newCandidateGraphs = new ArrayList<>();
-            if (recoverThisRound) {
-                for (int[][][] cand : newCandidates) {
-                    boolean actualDirected = directed && !generatorsAreAllTwoCycles(cand);
-                    newCandidateGraphs.add(buildGraphFromCombinedGen(cand, actualDirected));
-                }
-            }
             String roundFileName = baseFileName + "_R" + r + "-"+filterName+".txt";
             String roundFilePath = root.getAbsolutePath() + "/" + roundFileName;
             File configuredResumeFile = (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty())
@@ -870,7 +860,6 @@ public class PlanarStudy {
                             submitResult = true;
                         } else if (!lastLoop) {
                             newCandidates.add(newCandidate);
-                            newCandidateGraphs.add(candGraph);
                         }
                         roundCountAtomic.incrementAndGet();
                     }
@@ -881,7 +870,6 @@ public class PlanarStudy {
                             lastLoop ? null : () -> {
                                 synchronized (phase1Lock) {
                                     newCandidates.add(newCandidate);
-                                    newCandidateGraphs.add(candGraph);
                                 }
                             });
                         System.out.println("    ("+(iDisp)+"/"+sizeDisp+") Found new"+(requirePlanar ?" planar ":" ")+"graph with order " + size + " - " +
