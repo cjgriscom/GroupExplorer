@@ -318,7 +318,18 @@ public class GapInterface {
         return null;
     }
 
-
+    /**
+     * Execute arbitrary GAP statements that end with a {@code Print(..., "\\n")} and
+     * return the next non-empty line of output.
+     */
+    public String runPrintCommand(String gapStatements) throws IOException {
+        writer.write(gapStatements);
+        if (!gapStatements.endsWith("\n")) {
+            writer.newLine();
+        }
+        writer.flush();
+        return readNonEmptyLine();
+    }
 
 
     public static String extractCyclesList(String input) {

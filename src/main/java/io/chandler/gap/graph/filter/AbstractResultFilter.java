@@ -288,5 +288,12 @@ public abstract class AbstractResultFilter {
 		protected FilterDecision process(String result) {
 			return FilterDecision.accept();
 		}
+
+		@Override
+		public String shortFilterName() {
+			return "filtered"; // pass thru to isomorphism filter, legacy filename "filtered"
+		}
 	}
+
+	public abstract String shortFilterName();
 }

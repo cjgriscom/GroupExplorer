@@ -111,4 +111,9 @@ public class CongestionResultFilter extends AbstractResultFilter {
 			return new CongestionResultFilter(maxQueueSize, threads, evaluator);
 		}
 	}
+
+	@Override
+	public String shortFilterName() {
+		return "congestion";
+	}
 }

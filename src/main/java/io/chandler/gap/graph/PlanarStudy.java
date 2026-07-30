@@ -72,7 +72,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS =  40; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS =  13; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -85,6 +85,10 @@ public class PlanarStudy {
         int INCLUDE_QUOTIENT = 0;
 
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
+        // Reject generator sets whose components have different cycle types (sorted cycle-length
+        // multisets). Heuristic for "same conjugacy class" when conj[] uses partial descriptions
+        // like "2-cycles" that span several classes (e.g. 8p vs 6p 2-cycles).
+        boolean requireSameCycleType = true;
         boolean generate = true; // Generate the cycle lists?  If you've already generated them set to false to save time
         int repetitions = 1; // Change to 2 (or higher) for additional rounds (e.g., quadruple generation for 2).
         
@@ -98,8 +102,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.suz2; 
-        String groupName = "suz2";
+        String generator = Generators.psl_3_2_nonsplit_ext; 
+        String groupName = "psl_3_2_nonsplit_ext";
 
         // Resume behavior
         boolean SORT_PH1_CANDIDATES = true; // sort Phase 1 pairs by canonical key before Phase 2 for stable indices
@@ -110,9 +114,15 @@ public class PlanarStudy {
         boolean loadRecovery = false;
         
         int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
-        boolean useGpuCongestionFilter = false; // set true to use CongestionResultFilterGPU
         AbstractResultFilter resultFilter;
+        /* TEMP: Delaby triality / no-duality filter (replaces congestion filter) */
+        resultFilter = TrialityResultFilter.builder(resultFilterQueueSize)
+            .referenceGroup(generator)
+            .threads(Math.max(1, Runtime.getRuntime().availableProcessors() / 2))
+            .build();
         /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
+        /*
+        boolean useGpuCongestionFilter = false; // set true to use CongestionResultFilterGPU
         if (useGpuCongestionFilter) {
             resultFilter = CongestionResultFilterGPU.builder(resultFilterQueueSize)
                 .seeds(41, 129)
@@ -131,6 +141,12 @@ public class PlanarStudy {
                 .nRotations(10)
                 .threads(Runtime.getRuntime().availableProcessors())
                 .build();
+        }
+        */
+
+        String filterName = "filtered";
+        if (resultFilter != null) {
+            filterName = resultFilter.shortFilterName();
         }
 
         // lastLoop only: dynamically choose GAP-then-dreadnaut vs dreadnaut-then-GAP.
@@ -153,6 +169,7 @@ public class PlanarStudy {
         System.out.println("Planar: " + requirePlanar);
         if (!requirePlanar) System.out.println("Max genus: " + discardOverGenusN);
         System.out.println("Directed: " + directed);
+        System.out.println("Require same cycle type: " + requireSameCycleType);
         System.out.println("Loop multiples: " + enforceLoopMultiples);
         System.out.println("Min geometry Aut(G) order: " + minGeometryAutOrder);
         System.out.println("Include quotient: " + INCLUDE_QUOTIENT +
@@ -305,7 +322,7 @@ public class PlanarStudy {
             (requirePlanar ? "" : discardOverGenusN == 1 ? "torus-" : (discardOverGenusN == 0 ? "np-" : "np" + discardOverGenusN + "-")) +
             geomAutTag +
             andquotTag +
-            conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-filtered.txt";
+            conj[phase1Indices[0]] + "-" + conj[phase1Indices[1]] + "-"+filterName+".txt";
         PrintStream phase1Out = new PrintStream(phase1FilePath);
         QuarantineLog phase1Quarantine = new QuarantineLog(phase1FilePath);
         resultFilter.setOutput(phase1Out);
@@ -373,6 +390,11 @@ public class PlanarStudy {
                 if (skipCurrent.get() || skipRemaining.get()) return;
                 // Combine the two generators into a pair.
                 int[][][] combinedPair = new int[][][]{firstCandidate, secondCandidate};
+
+                // Same conjugacy-class heuristic: all components share cycle type.
+                if (requireSameCycleType && !generatorsHaveSameCycleType(combinedPair)) {
+                    return;
+                }
                 
                 // Check for duplicate polygons (e.g. [1,2,3] vs [2,1,3]).
                 if (hasDuplicatePolygon(combinedPair, MAX_DUPLICATE_POLYGONS)) {
@@ -567,7 +589,7 @@ public class PlanarStudy {
                     newCandidateGraphs.add(buildGraphFromCombinedGen(cand, actualDirected));
                 }
             }
-            String roundFileName = baseFileName + "_R" + r + "-filtered.txt";
+            String roundFileName = baseFileName + "_R" + r + "-"+filterName+".txt";
             String roundFilePath = root.getAbsolutePath() + "/" + roundFileName;
             File configuredResumeFile = (resumePhase2ResultsFile == null || resumePhase2ResultsFile.isEmpty())
                 ? null
@@ -700,6 +722,10 @@ public class PlanarStudy {
                         newCandidate[j] = candidate[j];
                     }
                     newCandidate[currentLen] = newGenerator;
+                    // Same conjugacy-class heuristic: all components share cycle type.
+                    if (requireSameCycleType && !generatorsHaveSameCycleType(newCandidate)) {
+                        return;
+                    }
                     // Check for duplicate polygons in the new candidate.
                     if (hasDuplicatePolygon(newCandidate, MAX_DUPLICATE_POLYGONS)) {
                         return;
@@ -1625,6 +1651,32 @@ public class PlanarStudy {
         for (int[][] cycle : combinedGen) {
             for (int[] polygon : cycle) {
                 if (polygon.length != 2) return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Cycle-type signature of one generator: sorted cycle lengths (fixed points omitted
+     * since they are not present in the cycle array). Same signature ⇒ same conjugacy
+     * class in S_n / A_n; elsewhere a useful heuristic.
+     */
+    private static int[] cycleTypeSignature(int[][] generator) {
+        int[] lengths = new int[generator.length];
+        for (int i = 0; i < generator.length; i++) {
+            lengths[i] = generator[i].length;
+        }
+        Arrays.sort(lengths);
+        return lengths;
+    }
+
+    /** True if every component of {@code combinedGen} has the same cycle-type signature. */
+    private static boolean generatorsHaveSameCycleType(int[][][] combinedGen) {
+        if (combinedGen.length <= 1) return true;
+        int[] first = cycleTypeSignature(combinedGen[0]);
+        for (int i = 1; i < combinedGen.length; i++) {
+            if (!Arrays.equals(first, cycleTypeSignature(combinedGen[i]))) {
+                return false;
             }
         }
         return true;

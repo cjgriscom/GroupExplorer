@@ -231,4 +231,9 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 			return new CongestionResultFilterGPU(maxQueueSize, gpuEvaluator, batchSize, batchWaitMs);
 		}
 	}
+
+	@Override
+	public String shortFilterName() {
+		return "congestion-gpu";
+	}
 }
