@@ -27,6 +27,11 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
@@ -111,7 +116,9 @@ public class PlanarStudy {
         // Skips Phase 1 and restores iso cache, round/candidate index, and candidate lists from phase2-recovery.ser.
         boolean loadRecovery = false;
         
-        int resultFilterQueueSize = 65535/2; // Max pending results in AbstractResultFilter before add() blocks
+        // Fixed study workers for Phase 1/2 (+ sort/seed). Caps ThreadLocal GAP/dreadnaut sessions.
+        int studyThreads = Runtime.getRuntime().availableProcessors() + 2;
+        int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
         AbstractResultFilter resultFilter;
         /*resultFilter = TrialityResultFilter.builder(resultFilterQueueSize)
             .referenceGroup(generator)
@@ -174,6 +181,7 @@ public class PlanarStudy {
         System.out.println("Result filter: " + resultFilter.getClass().getSimpleName() +
             " (queue size " + resultFilterQueueSize +
             ", threads " + resultFilter.threadCount() + ")");
+        System.out.println("Study workers: " + studyThreads);
         System.out.println("Generate: " + generate);
         System.out.println("Sort phase 1 candidates: " + SORT_PH1_CANDIDATES);
         if (resumePhase2FromCandidate > 0) System.out.println("Resume Phase 2 from candidate: " + resumePhase2FromCandidate);
@@ -262,6 +270,11 @@ public class PlanarStudy {
         // --------------------------------------------------------
         DreadnautWatchdog dreadnautWatchdog = new DreadnautWatchdog(DREADNAUT_WATCHDOG_TIMEOUT_SECONDS);
         dreadnautWatchdog.start();
+        ExecutorService studyPool = Executors.newFixedThreadPool(studyThreads, r -> {
+            Thread t = new Thread(r, "planar-study-worker");
+            t.setDaemon(true);
+            return t;
+        });
         try (CycleSource lines3 = CycleSource.open(root, conj[phase2Indices[0]])) {
 
         // instantiate GAP to check group order (each thread keeps a live reference group G).
@@ -362,7 +375,7 @@ public class PlanarStudy {
 
             AtomicBoolean skipCurrent = new AtomicBoolean(false);
 
-            lines2.forEachParallel(l2 -> {
+            lines2.forEachParallel(studyPool, studyThreads, l2 -> {
                 waitWhilePaused();
                 if (skipCurrent.get() || skipRemaining.get()) return;
                 GroupExplorer ge = geL.get();
@@ -514,7 +527,7 @@ public class PlanarStudy {
             resultFilter.rejectedCount() + " rej., " +
             candidatePairs.size() + " cand.");
         if (SORT_PH1_CANDIDATES) {
-            sortCandidatesByCanonicalKey(candidatePairs, dreadnautL, directed);
+            sortCandidatesByCanonicalKey(candidatePairs, studyPool, studyThreads, dreadnautL, directed);
             System.out.println("Sorted candidate pairs by canonical key for stable Phase 2 indices: " +
                 candidatePairs.size());
         }
@@ -595,6 +608,8 @@ public class PlanarStudy {
                 int seededLines = seedCanonicalGraphsFromResultsFile(
                     configuredResumeFile,
                     canonicalGraphs,
+                    studyPool,
+                    studyThreads,
                     dreadnautL,
                     directed,
                     errors,
@@ -677,7 +692,7 @@ public class PlanarStudy {
                 }
 
                 // Inner loop: iterate over individual lines from file3 in parallel.
-                lines3.forEachParallel(l -> {
+                lines3.forEachParallel(studyPool, studyThreads, l -> {
                     waitWhilePaused();
                     if (skipCurrentP2.get() || skipRemainingP2.get()) return;
                     p2InnerCount.incrementAndGet();
@@ -906,6 +921,12 @@ public class PlanarStudy {
         System.out.println("Phase 2 completed after " + repetitions + " round(s). Final candidate count: " + currentCandidates.size() + " - order " + groupOrderFinal + " found: " + Arrays.toString(found));
         System.out.println("Errors: " + errors);
         } finally {
+            studyPool.shutdownNow();
+            try {
+                studyPool.awaitTermination(30, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             resultFilter.close();
             dreadnautWatchdog.stop();
         }
@@ -1280,10 +1301,11 @@ public class PlanarStudy {
         abstract int size();
 
         /**
-         * Parallel visit in shuffled order. When {@code cancelled} becomes true,
-         * remaining work is skipped (including unread PBIN blocks).
+         * Parallel visit in shuffled order on a fixed worker pool. When {@code cancelled}
+         * becomes true, remaining work is skipped (including unread PBIN blocks).
          */
-        abstract void forEachParallel(java.util.function.Consumer<String> action,
+        abstract void forEachParallel(ExecutorService pool, int workers,
+                                      java.util.function.Consumer<String> action,
                                       java.util.function.BooleanSupplier cancelled);
 
         @Override
@@ -1313,13 +1335,14 @@ public class PlanarStudy {
         }
 
         @Override
-        void forEachParallel(java.util.function.Consumer<String> action,
+        void forEachParallel(ExecutorService pool, int workers,
+                             java.util.function.Consumer<String> action,
                              java.util.function.BooleanSupplier cancelled) {
-            IntStream.of(order).parallel().forEach(i -> {
+            runFixedParallel(pool, workers, order.length, i -> {
                 waitWhilePaused();
                 if (cancelled.getAsBoolean()) return;
-                action.accept(lines.get(i));
-            });
+                action.accept(lines.get(order[i]));
+            }, cancelled);
         }
 
         @Override
@@ -1360,20 +1383,22 @@ public class PlanarStudy {
         }
 
         @Override
-        void forEachParallel(java.util.function.Consumer<String> action,
+        void forEachParallel(ExecutorService pool, int workers,
+                             java.util.function.Consumer<String> action,
                              java.util.function.BooleanSupplier cancelled) {
             int blockSize = pbin.getBlockSize();
             int n = pbin.size();
-            IntStream.of(blockOrder).parallel().forEach(b -> {
+            runFixedParallel(pool, workers, blockOrder.length, i -> {
                 waitWhilePaused();
                 if (cancelled.getAsBoolean()) return;
+                int b = blockOrder[i];
                 String[] entries = loadBlockEntries(b, blockSize, n);
                 for (String entry : entries) {
                     waitWhilePaused();
                     if (cancelled.getAsBoolean()) return;
                     action.accept(entry);
                 }
-            });
+            }, cancelled);
         }
 
         private String[] loadBlockEntries(int block, int blockSize, int n) {
@@ -1669,6 +1694,8 @@ public class PlanarStudy {
 
     private static void sortCandidatesByCanonicalKey(
         List<int[][][]> candidatePairs,
+        ExecutorService pool,
+        int workers,
         ThreadLocal<DreadnautInterface> dreadnautL,
         boolean directed
     ) {
@@ -1678,7 +1705,7 @@ public class PlanarStudy {
         }
         CanonicalGraphHash[] keys = new CanonicalGraphHash[n];
         String[] fallbackKeys = new String[n];
-        IntStream.range(0, n).parallel().forEach(i -> {
+        runFixedParallel(pool, workers, n, i -> {
             int[][][] pair = candidatePairs.get(i);
             CanonicalGraphHash key = getCanonicalLabelingOrQuarantine(
                 dreadnautL.get(), pair, directed, null, null);
@@ -1686,7 +1713,7 @@ public class PlanarStudy {
             if (key == null) {
                 fallbackKeys[i] = GroupExplorer.generatorsToString(pair);
             }
-        });
+        }, () -> false);
         Integer[] order = IntStream.range(0, n).boxed().toArray(Integer[]::new);
         Arrays.sort(order, (a, b) -> {
             CanonicalGraphHash ka = keys[a];
@@ -1715,6 +1742,8 @@ public class PlanarStudy {
     private static int seedCanonicalGraphsFromResultsFile(
         File resumeFile,
         CanonicalGraphHashSet canonicalGraphs,
+        ExecutorService pool,
+        int workers,
         ThreadLocal<DreadnautInterface> dreadnautL,
         boolean directed,
         AtomicInteger errors,
@@ -1734,7 +1763,7 @@ public class PlanarStudy {
                 }
                 batch.add(line);
                 if (batch.size() >= batchSize) {
-                    processSeedBatch(batch, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels, quarantine);
+                    processSeedBatch(batch, pool, workers, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels, quarantine);
                     int lines = lineCount.addAndGet(batch.size());
                     if (lines / progressInterval > (lines - batch.size()) / progressInterval) {
                         System.out.println("  Seeding progress: " + lines + " lines, " +
@@ -1744,7 +1773,7 @@ public class PlanarStudy {
                 }
             }
             if (!batch.isEmpty()) {
-                processSeedBatch(batch, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels, quarantine);
+                processSeedBatch(batch, pool, workers, canonicalGraphs, dreadnautL, directed, errors, uniqueLabels, quarantine);
                 lineCount.addAndGet(batch.size());
             }
         }
@@ -1755,6 +1784,8 @@ public class PlanarStudy {
 
     private static void processSeedBatch(
         List<String> batch,
+        ExecutorService pool,
+        int workers,
         CanonicalGraphHashSet canonicalGraphs,
         ThreadLocal<DreadnautInterface> dreadnautL,
         boolean directed,
@@ -1762,8 +1793,9 @@ public class PlanarStudy {
         AtomicInteger uniqueLabels,
         QuarantineLog quarantine
     ) {
-        batch.parallelStream().forEach(line -> {
+        runFixedParallel(pool, workers, batch.size(), i -> {
             waitWhilePaused();
+            String line = batch.get(i);
             int[][][] candidate = GroupExplorer.parseOperationsArr(line);
             CanonicalGraphHash canonicalLabeling = getCanonicalLabelingOrQuarantine(
                 dreadnautL.get(), candidate, directed, quarantine, errors);
@@ -1775,7 +1807,64 @@ public class PlanarStudy {
                     uniqueLabels.incrementAndGet();
                 }
             }
-        });
+        }, () -> false);
+    }
+
+    /**
+     * Run {@code n} indexed tasks on a fixed pool via worker-pull (at most
+     * {@code workers} concurrent tasks; no million-Future queue).
+     */
+    private static void runFixedParallel(
+        ExecutorService pool,
+        int workers,
+        int n,
+        java.util.function.IntConsumer indexedAction,
+        java.util.function.BooleanSupplier cancelled
+    ) {
+        if (n <= 0) {
+            return;
+        }
+        int nWorkers = Math.min(Math.max(1, workers), n);
+        AtomicInteger next = new AtomicInteger(0);
+        List<Future<?>> futures = new ArrayList<>(nWorkers);
+        for (int w = 0; w < nWorkers; w++) {
+            futures.add(pool.submit(() -> {
+                for (;;) {
+                    if (cancelled.getAsBoolean()) return;
+                    int i = next.getAndIncrement();
+                    if (i >= n) return;
+                    indexedAction.accept(i);
+                }
+            }));
+        }
+        awaitFutures(futures);
+    }
+
+    private static void awaitFutures(List<Future<?>> futures) {
+        RuntimeException error = null;
+        for (Future<?> f : futures) {
+            try {
+                f.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                for (Future<?> cancel : futures) {
+                    cancel.cancel(true);
+                }
+                throw new RuntimeException("Interrupted while waiting for study workers", e);
+            } catch (ExecutionException e) {
+                Throwable c = e.getCause() != null ? e.getCause() : e;
+                if (error == null) {
+                    error = c instanceof RuntimeException
+                        ? (RuntimeException) c
+                        : new RuntimeException(c);
+                } else {
+                    error.addSuppressed(c);
+                }
+            }
+        }
+        if (error != null) {
+            throw error;
+        }
     }
 
     private static boolean conjMatches(String conj, String description) {
