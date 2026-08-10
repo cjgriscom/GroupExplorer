@@ -15,6 +15,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>
  * When constructed with {@code threads > 1}, multiple workers compete on the
  * same queue so {@link #process(String)} can run in parallel.
+ * <p>
+ * Worker crashes are reported loudly, optionally pause the study via
+ * {@link #setFailurePauseHook(Runnable)}, and the worker auto-restarts unless
+ * {@link #close()} has been called.
  */
 public abstract class AbstractResultFilter {
 	protected static final class QueuedResult {
@@ -34,10 +38,14 @@ public abstract class AbstractResultFilter {
 	private final AtomicInteger accepted = new AtomicInteger();
 	private final AtomicInteger rejected = new AtomicInteger();
 	private final AtomicInteger queued = new AtomicInteger();
+	private final AtomicInteger failures = new AtomicInteger();
+	private final AtomicInteger restarts = new AtomicInteger();
 	private final Object drainLock = new Object();
 	private final Object handleLock = new Object();
 	private volatile PrintStream out;
 	private volatile boolean shutdown;
+	private volatile boolean pauseOnFailure = true;
+	private volatile Runnable failurePauseHook;
 
 	protected AbstractResultFilter(int maxQueueSize) {
 		this(maxQueueSize, 1);
@@ -53,7 +61,8 @@ public abstract class AbstractResultFilter {
 		this.queue = new ArrayBlockingQueue<>(maxQueueSize);
 		this.workers = new Thread[threads];
 		for (int i = 0; i < threads; i++) {
-			Thread worker = new Thread(this::runLoop, "planar-study-result-filter-" + i);
+			final int index = i;
+			Thread worker = new Thread(() -> runSupervised(index), "planar-study-result-filter-" + i);
 			worker.setDaemon(true);
 			workers[i] = worker;
 			worker.start();
@@ -63,6 +72,33 @@ public abstract class AbstractResultFilter {
 	/** Number of filter worker threads. */
 	public final int threadCount() {
 		return workers.length;
+	}
+
+	/** Cumulative process/batch failures (does not include clean shutdown). */
+	public final int failureCount() {
+		return failures.get();
+	}
+
+	/** How many times workers re-entered {@link #runLoop()} after a crash. */
+	public final int restartCount() {
+		return restarts.get();
+	}
+
+	/**
+	 * When true (default), {@link #notifyFailure(String, Throwable)} invokes
+	 * {@link #setFailurePauseHook(Runnable)} so the study can pause for inspection.
+	 */
+	public final void setPauseOnFailure(boolean pauseOnFailure) {
+		this.pauseOnFailure = pauseOnFailure;
+	}
+
+	public final boolean isPauseOnFailure() {
+		return pauseOnFailure;
+	}
+
+	/** Optional hook (e.g. set PlanarStudy paused) when a failure is reported and pause-on-failure is on. */
+	public final void setFailurePauseHook(Runnable failurePauseHook) {
+		this.failurePauseHook = failurePauseHook;
 	}
 
 	/** Subclasses decide accept / reject-to-candidates / discard for each result. */
@@ -166,6 +202,74 @@ public abstract class AbstractResultFilter {
 		notifyDrainWaiters();
 	}
 
+	/**
+	 * Loud failure report; increments {@link #failureCount()}. When
+	 * {@link #isPauseOnFailure()} is set, runs the pause hook.
+	 */
+	protected final void notifyFailure(String context, Throwable t) {
+		int n = failures.incrementAndGet();
+		String thread = Thread.currentThread().getName();
+		System.err.println();
+		System.err.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+		System.err.println("RESULT FILTER FAILURE #" + n + " on " + thread);
+		System.err.println("  context: " + context);
+		System.err.println("  filter:  " + getClass().getSimpleName() + " / " + shortFilterName());
+		System.err.println("  queued:  " + queued.get() + "  accepted: " + accepted.get()
+			+ "  rejected: " + rejected.get()
+			+ "  restarts: " + restarts.get());
+		if (t != null) {
+			System.err.println("  error:   " + t.getClass().getName() + ": " + t.getMessage());
+			t.printStackTrace(System.err);
+		}
+		if (pauseOnFailure) {
+			System.err.println("  pause_on_failure: ON — pausing study workers (type 'resume' to continue)");
+			Runnable hook = failurePauseHook;
+			if (hook != null) {
+				try {
+					hook.run();
+				} catch (Throwable hookError) {
+					System.err.println("  pause hook failed: " + hookError);
+					hookError.printStackTrace(System.err);
+				}
+			}
+		} else {
+			System.err.println("  pause_on_failure: OFF — continuing / auto-restarting");
+		}
+		System.err.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+		System.err.println();
+		System.err.flush();
+	}
+
+	private void runSupervised(int index) {
+		while (!shutdown) {
+			try {
+				runLoop();
+				// Normal return: shutdown completed inside runLoop.
+				return;
+			} catch (Throwable t) {
+				if (shutdown) {
+					return;
+				}
+				notifyFailure("runLoop crashed (worker " + index + ")", t);
+			}
+			if (shutdown) {
+				return;
+			}
+			int r = restarts.incrementAndGet();
+			System.err.println("Auto-restarting planar-study-result-filter-" + index
+				+ " (restart #" + r + ") in 1s...");
+			System.err.flush();
+			try {
+				Thread.sleep(1000L);
+			} catch (InterruptedException e) {
+				if (shutdown) {
+					return;
+				}
+				Thread.currentThread().interrupt();
+			}
+		}
+	}
+
 	protected void runLoop() {
 		while (!shutdown) {
 			QueuedResult item;
@@ -176,7 +280,7 @@ public abstract class AbstractResultFilter {
 				continue;
 			}
 			try {
-				handle(item);
+				safeHandle(item);
 			} finally {
 				markProcessed();
 			}
@@ -188,16 +292,30 @@ public abstract class AbstractResultFilter {
 		QueuedResult leftover;
 		while ((leftover = queue.poll()) != null) {
 			try {
-				handle(leftover);
+				safeHandle(leftover);
 			} finally {
 				markProcessed();
 			}
 		}
 	}
 
+	/** Process one item; on failure reject-to-candidates and report. */
+	protected final void safeHandle(QueuedResult item) {
+		try {
+			FilterDecision decision = process(item.result);
+			applyDecision(item, decision);
+		} catch (Throwable t) {
+			notifyFailure("process: " + truncate(item.result, 120), t);
+			try {
+				applyDecision(item, FilterDecision.rejectToCandidates());
+			} catch (Throwable t2) {
+				t.addSuppressed(t2);
+			}
+		}
+	}
+
 	protected final void handle(QueuedResult item) {
-		FilterDecision decision = process(item.result);
-		applyDecision(item, decision);
+		safeHandle(item);
 	}
 
 	protected final void applyDecision(QueuedResult item, FilterDecision decision) {
@@ -234,6 +352,12 @@ public abstract class AbstractResultFilter {
 					throw new IllegalStateException("Unknown decision: " + decision.kind);
 			}
 		}
+	}
+
+	private static String truncate(String s, int max) {
+		if (s == null) return "null";
+		if (s.length() <= max) return s;
+		return s.substring(0, max) + "...";
 	}
 
 	private void notifyDrainWaiters() {

@@ -54,12 +54,20 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 				}
 
 				QueuedResult item;
-				if (pending.isEmpty()) {
-					item = take();
-				} else {
-					long remaining = batchDeadlineMs - System.currentTimeMillis();
-					long pollTimeoutMs = Math.min(POLL_CHECK_MS, Math.max(1L, remaining));
-					item = poll(pollTimeoutMs, TimeUnit.MILLISECONDS);
+				try {
+					if (pending.isEmpty()) {
+						item = take();
+					} else {
+						long remaining = batchDeadlineMs - System.currentTimeMillis();
+						long pollTimeoutMs = Math.min(POLL_CHECK_MS, Math.max(1L, remaining));
+						item = poll(pollTimeoutMs, TimeUnit.MILLISECONDS);
+					}
+				} catch (InterruptedException e) {
+					if (isShutdown()) {
+						break;
+					}
+					Thread.currentThread().interrupt();
+					continue;
 				}
 
 				if (item != null) {
@@ -80,9 +88,12 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 			if (!pending.isEmpty()) {
 				flushBatch(pending);
 			}
-		} catch (InterruptedException e) {
-			if (!isShutdown()) {
-				Thread.currentThread().interrupt();
+		} finally {
+			// If we abort with items still pending (e.g. unexpected Error after take),
+			// release queued accounting so drain()/producers cannot wedge forever.
+			if (!pending.isEmpty()) {
+				failPendingBatch(pending,
+					new IllegalStateException("GPU filter leaving runLoop with " + pending.size() + " pending"));
 			}
 		}
 	}
@@ -109,11 +120,17 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 			lines.add(item.result);
 		}
 
-		CongestionEvaluatorGPU.BatchOutcome outcome = gpuEvaluator.evaluateBatch(lines);
-		CongestionEvaluator.Result[] results = outcome.results;
-		if (results.length != pending.size()) {
-			throw new IllegalStateException(
-					"GPU batch returned " + results.length + " results for " + pending.size() + " inputs");
+		CongestionEvaluator.Result[] results;
+		try {
+			CongestionEvaluatorGPU.BatchOutcome outcome = gpuEvaluator.evaluateBatch(lines);
+			results = outcome.results;
+			if (results.length != pending.size()) {
+				throw new IllegalStateException(
+						"GPU batch returned " + results.length + " results for " + pending.size() + " inputs");
+			}
+		} catch (Throwable t) {
+			failPendingBatch(pending, t);
+			return;
 		}
 
 		for (int i = 0; i < pending.size(); i++) {
@@ -124,6 +141,36 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 						? FilterDecision.accept(String.format("cong=%.6f", eval.bestScore))
 						: FilterDecision.rejectToCandidates();
 				applyDecision(item, decision);
+			} catch (Throwable t) {
+				notifyFailure("GPU applyDecision i=" + i + " / " + pending.size(), t);
+				try {
+					applyDecision(pending.get(i), FilterDecision.rejectToCandidates());
+				} catch (Throwable t2) {
+					t.addSuppressed(t2);
+				}
+			} finally {
+				markProcessed();
+			}
+		}
+		pending.clear();
+	}
+
+	/** Report failure, print sample inputs for reproduction, reject-to-candidates, clear pending. */
+	private void failPendingBatch(List<QueuedResult> pending, Throwable t) {
+		notifyFailure("GPU flushBatch n=" + pending.size(), t);
+		int samples = Math.min(5, pending.size());
+		for (int i = 0; i < samples; i++) {
+			System.err.println("  failed-input[" + i + "]: " + pending.get(i).result);
+		}
+		if (pending.size() > samples) {
+			System.err.println("  ... (" + (pending.size() - samples) + " more)");
+		}
+		System.err.flush();
+		for (QueuedResult item : pending) {
+			try {
+				applyDecision(item, FilterDecision.rejectToCandidates());
+			} catch (Throwable t2) {
+				t.addSuppressed(t2);
 			} finally {
 				markProcessed();
 			}

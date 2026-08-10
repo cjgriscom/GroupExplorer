@@ -127,6 +127,8 @@ public class PlanarStudy {
         /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
         
         boolean useGpuCongestionFilter = true; // set true to use CongestionResultFilterGPU
+        // When a result-filter worker fails, print loudly and pause study workers (interactive resume).
+        boolean pauseOnFilterFailure = true;
         if (useGpuCongestionFilter) {
             resultFilter = CongestionResultFilterGPU.builder(resultFilterQueueSize)
                 .seeds(41, 129)
@@ -146,6 +148,14 @@ public class PlanarStudy {
                 .threads(Runtime.getRuntime().availableProcessors())
                 .build();
         }
+        ACTIVE_RESULT_FILTER = resultFilter;
+        resultFilter.setPauseOnFailure(pauseOnFilterFailure);
+        resultFilter.setFailurePauseHook(() -> {
+            if (PAUSED.compareAndSet(false, true)) {
+                System.err.println("Study PAUSED after result-filter failure (type 'resume' to continue)");
+                System.err.flush();
+            }
+        });
         
 
         String filterName = "filtered";
@@ -180,7 +190,8 @@ public class PlanarStudy {
             (INCLUDE_QUOTIENT > 1 ? " (also accept |G|/" + INCLUDE_QUOTIENT + ")" : " (full order only)"));
         System.out.println("Result filter: " + resultFilter.getClass().getSimpleName() +
             " (queue size " + resultFilterQueueSize +
-            ", threads " + resultFilter.threadCount() + ")");
+            ", threads " + resultFilter.threadCount() +
+            ", pause_on_failure " + resultFilter.isPauseOnFailure() + ")");
         System.out.println("Study workers: " + studyThreads);
         System.out.println("Generate: " + generate);
         System.out.println("Sort phase 1 candidates: " + SORT_PH1_CANDIDATES);
@@ -928,6 +939,7 @@ public class PlanarStudy {
                 Thread.currentThread().interrupt();
             }
             resultFilter.close();
+            ACTIVE_RESULT_FILTER = null;
             dreadnautWatchdog.stop();
         }
     }
@@ -1080,6 +1092,8 @@ public class PlanarStudy {
     private static final AtomicBoolean DEBUG = new AtomicBoolean(false);
     /** Toggled by interactive {@code recovery_on}/{@code recovery_off}; writes Phase 2 checkpoints. */
     private static final AtomicBoolean RECOVERY_ON = new AtomicBoolean(false);
+    /** Active result filter for interactive pause_on_failure / pause_off_failure. */
+    private static volatile AbstractResultFilter ACTIVE_RESULT_FILTER;
 
     // Phase2RecoveryState lives in its own class (compact CanonicalGraphHashSet iso cache).
 
@@ -1164,6 +1178,7 @@ public class PlanarStudy {
     }
 
     private static void printInteractiveHelp() {
+        AbstractResultFilter filter = ACTIVE_RESULT_FILTER;
         System.out.println("Commands:");
         System.out.println("  skip_current    skip rest of current conjugacy class / candidate");
         System.out.println("  skip_remaining  skip all remaining work in this phase");
@@ -1173,6 +1188,9 @@ public class PlanarStudy {
         System.out.println("  toggle_debug    toggle probe debug output (now " + (DEBUG.get() ? "on" : "off") + ")");
         System.out.println("  recovery_on     write Phase 2 recovery file at each new candidate");
         System.out.println("  recovery_off    stop writing Phase 2 recovery files");
+        System.out.println("  pause_on_failure   pause study when result-filter fails (now " +
+            (filter != null && filter.isPauseOnFailure() ? "on" : "off") + ")");
+        System.out.println("  pause_off_failure  do not pause on result-filter failure");
         System.out.println("  (anything else) show this help");
     }
 
@@ -1243,6 +1261,26 @@ public class PlanarStudy {
                         RECOVERY_ON.set(false);
                         System.out.println("Command: recovery_off");
                         break;
+                    case "pause_on_failure": {
+                        AbstractResultFilter filter = ACTIVE_RESULT_FILTER;
+                        if (filter == null) {
+                            System.out.println("Command: pause_on_failure (no active result filter)");
+                            break;
+                        }
+                        filter.setPauseOnFailure(true);
+                        System.out.println("Command: pause_on_failure -> on");
+                        break;
+                    }
+                    case "pause_off_failure": {
+                        AbstractResultFilter filter = ACTIVE_RESULT_FILTER;
+                        if (filter == null) {
+                            System.out.println("Command: pause_off_failure (no active result filter)");
+                            break;
+                        }
+                        filter.setPauseOnFailure(false);
+                        System.out.println("Command: pause_off_failure -> off");
+                        break;
+                    }
                     default:
                         System.out.println("Unknown command: " + cmd);
                         printInteractiveHelp();
