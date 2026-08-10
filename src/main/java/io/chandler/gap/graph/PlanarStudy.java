@@ -75,7 +75,7 @@ public class PlanarStudy {
         // --------------------------------------------------------
         // Configuration variables
         // --------------------------------------------------------
-        int MAX_DUPLICATE_POLYGONS = 100; // Useful for allowing overlapping 2-cycles
+        int MAX_DUPLICATE_POLYGONS = 300; // Useful for allowing overlapping 2-cycles
         boolean allowSubgroups = true; // Allow searching subgroup graph candidates - this should always be true
         boolean requirePlanar = false; // Require the graphs to be planar / polyhedral
         int discardOverGenusN = 0; // If not requiring planar, this will discard graphs with genus > N.  If 0, ignore genus.
@@ -85,7 +85,7 @@ public class PlanarStudy {
         long geometryAutOrderModulus = 1; // If >1, require |Aut(geometry)| ≡ geometryAutOrderRemainder (mod modulus)
         // On final result aggregation, also accept |G_result| = |G| / INCLUDE_QUOTIENT.
         // 0 or 1 = only full group order (normal behavior).
-        int INCLUDE_QUOTIENT = 1;
+        int INCLUDE_QUOTIENT = 2;
 
         boolean directed = true; // Set to false to filter out isomorphic undirected duplicates.  This can speed things up if there are tons of results
         // Reject generator sets whose components have different cycle types (sorted cycle-length
@@ -105,8 +105,8 @@ public class PlanarStudy {
         int[] phase1Indices = new int[]{0,1};
         int[] phase2Indices = new int[]{1};
 
-        String generator = Generators.sp_6_3; 
-        String groupName = "sp_6_3";
+        String generator = Generators.suz2; 
+        String groupName = "suz2";
 
         // Resume behavior
         boolean SORT_PH1_CANDIDATES = true; // sort Phase 1 pairs by canonical key before Phase 2 for stable indices
@@ -114,7 +114,7 @@ public class PlanarStudy {
         String resumePhase2ResultsFile = ""; // empty = no seed, or final results filename like "d30-np-2-cycles-2-cycles-2-cycles_R1-filtered.txt"
         // Load Phase 2 recovery checkpoint (written when interactive command recovery_on is active).
         // Skips Phase 1 and restores iso cache, round/candidate index, and candidate lists from phase2-recovery.ser.
-        boolean loadRecovery = false;
+        boolean loadRecovery = true;
         
         // Fixed study workers for Phase 1/2 (+ sort/seed). Caps ThreadLocal GAP/dreadnaut sessions.
         int studyThreads = Runtime.getRuntime().availableProcessors() + 2;
@@ -126,7 +126,7 @@ public class PlanarStudy {
             .build();*/
         /* resultFilter = new NoOpResultFilter(resultFilterQueueSize); */
         
-        boolean useGpuCongestionFilter = false; // set true to use CongestionResultFilterGPU
+        boolean useGpuCongestionFilter = true; // set true to use CongestionResultFilterGPU
         if (useGpuCongestionFilter) {
             resultFilter = CongestionResultFilterGPU.builder(resultFilterQueueSize)
                 .seeds(41, 129)
