@@ -188,6 +188,9 @@ public class PlanarStudy {
         System.out.println("Directed: " + directed);
         System.out.println("Require same cycle type: " + requireSameCycleType);
         System.out.println("Loop multiples: " + enforceLoopMultiples);
+        System.out.println("Candidate graph: " +
+            (NautyNative.hasTls() && enforceLoopMultiples <= 1 ? "native handle" : "JGraphT") +
+            (NautyNative.hasTls() ? " (libnauty TLS)" : " (native unavailable)"));
         System.out.println("Min geometry Aut(G) order: " + minGeometryAutOrder);
         System.out.println("Include quotient: " + INCLUDE_QUOTIENT +
             (INCLUDE_QUOTIENT > 1 ? " (also accept |G|/" + INCLUDE_QUOTIENT + ")" : " (full order only)"));
@@ -443,12 +446,12 @@ public class PlanarStudy {
                     return;
                 }
 
-                boolean actualDirected = directed && !generatorsAreAllTwoCycles(combinedPair);
-                Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(combinedPair, actualDirected);
+                boolean needsJavaGraph = enforceLoopMultiples > 1;
+                try (CandidateGraph candGraph = CandidateGraph.open(combinedPair, directed, needsJavaGraph)) {
 
                 // Check for isomorphic duplicates.
                 CanonicalGraphHash canonicalLabeling = getCanonicalLabelingOrQuarantine(
-                    dreadnautL.get(), candGraph, combinedPair, actualDirected, phase1Quarantine, null);
+                    dreadnautL.get(), candGraph, combinedPair, phase1Quarantine, null);
                 if (canonicalLabeling == null) {
                     return;
                 }
@@ -459,7 +462,7 @@ public class PlanarStudy {
                 }
 
                 // Enforce all simple cycles have length multiple of N (if enabled)
-                if (!allEdgeCyclesAreMultiples(candGraph, enforceLoopMultiples)) {
+                if (!candGraph.allEdgeCyclesAreMultiples(enforceLoopMultiples)) {
                     return;
                 }
                 
@@ -472,8 +475,7 @@ public class PlanarStudy {
                 if (acceptedFinalOrders.contains(size) &&
                     (minGeometryAutOrder > 1L || geometryAutOrderModulus > 1L)) {
                     try {
-                        BigInteger geomOrder = GraphSymm.automorphismGroupOrder(
-                            candGraph,
+                        BigInteger geomOrder = candGraph.automorphismGroupOrder(
                             false, // geometry is treated as undirected
                             DREADNAUT_PATH,
                             USE_TRACES
@@ -523,6 +525,7 @@ public class PlanarStudy {
                     resultFilter.queuedCount() + " queued, " +
                     resultFilter.rejectedCount() + " rej., " +
                     candidatePairs.size() + " cand.");
+                } // CandidateGraph
             }, () -> skipCurrent.get() || skipRemaining.get());
             if (skipCurrent.get() && !skipRemaining.get()) {
                 System.out.println("  Skipped rest of conjugacy class " + p1_1_count.get());
@@ -753,13 +756,13 @@ public class PlanarStudy {
                         return;
                     }
 
-                    // Build the dreadnaut graph once; reuse for connectivity, GAP gate, and canonical labeling.
-                    boolean actualDirected = directed && !generatorsAreAllTwoCycles(newCandidate);
-                    Graph<Integer, DefaultEdge> candGraph = buildGraphFromCombinedGen(newCandidate, actualDirected);
+                    // Build the graph once; reuse for connectivity, GAP gate, and canonical labeling.
+                    boolean needsJavaGraph = enforceLoopMultiples > 1;
+                    try (CandidateGraph candGraph = CandidateGraph.open(newCandidate, directed, needsJavaGraph)) {
 
                     // Final results only: incomplete/disconnected support cannot generate |G| or |G|/q.
                     // Missing ambient points are treated as floating isolated vertices.
-                    if (lastLoop && isDisjointOrIncompleteSupport(candGraph, nPointsFinal)) {
+                    if (lastLoop && candGraph.isDisjointOrIncompleteSupport(nPointsFinal)) {
                         disjointRejected.incrementAndGet();
                         return;
                     }
@@ -782,7 +785,7 @@ public class PlanarStudy {
 
                             t0 = System.nanoTime();
                             canonicalLabeling = getCanonicalLabelingOrQuarantine(
-                                dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
+                                dreadnautL.get(), candGraph, newCandidate, roundQuarantine, errors);
                             long dreadNs = System.nanoTime() - t0;
                             if (canonicalLabeling == null) return;
 
@@ -796,7 +799,7 @@ public class PlanarStudy {
                             if (isoHit) return;
                         } else if (lastLoopOrderSelector.mode() == LastLoopOrderSelector.Mode.DREAD_THEN_GAP) {
                             canonicalLabeling = getCanonicalLabelingOrQuarantine(
-                                dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
+                                dreadnautL.get(), candGraph, newCandidate, roundQuarantine, errors);
                             if (canonicalLabeling == null) return;
                             synchronized (canonicalGraphs) {
                                 if (canonicalGraphs.contains(canonicalLabeling)) return;
@@ -808,7 +811,7 @@ public class PlanarStudy {
                             size = gapL.get().sizeOfSubgroup(genStr);
                             if (!acceptedOrdersGate.contains(size)) return;
                             canonicalLabeling = getCanonicalLabelingOrQuarantine(
-                                dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
+                                dreadnautL.get(), candGraph, newCandidate, roundQuarantine, errors);
                             if (canonicalLabeling == null) return;
                             synchronized (canonicalGraphs) {
                                 if (canonicalGraphs.contains(canonicalLabeling)) return;
@@ -825,7 +828,7 @@ public class PlanarStudy {
 
                         // Check for isomorphic duplicates.
                         canonicalLabeling = getCanonicalLabelingOrQuarantine(
-                            dreadnautL.get(), candGraph, newCandidate, actualDirected, roundQuarantine, errors);
+                            dreadnautL.get(), candGraph, newCandidate, roundQuarantine, errors);
                         if (canonicalLabeling == null) {
                             return;
                         }
@@ -837,7 +840,7 @@ public class PlanarStudy {
                     }
                     
                     // Enforce all simple cycles have length multiple of N (if enabled)
-                    if (!allEdgeCyclesAreMultiples(candGraph, enforceLoopMultiples)) {
+                    if (!candGraph.allEdgeCyclesAreMultiples(enforceLoopMultiples)) {
                         return;
                     }
 
@@ -855,8 +858,7 @@ public class PlanarStudy {
                     if (acceptedFinalOrders.contains(size) &&
                         (minGeometryAutOrder > 1L || geometryAutOrderModulus > 1L)) {
                         try {
-                            BigInteger geomOrder = GraphSymm.automorphismGroupOrder(
-                                candGraph,
+                            BigInteger geomOrder = candGraph.automorphismGroupOrder(
                                 false, // geometry is treated as undirected
                                 DREADNAUT_PATH,
                                 USE_TRACES
@@ -908,6 +910,7 @@ public class PlanarStudy {
                             newCandidates.size() + " cand.");
                     }
 
+                    } // CandidateGraph
                 }, () -> skipCurrentP2.get() || skipRemainingP2.get());
                 roundCount += roundCountAtomic.get();
                 System.out.println("  Completed inner loop for candidate " + i + " of " + currentCandidates.size() +
@@ -1643,9 +1646,34 @@ public class PlanarStudy {
         QuarantineLog quarantine,
         AtomicInteger errors
     ) {
-        boolean actualDirected = directed && !generatorsAreAllTwoCycles(candidate);
-        Graph<Integer, DefaultEdge> graph = buildGraphFromCombinedGen(candidate, actualDirected);
-        return getCanonicalLabelingOrQuarantine(dreadnaut, graph, candidate, actualDirected, quarantine, errors);
+        boolean needsJavaGraph = false; // hash-only path can stay native
+        try (CandidateGraph graph = CandidateGraph.open(candidate, directed, needsJavaGraph)) {
+            return getCanonicalLabelingOrQuarantine(dreadnaut, graph, candidate, quarantine, errors);
+        }
+    }
+
+    private static CanonicalGraphHash getCanonicalLabelingOrQuarantine(
+        DreadnautInterface dreadnaut,
+        CandidateGraph graph,
+        int[][][] candidate,
+        QuarantineLog quarantine,
+        AtomicInteger errors
+    ) {
+        try {
+            return graph.canonicalHash(dreadnaut);
+        } catch (RuntimeException e) {
+            if (isAbnormalDreadnautExit(e)) {
+                if (quarantine != null) {
+                    quarantine.logFailure(GroupExplorer.generatorsToString(candidate), e.getMessage());
+                }
+            } else {
+                System.err.println("Failed to compute canonical labeling: " + e.getMessage());
+            }
+            if (errors != null) {
+                errors.incrementAndGet();
+            }
+            return null;
+        }
     }
 
     private static CanonicalGraphHash getCanonicalLabelingOrQuarantine(
@@ -1660,7 +1688,9 @@ public class PlanarStudy {
             return CanonicalGraphHash.parse(dreadnaut.getCanonicalLabeling(graph, directed));
         } catch (RuntimeException e) {
             if (isAbnormalDreadnautExit(e)) {
-                quarantine.logFailure(GroupExplorer.generatorsToString(candidate), e.getMessage());
+                if (quarantine != null) {
+                    quarantine.logFailure(GroupExplorer.generatorsToString(candidate), e.getMessage());
+                }
             } else {
                 System.err.println("Failed to compute canonical labeling: " + e.getMessage());
             }
@@ -1712,7 +1742,7 @@ public class PlanarStudy {
      * point ({@code vertexCount < nPoints}, i.e. floating fixed points) or if its
      * undirected view has more than one weak component.
      */
-    private static boolean isDisjointOrIncompleteSupport(
+    static boolean isDisjointOrIncompleteSupport(
             Graph<Integer, DefaultEdge> graph, int nPoints) {
         int n = graph.vertexSet().size();
         if (n < nPoints) return true;
@@ -2062,7 +2092,7 @@ public class PlanarStudy {
         return new String(baos.toByteArray());
     }
 
-    private static boolean allEdgeCyclesAreMultiples(Graph<Integer, DefaultEdge> graph, int k) {
+    static boolean allEdgeCyclesAreMultiples(Graph<Integer, DefaultEdge> graph, int k) {
         if (k <= 1) return true;
 
         // Work in undirected sense for edge cycles

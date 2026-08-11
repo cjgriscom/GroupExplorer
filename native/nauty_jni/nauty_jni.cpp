@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <queue>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -209,6 +210,58 @@ int run_canonical(const EdgeList &g, bool useTraces, jint *hashOut,
     return 0;
 }
 
+/** Symmetrize adjacency for weak connectivity / undirected geometry Aut. */
+EdgeList as_undirected(const EdgeList &g) {
+    if (!g.directed) return g;
+    EdgeList u;
+    u.n = g.n;
+    u.directed = false;
+    u.adj = g.adj;
+    for (int i = 0; i < g.n; ++i) {
+        for (int v : g.adj[static_cast<size_t>(i)]) {
+            u.adj[static_cast<size_t>(v)].push_back(i);
+        }
+    }
+    dedupe_adj(u);
+    return u;
+}
+
+bool is_disjoint_or_incomplete(const EdgeList &g, int nPoints) {
+    if (g.n < nPoints) return true;
+    if (g.n <= 1) return false;
+    EdgeList view = as_undirected(g);
+    std::vector<char> seen(static_cast<size_t>(view.n), 0);
+    std::queue<int> q;
+    q.push(0);
+    seen[0] = 1;
+    int count = 1;
+    while (!q.empty()) {
+        int u = q.front();
+        q.pop();
+        for (int v : view.adj[static_cast<size_t>(u)]) {
+            if (!seen[static_cast<size_t>(v)]) {
+                seen[static_cast<size_t>(v)] = 1;
+                ++count;
+                q.push(v);
+            }
+        }
+    }
+    return count < view.n;
+}
+
+struct NativeGraph {
+    static constexpr uint32_t MAGIC = 0x4E475248u; // 'NGRH'
+    uint32_t magic = MAGIC;
+    EdgeList g;
+};
+
+NativeGraph *from_handle(jlong handle) {
+    if (handle == 0) return nullptr;
+    auto *ng = reinterpret_cast<NativeGraph *>(static_cast<uintptr_t>(handle));
+    if (ng->magic != NativeGraph::MAGIC) return nullptr;
+    return ng;
+}
+
 } // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -353,6 +406,138 @@ Java_io_chandler_gap_graph_NautyNative_nativeCanonicalAndGrpsize(
              hash[0], hash[1], hash[2], gsChars ? gsChars : "0");
     if (gsChars) env->ReleaseStringUTFChars(gs, gsChars);
     return env->NewStringUTF(buf);
+}
+
+// ================================================================
+// Opaque native graph handle — build once from generators, reuse for
+// canonical hash / connectivity / |Aut|.
+// ================================================================
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_io_chandler_gap_graph_NautyNative_nativeCreateFromGen(
+        JNIEnv *env, jclass,
+        jintArray points, jintArray cycleLens, jboolean directed) {
+    if (points == nullptr || cycleLens == nullptr) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "null generator arrays");
+        return 0;
+    }
+    jsize nPoints = env->GetArrayLength(points);
+    jsize nCycles = env->GetArrayLength(cycleLens);
+    jint *pp = env->GetIntArrayElements(points, nullptr);
+    if (pp == nullptr) return 0;
+    jint *lp = env->GetIntArrayElements(cycleLens, nullptr);
+    if (lp == nullptr) {
+        env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        return 0;
+    }
+
+    NativeGraph *ng = nullptr;
+    try {
+        ng = new NativeGraph();
+        ng->g = build_from_gen(pp, nPoints, lp, nCycles, directed == JNI_TRUE);
+        env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        pp = nullptr;
+        lp = nullptr;
+    } catch (const std::exception &e) {
+        delete ng;
+        if (pp) env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        if (lp) env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, e.what());
+        return 0;
+    } catch (...) {
+        delete ng;
+        if (pp) env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        if (lp) env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        jclass ex = env->FindClass("java/lang/RuntimeException");
+        if (ex) env->ThrowNew(ex, "nativeCreateFromGen failed");
+        return 0;
+    }
+    return static_cast<jlong>(reinterpret_cast<uintptr_t>(ng));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_chandler_gap_graph_NautyNative_nativeFree(JNIEnv *, jclass, jlong handle) {
+    NativeGraph *ng = from_handle(handle);
+    if (!ng) return;
+    ng->magic = 0;
+    delete ng;
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_io_chandler_gap_graph_NautyNative_nativeCanonicalHashHandle(
+        JNIEnv *env, jclass, jlong handle, jboolean useTraces) {
+    NativeGraph *ng = from_handle(handle);
+    if (!ng) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "invalid native graph handle");
+        return nullptr;
+    }
+    jint hash[3] = {0, 0, 0};
+    try {
+        run_canonical(ng->g, useTraces == JNI_TRUE, hash, nullptr, nullptr);
+    } catch (...) {
+        jclass ex = env->FindClass("java/lang/RuntimeException");
+        if (ex) env->ThrowNew(ex, "nativeCanonicalHashHandle failed");
+        return nullptr;
+    }
+    jintArray out = env->NewIntArray(3);
+    if (out) env->SetIntArrayRegion(out, 0, 3, hash);
+    return out;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_io_chandler_gap_graph_NautyNative_nativeGrpsizeHandle(
+        JNIEnv *env, jclass, jlong handle,
+        jboolean forceUndirected, jboolean useTraces) {
+    NativeGraph *ng = from_handle(handle);
+    if (!ng) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "invalid native graph handle");
+        return nullptr;
+    }
+    double g1 = 0;
+    int g2 = 0;
+    try {
+        EdgeList owned;
+        const EdgeList *run = &ng->g;
+        if (forceUndirected == JNI_TRUE && ng->g.directed) {
+            owned = as_undirected(ng->g);
+            run = &owned;
+        }
+        run_canonical(*run, useTraces == JNI_TRUE, nullptr, &g1, &g2);
+    } catch (...) {
+        jclass ex = env->FindClass("java/lang/RuntimeException");
+        if (ex) env->ThrowNew(ex, "nativeGrpsizeHandle failed");
+        return nullptr;
+    }
+    return grpsize_to_jstring(env, g1, g2);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_chandler_gap_graph_NautyNative_nativeIsDisjointOrIncomplete(
+        JNIEnv *env, jclass, jlong handle, jint nPoints) {
+    NativeGraph *ng = from_handle(handle);
+    if (!ng) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "invalid native graph handle");
+        return JNI_TRUE;
+    }
+    return is_disjoint_or_incomplete(ng->g, nPoints) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_io_chandler_gap_graph_NautyNative_nativeVertexCount(
+        JNIEnv *env, jclass, jlong handle) {
+    NativeGraph *ng = from_handle(handle);
+    if (!ng) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "invalid native graph handle");
+        return -1;
+    }
+    return ng->g.n;
 }
 
 // ================================================================

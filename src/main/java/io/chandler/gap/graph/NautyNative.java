@@ -108,6 +108,62 @@ public final class NautyNative {
         return new CanonicalGraphHash(w[0], w[1], w[2]);
     }
 
+    /**
+     * Opaque CSR graph built once from generators. Free with {@link #freeGraph(long)}.
+     * Prefer {@link CandidateGraph} which owns the lifecycle.
+     */
+    public static long createFromGen(int[][][] combinedGen, boolean directed) {
+        if (!AVAILABLE) {
+            throw new IllegalStateException("libnauty_jni not loaded");
+        }
+        FlatGen flat = flatten(combinedGen);
+        long h = nativeCreateFromGen(flat.points, flat.cycleLens, directed);
+        if (h == 0L) {
+            throw new IllegalStateException("nativeCreateFromGen returned null handle");
+        }
+        return h;
+    }
+
+    public static void freeGraph(long handle) {
+        if (handle != 0L && AVAILABLE) {
+            nativeFree(handle);
+        }
+    }
+
+    public static CanonicalGraphHash canonicalHash(long handle, boolean useTraces) {
+        if (!AVAILABLE) {
+            throw new IllegalStateException("libnauty_jni not loaded");
+        }
+        int[] w = nativeCanonicalHashHandle(handle, useTraces);
+        return new CanonicalGraphHash(w[0], w[1], w[2]);
+    }
+
+    public static String getCanonicalLabeling(long handle, boolean directed, boolean useTraces) {
+        return formatZ(canonicalHash(handle, useTraces), directed, useTraces);
+    }
+
+    /** |Aut(G)| as decimal string (nauty/Traces grpsize1·10^grpsize2). */
+    public static String groupSize(long handle, boolean forceUndirected, boolean useTraces) {
+        if (!AVAILABLE) {
+            throw new IllegalStateException("libnauty_jni not loaded");
+        }
+        return nativeGrpsizeHandle(handle, forceUndirected, useTraces);
+    }
+
+    public static boolean isDisjointOrIncomplete(long handle, int nPoints) {
+        if (!AVAILABLE) {
+            throw new IllegalStateException("libnauty_jni not loaded");
+        }
+        return nativeIsDisjointOrIncomplete(handle, nPoints);
+    }
+
+    public static int vertexCount(long handle) {
+        if (!AVAILABLE) {
+            throw new IllegalStateException("libnauty_jni not loaded");
+        }
+        return nativeVertexCount(handle);
+    }
+
     private static String formatZ(CanonicalGraphHash h, boolean directed, boolean useTraces) {
         char engine = (useTraces && !directed) ? 'T' : 'S';
         return "[" + engine
@@ -235,4 +291,11 @@ public final class NautyNative {
                                                     boolean directed, boolean useTraces);
     private static native int[] nativeCanonicalHashFromGen(int[] points, int[] cycleLens,
                                                            boolean directed, boolean useTraces);
+    private static native long nativeCreateFromGen(int[] points, int[] cycleLens, boolean directed);
+    private static native void nativeFree(long handle);
+    private static native int[] nativeCanonicalHashHandle(long handle, boolean useTraces);
+    private static native String nativeGrpsizeHandle(long handle, boolean forceUndirected,
+                                                     boolean useTraces);
+    private static native boolean nativeIsDisjointOrIncomplete(long handle, int nPoints);
+    private static native int nativeVertexCount(long handle);
 }

@@ -50,6 +50,10 @@ public class DreadnautInterface {
         return backend;
     }
 
+    public boolean isUseTraces() {
+        return useTraces;
+    }
+
     public static Backend defaultBackend() {
         String prop = System.getProperty("dreadnaut.backend");
         if (prop != null) {
