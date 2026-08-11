@@ -1,21 +1,33 @@
 package io.chandler.gap;
 
 import java.io.Closeable;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
 
 /**
  * Random-access reader for PBIN files. Only one compressed block is held in
  * memory at a time; individual generators are decoded on demand.
+ * <p>
+ * Parallel block I/O uses a {@link ThreadLocal} {@link RandomAccessFile} per
+ * caller thread (no shared seek cursor / lock). Open handles are tracked and
+ * closed by {@link #close()}.
  */
 public final class PbinFile implements Closeable {
 
-    private final RandomAccessFile raf;
+    private final Path path;
     private final long fileLen;
     private final int M;
     private final int N;
@@ -25,6 +37,11 @@ public final class PbinFile implements Closeable {
     /** Absolute file offsets of each compressed block (unsigned, may exceed 2^31). */
     private final long[] offsets;
     private final int numBlocks;
+
+    private final Set<RandomAccessFile> openReaders = ConcurrentHashMap.newKeySet();
+    private final ThreadLocal<RandomAccessFile> localRaf =
+            ThreadLocal.withInitial(this::openLocalReader);
+    private volatile boolean closed;
 
     private int cachedBlock = -1;
     private String[] cachedLines;
@@ -43,10 +60,10 @@ public final class PbinFile implements Closeable {
                 }
             };
 
-    private PbinFile(RandomAccessFile raf, long fileLen, int M, int N,
+    private PbinFile(Path path, long fileLen, int M, int N,
                      int blockSize, int compression, boolean bare,
                      long[] offsets) {
-        this.raf = raf;
+        this.path = path;
         this.fileLen = fileLen;
         this.M = M;
         this.N = N;
@@ -58,13 +75,13 @@ public final class PbinFile implements Closeable {
     }
 
     public static PbinFile open(String filePath) throws IOException {
-        RandomAccessFile raf = new RandomAccessFile(filePath, "r");
-        try {
-            long fileLen = raf.length();
+        Path path = Path.of(filePath);
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            long fileLen = channel.size();
             if (fileLen < 7) throw new IOException("Not a PBIN file");
 
             byte[] header = new byte[7];
-            raf.readFully(header);
+            readFully(channel, header, 0);
             if (header[0] != 'P' || header[1] != 'B' || header[2] != 'I' || header[3] != 'N')
                 throw new IOException("Not a PBIN file");
             int version = header[4] & 0xFF;
@@ -78,7 +95,7 @@ public final class PbinFile implements Closeable {
             boolean bare = (flags & 0x01) != 0;
 
             byte[] vbuf = new byte[15];
-            raf.readFully(vbuf);
+            readFully(channel, vbuf, 7);
             int[] vp = {0};
             int blockSize = readVarint(vbuf, vp);
             int N         = readVarint(vbuf, vp);
@@ -87,9 +104,8 @@ public final class PbinFile implements Closeable {
             long dirStart = 7 + vp[0];
             int numBlocks = (M + blockSize - 1) / blockSize;
 
-            raf.seek(dirStart);
             byte[] dirBuf = new byte[numBlocks * offsetWidth];
-            raf.readFully(dirBuf);
+            readFully(channel, dirBuf, dirStart);
             long[] offsets = new long[numBlocks];
             for (int b = 0; b < numBlocks; b++) {
                 offsets[b] = (offsetWidth == 4)
@@ -97,10 +113,28 @@ public final class PbinFile implements Closeable {
                     : readU64LE(dirBuf, b * 8);
             }
 
-            return new PbinFile(raf, fileLen, M, N, blockSize, compression, bare, offsets);
-        } catch (IOException | RuntimeException e) {
-            raf.close();
-            throw e instanceof IOException ? (IOException) e : new IOException(e);
+            return new PbinFile(path, fileLen, M, N, blockSize, compression, bare, offsets);
+        }
+    }
+
+    private RandomAccessFile openLocalReader() {
+        if (closed) {
+            throw new IllegalStateException("PbinFile closed: " + path);
+        }
+        try {
+            RandomAccessFile raf = new RandomAccessFile(path.toFile(), "r");
+            openReaders.add(raf);
+            if (closed) {
+                openReaders.remove(raf);
+                try {
+                    raf.close();
+                } catch (IOException ignored) {
+                }
+                throw new IllegalStateException("PbinFile closed: " + path);
+            }
+            return raf;
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to open PBIN reader for " + path, e);
         }
     }
 
@@ -125,9 +159,8 @@ public final class PbinFile implements Closeable {
     // The single-block cache used by get() forces every random-access read to
     // decompress an entire block and decode ALL of its generators (each via an
     // expensive BigInteger factorial decode) just to return one line. The
-    // methods below split that work so a caller can do the cheap, inherently
-    // serial part (the RandomAccessFile read) on one thread and farm out the
-    // expensive decompress + single-entry decode to worker threads.
+    // methods below split I/O / decompress / decode so workers can load blocks
+    // concurrently via per-thread RandomAccessFile handles.
 
     public int blockOf(int index) {
         if (index < 0 || index >= M)
@@ -142,13 +175,12 @@ public final class PbinFile implements Closeable {
     }
 
     /**
-     * Reads the raw (still-compressed) bytes for block {@code b}. This is the
-     * only part that touches the shared {@link RandomAccessFile}, so it is NOT
-     * thread-safe and must be called from a single thread. The returned array
-     * is freshly allocated and never mutated afterwards, so it may be shared
-     * read-only with worker threads.
+     * Reads the raw (still-compressed) bytes for block {@code b}.
+     * Thread-safe: each calling thread uses its own {@link RandomAccessFile}.
+     * The returned array is freshly allocated and never mutated afterwards.
      */
     public byte[] readRawBlock(int b) throws IOException {
+        if (closed) throw new IOException("PbinFile closed: " + path);
         if (b < 0 || b >= numBlocks)
             throw new IndexOutOfBoundsException("block " + b + ", numBlocks " + numBlocks);
         long bStart = offsets[b];
@@ -158,9 +190,16 @@ public final class PbinFile implements Closeable {
         long blen = bEnd - bStart;
         if (blen > Integer.MAX_VALUE)
             throw new IOException("block " + b + " too large (" + blen + " bytes)");
-        raf.seek(bStart);
         byte[] blockData = new byte[(int) blen];
-        raf.readFully(blockData);
+        try {
+            RandomAccessFile raf = localRaf.get();
+            raf.seek(bStart);
+            raf.readFully(blockData);
+        } catch (UncheckedIOException e) {
+            throw e.getCause() instanceof IOException
+                    ? (IOException) e.getCause()
+                    : new IOException(e.getCause());
+        }
         return blockData;
     }
 
@@ -177,7 +216,7 @@ public final class PbinFile implements Closeable {
      * Returns the decompressed payload for block {@code blockIndex}, caching by block
      * so randomized generator order does not repeat zlib inflation for the same block.
      * {@code rawBlock} must be the compressed bytes for {@code blockIndex} (from
-     * {@link #readRawBlock}); callers on a single producer thread read raw blocks serially.
+     * {@link #readRawBlock}). The LRU cache itself is synchronized.
      */
     public synchronized byte[] getDecompressedPayload(int blockIndex, byte[] rawBlock) throws IOException {
         byte[] cached = decompressedBlockCache.get(blockIndex);
@@ -236,7 +275,32 @@ public final class PbinFile implements Closeable {
 
     @Override
     public void close() throws IOException {
-        raf.close();
+        closed = true;
+        IOException first = null;
+        for (RandomAccessFile raf : openReaders) {
+            try {
+                raf.close();
+            } catch (IOException e) {
+                if (first == null) first = e;
+            }
+        }
+        openReaders.clear();
+        if (first != null) throw first;
+    }
+
+    /** Positional read-fully used only while parsing the header in {@link #open}. */
+    private static void readFully(FileChannel channel, byte[] dst, long position)
+            throws IOException {
+        ByteBuffer buf = ByteBuffer.wrap(dst);
+        long pos = position;
+        while (buf.hasRemaining()) {
+            int n = channel.read(buf, pos);
+            if (n < 0) {
+                throw new EOFException("EOF at " + pos + " reading " + dst.length
+                        + " bytes from " + position);
+            }
+            pos += n;
+        }
     }
 
     // ── varint ──────────────────────────────────────────────

@@ -1447,10 +1447,7 @@ public class PlanarStudy {
 
         private String[] loadBlockEntries(int block, int blockSize, int n) {
             try {
-                byte[] raw;
-                synchronized (pbin) {
-                    raw = pbin.readRawBlock(block);
-                }
+                byte[] raw = pbin.readRawBlock(block);
                 byte[] payload = pbin.decompressBlock(raw);
                 int start = block * blockSize;
                 int count = Math.min(blockSize, n - start);
