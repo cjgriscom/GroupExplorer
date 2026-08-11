@@ -20,6 +20,9 @@ import io.chandler.gap.graph.CongestionEvaluatorGPU;
  * When the GPU input queue is near capacity ({@code remainingCapacity <= overflowBelowRemaining}),
  * new results are diverted to a parallel {@link CongestionResultFilter} CPU overflow pool
  * so study workers are less likely to block on {@link #add}.
+ * <p>
+ * Guard-band hits after a GPU batch are also deferred to that CPU pool (not run inline on
+ * the single GPU thread), so ambiguous graphs do not stall the next CUDA batch.
  */
 public final class CongestionResultFilterGPU extends AbstractResultFilter {
 	private static final long POLL_CHECK_MS = 100L;
@@ -222,35 +225,57 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 			lines.add(item.result);
 		}
 
-		CongestionEvaluator.Result[] results;
+		CongestionEvaluatorGPU.BatchOutcome outcome;
 		try {
-			CongestionEvaluatorGPU.BatchOutcome outcome = gpuEvaluator.evaluateBatch(lines);
-			results = outcome.results;
-			if (results.length != pending.size()) {
+			// Do not run guard-band CPU inline — that stalls this sole GPU thread.
+			// Ambiguous graphs are handed to cpuOverflow instead.
+			outcome = gpuEvaluator.evaluateBatch(lines, false);
+			if (outcome.results.length != pending.size()) {
 				throw new IllegalStateException(
-						"GPU batch returned " + results.length + " results for " + pending.size() + " inputs");
+						"GPU batch returned " + outcome.results.length + " results for " + pending.size() + " inputs");
 			}
 		} catch (Throwable t) {
 			failPendingBatch(pending, t);
 			return;
 		}
 
+		int deferred = outcome.guardBandFallbacks;
+		if (deferred > 0) {
+			System.out.println("  GPU batch n=" + pending.size()
+					+ " deferred " + deferred + " guard-band hit(s) to CPU overflow"
+					+ " (gpuRemaining=" + remainingCapacity() + ")");
+		}
+
 		for (int i = 0; i < pending.size(); i++) {
+			QueuedResult item = pending.get(i);
 			try {
-				QueuedResult item = pending.get(i);
-				CongestionEvaluator.Result eval = results[i];
-				FilterDecision decision = eval.survived
-						? FilterDecision.accept(String.format("cong=%.6f", eval.bestScore))
-						: FilterDecision.rejectToCandidates();
-				applyDecision(item, decision);
+				if (outcome.needsGuardBandFallback[i]) {
+					// Full CPU re-eval on overflow pool; do not trust provisional GPU scores.
+					cpuOverflow.add(item.result, item.lastLoop, item.retainCandidate);
+				} else {
+					CongestionEvaluator.Result eval = outcome.results[i];
+					FilterDecision decision = eval.survived
+							? FilterDecision.accept(String.format("cong=%.6f", eval.bestScore))
+							: FilterDecision.rejectToCandidates();
+					applyDecision(item, decision);
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				notifyFailure("GPU defer guard-band to CPU interrupted i=" + i, e);
+				try {
+					applyDecision(item, FilterDecision.rejectToCandidates());
+				} catch (Throwable t2) {
+					e.addSuppressed(t2);
+				}
 			} catch (Throwable t) {
 				notifyFailure("GPU applyDecision i=" + i + " / " + pending.size(), t);
 				try {
-					applyDecision(pending.get(i), FilterDecision.rejectToCandidates());
+					applyDecision(item, FilterDecision.rejectToCandidates());
 				} catch (Throwable t2) {
 					t.addSuppressed(t2);
 				}
 			} finally {
+				// Item left the GPU queue (either decided here or re-queued on CPU).
 				markProcessed();
 			}
 		}

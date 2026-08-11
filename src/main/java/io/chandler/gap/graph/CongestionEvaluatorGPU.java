@@ -44,15 +44,39 @@ public final class CongestionEvaluatorGPU {
 
     public static final class BatchOutcome {
         public final CongestionEvaluator.Result[] results;
+        /** Per-graph: GPU score was within {@code guardBand} of a prune threshold. */
+        public final boolean[] needsGuardBandFallback;
         public final int guardBandFallbacks;
 
-        BatchOutcome(CongestionEvaluator.Result[] results, int guardBandFallbacks) {
+        BatchOutcome(CongestionEvaluator.Result[] results, boolean[] needsGuardBandFallback) {
             this.results = results;
-            this.guardBandFallbacks = guardBandFallbacks;
+            this.needsGuardBandFallback = needsGuardBandFallback;
+            int n = 0;
+            if (needsGuardBandFallback != null) {
+                for (boolean b : needsGuardBandFallback) {
+                    if (b) n++;
+                }
+            }
+            this.guardBandFallbacks = n;
         }
     }
 
+    /**
+     * GPU batch evaluate; runs guard-band CPU fallback inline (ForkJoin) before
+     * returning. Prefer {@link #evaluateBatch(List, boolean)} with
+     * {@code runGuardBandCpuInline=false} when a caller can defer to its own CPU pool.
+     */
     public BatchOutcome evaluateBatch(List<String> lines) {
+        return evaluateBatch(lines, true);
+    }
+
+    /**
+     * @param runGuardBandCpuInline if true, re-evaluate guard-band hits on the
+     *        common ForkJoin pool before return (blocks caller). If false, only
+     *        marks {@link BatchOutcome#needsGuardBandFallback}; GPU results for
+     *        those graphs are provisional and should not be used for accept/reject.
+     */
+    public BatchOutcome evaluateBatch(List<String> lines, boolean runGuardBandCpuInline) {
         if (!CongestionCuda.isAvailable()) {
             throw new IllegalStateException("CUDA backend unavailable: " + CongestionCuda.deviceName());
         }
@@ -79,16 +103,18 @@ public final class CongestionEvaluatorGPU {
                 fallback[g] = true;
             }
         }
-        int fallbacks = 0;
-        for (boolean needed : fallback) {
-            if (needed) fallbacks++;
+        if (runGuardBandCpuInline) {
+            int fallbacks = 0;
+            for (boolean needed : fallback) {
+                if (needed) fallbacks++;
+            }
+            if (fallbacks > 0) {
+                IntStream.range(0, numGraphs).parallel()
+                        .filter(g -> fallback[g])
+                        .forEach(g -> results[g] = cpuEvaluator.evaluate(lines.get(g)));
+            }
         }
-        if (fallbacks > 0) {
-            IntStream.range(0, numGraphs).parallel()
-                    .filter(g -> fallback[g])
-                    .forEach(g -> results[g] = cpuEvaluator.evaluate(lines.get(g)));
-        }
-        return new BatchOutcome(results, fallbacks);
+        return new BatchOutcome(results, fallback);
     }
 
     private CongestionEvaluator.Result resultFromGpuScores(int graphIndex, float[] scoresOut) {
