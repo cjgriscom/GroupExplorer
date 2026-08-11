@@ -763,11 +763,27 @@ public class GroupExplorer implements AbstractGroupProperties {
     }
     
     public static int[][][] parseOperationsArr(String groupNotation) {
-        List<int[][]> operations = parseOperations(groupNotation);
-        return operations.toArray(new int[operations.size()][][]);
+        return parseOperationsArrFast(groupNotation);
     }
 
     public static List<int[][]> parseOperations(String groupNotation) {
+        int[][][] arr = parseOperationsArrFast(groupNotation);
+        List<int[][]> operations = new ArrayList<>(arr.length);
+        Collections.addAll(operations, arr);
+        return operations;
+    }
+
+    /**
+     * Legacy regex/split parser
+     * Prefer {@link #parseOperationsArr}.
+     */
+    public static int[][][] parseOperationsArrLegacy(String groupNotation) {
+        List<int[][]> operations = parseOperationsLegacy(groupNotation);
+        return operations.toArray(new int[operations.size()][][]);
+    }
+
+    /** @see #parseOperationsArrLegacy */
+    public static List<int[][]> parseOperationsLegacy(String groupNotation) {
         List<int[][]> operations = new ArrayList<>();
         String[] parts = groupNotation.substring(1, groupNotation.length() - 1).split("\\),\\(");
         for (String part : parts) {
@@ -786,6 +802,110 @@ public class GroupExplorer implements AbstractGroupProperties {
             //operations.add(reverseOperation(operation));
         }
         return operations;
+    }
+
+    /**
+     * Single-pass char scanner for GAP-style generator lists
+     * {@code [(c11)(c12),...(c21)...]} or bare PBIN form {@code (c11)(c12)...}
+     * (no outer brackets when the file's bare flag is set and there is one component).
+     */
+    private static int[][][] parseOperationsArrFast(String s) {
+        final int len = s.length();
+        if (len < 2) {
+            return parseOperationsArrLegacy(s);
+        }
+        final int i0;
+        final int end;
+        char c0 = s.charAt(0);
+        char cN = s.charAt(len - 1);
+        if (c0 == '[' && cN == ']') {
+            i0 = 1;
+            end = len - 1;
+        } else if (c0 == '(') {
+            // Bare: full string is cycle text (PbinFile decodeGenerator useBare).
+            i0 = 0;
+            end = len;
+        } else {
+            return parseOperationsArrLegacy(s);
+        }
+        int i = i0;
+
+        // Growable buffers (PlanarStudy: few gens, often hundreds–thousands of cycles).
+        int[][][] gens = new int[4][][];
+        int gCount = 0;
+        int[][] cycles = new int[64][];
+        int[] numBuf = new int[16];
+
+        while (i < end) {
+            int cCount = 0;
+            while (i < end && s.charAt(i) == '(') {
+                i++; // skip '('
+                int nNums = 0;
+                if (i < end && s.charAt(i) == ')') {
+                    i++; // empty cycle ()
+                } else {
+                    while (i < end) {
+                        char c = s.charAt(i);
+                        if (c < '0' || c > '9') {
+                            throw new NumberFormatException(
+                                    "Expected digit in generator notation at " + i);
+                        }
+                        int v = c - '0';
+                        i++;
+                        while (i < end) {
+                            c = s.charAt(i);
+                            if (c < '0' || c > '9') break;
+                            v = v * 10 + (c - '0');
+                            i++;
+                        }
+                        if (i >= end) {
+                            throw new NumberFormatException("Truncated integer in generator notation");
+                        }
+                        c = s.charAt(i);
+                        if (nNums == numBuf.length) {
+                            numBuf = Arrays.copyOf(numBuf, nNums * 2);
+                        }
+                        numBuf[nNums++] = v;
+                        if (c == ',') {
+                            i++;
+                            continue;
+                        }
+                        if (c == ')') {
+                            i++;
+                            break;
+                        }
+                        throw new NumberFormatException(
+                                "Expected ',' or ')' in generator notation at " + i + ", got '" + c + "'");
+                    }
+                }
+                int[] cy = new int[nNums];
+                System.arraycopy(numBuf, 0, cy, 0, nNums);
+                if (cCount == cycles.length) {
+                    cycles = Arrays.copyOf(cycles, cCount * 2);
+                }
+                cycles[cCount++] = cy;
+            }
+            if (cCount == 0) {
+                if (i < end && s.charAt(i) == ',') {
+                    i++;
+                    continue;
+                }
+                break;
+            }
+            int[][] op = new int[cCount][];
+            System.arraycopy(cycles, 0, op, 0, cCount);
+            if (gCount == gens.length) {
+                gens = Arrays.copyOf(gens, gCount * 2);
+            }
+            gens[gCount++] = op;
+            if (i < end && s.charAt(i) == ',') {
+                i++;
+            } else {
+                break;
+            }
+        }
+        if (gCount == gens.length) return gens;
+        return Arrays.copyOf(gens, gCount);
     }
 
     public static int[][] reverseOperation(int[][] operation) {
