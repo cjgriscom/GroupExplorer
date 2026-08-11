@@ -34,6 +34,7 @@ public abstract class AbstractResultFilter {
 	}
 
 	private final ArrayBlockingQueue<QueuedResult> queue;
+	private final int maxQueueSize;
 	private final Thread[] workers;
 	private final AtomicInteger accepted = new AtomicInteger();
 	private final AtomicInteger rejected = new AtomicInteger();
@@ -52,17 +53,25 @@ public abstract class AbstractResultFilter {
 	}
 
 	protected AbstractResultFilter(int maxQueueSize, int threads) {
+		this(maxQueueSize, threads, "planar-study-result-filter-");
+	}
+
+	protected AbstractResultFilter(int maxQueueSize, int threads, String workerThreadPrefix) {
 		if (maxQueueSize < 1) {
 			throw new IllegalArgumentException("maxQueueSize must be >= 1");
 		}
 		if (threads < 1) {
 			throw new IllegalArgumentException("threads must be >= 1");
 		}
+		if (workerThreadPrefix == null || workerThreadPrefix.isEmpty()) {
+			throw new IllegalArgumentException("workerThreadPrefix must be non-empty");
+		}
+		this.maxQueueSize = maxQueueSize;
 		this.queue = new ArrayBlockingQueue<>(maxQueueSize);
 		this.workers = new Thread[threads];
 		for (int i = 0; i < threads; i++) {
 			final int index = i;
-			Thread worker = new Thread(() -> runSupervised(index), "planar-study-result-filter-" + i);
+			Thread worker = new Thread(() -> runSupervised(index), workerThreadPrefix + i);
 			worker.setDaemon(true);
 			workers[i] = worker;
 			worker.start();
@@ -70,17 +79,32 @@ public abstract class AbstractResultFilter {
 	}
 
 	/** Number of filter worker threads. */
-	public final int threadCount() {
+	public int threadCount() {
 		return workers.length;
 	}
 
+	/** Configured input queue capacity. */
+	public final int queueCapacity() {
+		return maxQueueSize;
+	}
+
+	/** Free slots in the input queue (0 = full). */
+	public final int remainingCapacity() {
+		return queue.remainingCapacity();
+	}
+
+	/** Items waiting in the input queue (excludes in-flight / batch-buffered accounting quirks beyond {@link #queuedCount()}). */
+	public final int inputQueueSize() {
+		return queue.size();
+	}
+
 	/** Cumulative process/batch failures (does not include clean shutdown). */
-	public final int failureCount() {
+	public int failureCount() {
 		return failures.get();
 	}
 
 	/** How many times workers re-entered {@link #runLoop()} after a crash. */
-	public final int restartCount() {
+	public int restartCount() {
 		return restarts.get();
 	}
 
@@ -88,34 +112,34 @@ public abstract class AbstractResultFilter {
 	 * When true (default), {@link #notifyFailure(String, Throwable)} invokes
 	 * {@link #setFailurePauseHook(Runnable)} so the study can pause for inspection.
 	 */
-	public final void setPauseOnFailure(boolean pauseOnFailure) {
+	public void setPauseOnFailure(boolean pauseOnFailure) {
 		this.pauseOnFailure = pauseOnFailure;
 	}
 
-	public final boolean isPauseOnFailure() {
+	public boolean isPauseOnFailure() {
 		return pauseOnFailure;
 	}
 
 	/** Optional hook (e.g. set PlanarStudy paused) when a failure is reported and pause-on-failure is on. */
-	public final void setFailurePauseHook(Runnable failurePauseHook) {
+	public void setFailurePauseHook(Runnable failurePauseHook) {
 		this.failurePauseHook = failurePauseHook;
 	}
 
 	/** Subclasses decide accept / reject-to-candidates / discard for each result. */
 	protected abstract FilterDecision process(String result);
 
-	public final void setOutput(PrintStream out) {
+	public void setOutput(PrintStream out) {
 		this.out = out;
 	}
 
-	public final void resetStats(int acceptedSoFar) {
+	public void resetStats(int acceptedSoFar) {
 		accepted.set(acceptedSoFar);
 		rejected.set(0);
 	}
 
-	public final int acceptedCount() { return accepted.get(); }
-	public final int rejectedCount() { return rejected.get(); }
-	public final int queuedCount() { return queued.get(); }
+	public int acceptedCount() { return accepted.get(); }
+	public int rejectedCount() { return rejected.get(); }
+	public int queuedCount() { return queued.get(); }
 
 	/**
 	 * Enqueue a result for async filtering. Blocks if the queue is at capacity.
@@ -126,7 +150,7 @@ public abstract class AbstractResultFilter {
 	 *                         (accept, or reject-to-candidates when not lastLoop);
 	 *                         may be null
 	 */
-	public final void add(String result, boolean lastLoop, Runnable retainCandidate)
+	public void add(String result, boolean lastLoop, Runnable retainCandidate)
 			throws InterruptedException {
 		queued.incrementAndGet();
 		try {
@@ -136,6 +160,19 @@ public abstract class AbstractResultFilter {
 			notifyDrainWaiters();
 			throw e;
 		}
+	}
+
+	/**
+	 * Non-blocking enqueue. Returns false if the queue is full (caller still owns the work).
+	 */
+	protected final boolean tryAdd(String result, boolean lastLoop, Runnable retainCandidate) {
+		queued.incrementAndGet();
+		if (queue.offer(new QueuedResult(result, lastLoop, retainCandidate))) {
+			return true;
+		}
+		queued.decrementAndGet();
+		notifyDrainWaiters();
+		return false;
 	}
 
 	/** {@link #add} wrapping {@link InterruptedException} as unchecked. */
@@ -149,7 +186,7 @@ public abstract class AbstractResultFilter {
 	}
 
 	/** Block until all queued results have been processed. */
-	public final void drain() {
+	public void drain() {
 		synchronized (drainLock) {
 			while (queued.get() > 0) {
 				try {

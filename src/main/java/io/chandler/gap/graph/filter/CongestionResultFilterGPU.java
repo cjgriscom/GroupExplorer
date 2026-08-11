@@ -1,9 +1,11 @@
 package io.chandler.gap.graph.filter;
 
+import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.chandler.gap.graph.CongestionCuda;
 import io.chandler.gap.graph.CongestionEvaluator;
@@ -13,31 +15,131 @@ import io.chandler.gap.graph.CongestionEvaluatorGPU;
  * GPU-batched result filter using the same congestion pipeline as
  * {@link CongestionResultFilter}. Accumulates up to {@code batchSize} results
  * (or {@code batchWaitMs} since the first item) before submitting a batch to
- * {@link CongestionEvaluatorGPU}. Fails hard if CUDA is unavailable or batch
- * evaluation fails.
+ * {@link CongestionEvaluatorGPU}.
+ * <p>
+ * When the GPU input queue is near capacity ({@code remainingCapacity <= overflowBelowRemaining}),
+ * new results are diverted to a parallel {@link CongestionResultFilter} CPU overflow pool
+ * so study workers are less likely to block on {@link #add}.
  */
 public final class CongestionResultFilterGPU extends AbstractResultFilter {
 	private static final long POLL_CHECK_MS = 100L;
 
 	private final CongestionEvaluatorGPU gpuEvaluator;
+	private final CongestionResultFilter cpuOverflow;
 	private final int batchSize;
 	private final long batchWaitMs;
+	/** Divert to CPU when GPU {@link #remainingCapacity()} is at most this. */
+	private final int overflowBelowRemaining;
+	private final AtomicInteger overflowedToCpu = new AtomicInteger();
 
 	private CongestionResultFilterGPU(int maxQueueSize, CongestionEvaluatorGPU gpuEvaluator,
-			int batchSize, long batchWaitMs) {
-		super(maxQueueSize, 1);
+			CongestionResultFilter cpuOverflow, int batchSize, long batchWaitMs,
+			int overflowBelowRemaining) {
+		super(maxQueueSize, 1, "planar-study-gpu-filter-");
 		this.gpuEvaluator = gpuEvaluator;
+		this.cpuOverflow = cpuOverflow;
 		this.batchSize = batchSize;
 		this.batchWaitMs = batchWaitMs;
+		this.overflowBelowRemaining = overflowBelowRemaining;
 	}
 
 	public static Builder builder(int maxQueueSize) {
 		return new Builder(maxQueueSize);
 	}
 
+	/** How many results were sent to the CPU overflow filter. */
+	public int overflowedToCpuCount() {
+		return overflowedToCpu.get();
+	}
+
 	@Override
 	protected FilterDecision process(String result) {
 		throw new UnsupportedOperationException("GPU filter uses batched runLoop");
+	}
+
+	@Override
+	public void add(String result, boolean lastLoop, Runnable retainCandidate)
+			throws InterruptedException {
+		if (shouldOverflowToCpu()) {
+			divertToCpu(result, lastLoop, retainCandidate);
+			return;
+		}
+		if (tryAdd(result, lastLoop, retainCandidate)) {
+			return;
+		}
+		// Race: queue filled after the capacity check.
+		divertToCpu(result, lastLoop, retainCandidate);
+	}
+
+	private boolean shouldOverflowToCpu() {
+		return remainingCapacity() <= overflowBelowRemaining;
+	}
+
+	private void divertToCpu(String result, boolean lastLoop, Runnable retainCandidate)
+			throws InterruptedException {
+		int n = overflowedToCpu.incrementAndGet();
+		if (n == 1 || n % 1000 == 0) {
+			System.out.println("  GPU filter near capacity -> CPU overflow (" + n
+				+ " total, gpuRemaining=" + remainingCapacity()
+				+ "/" + queueCapacity()
+				+ ", threshold<=" + overflowBelowRemaining + ")");
+		}
+		cpuOverflow.add(result, lastLoop, retainCandidate);
+	}
+
+	@Override
+	public void setOutput(PrintStream out) {
+		super.setOutput(out);
+		cpuOverflow.setOutput(out);
+	}
+
+	@Override
+	public void resetStats(int acceptedSoFar) {
+		super.resetStats(acceptedSoFar);
+		cpuOverflow.resetStats(0);
+	}
+
+	@Override
+	public int acceptedCount() {
+		return super.acceptedCount() + cpuOverflow.acceptedCount();
+	}
+
+	@Override
+	public int rejectedCount() {
+		return super.rejectedCount() + cpuOverflow.rejectedCount();
+	}
+
+	@Override
+	public int queuedCount() {
+		return super.queuedCount() + cpuOverflow.queuedCount();
+	}
+
+	@Override
+	public int failureCount() {
+		return super.failureCount() + cpuOverflow.failureCount();
+	}
+
+	@Override
+	public int threadCount() {
+		return super.threadCount() + cpuOverflow.threadCount();
+	}
+
+	@Override
+	public void setPauseOnFailure(boolean pauseOnFailure) {
+		super.setPauseOnFailure(pauseOnFailure);
+		cpuOverflow.setPauseOnFailure(pauseOnFailure);
+	}
+
+	@Override
+	public void setFailurePauseHook(Runnable failurePauseHook) {
+		super.setFailurePauseHook(failurePauseHook);
+		cpuOverflow.setFailurePauseHook(failurePauseHook);
+	}
+
+	@Override
+	public void drain() {
+		super.drain();
+		cpuOverflow.drain();
 	}
 
 	@Override
@@ -111,7 +213,7 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 		if (System.currentTimeMillis() >= batchDeadlineMs) {
 			return true;
 		}
-		return isInputQueueEmpty() && pending.size() == queuedCount();
+		return isInputQueueEmpty() && pending.size() == CongestionResultFilterGPU.super.queuedCount();
 	}
 
 	private void flushBatch(List<QueuedResult> pending) {
@@ -181,11 +283,13 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 	@Override
 	public void close() {
 		super.close();
+		cpuOverflow.close();
 		CongestionCuda.shutdown();
 	}
 
 	/**
-	 * Builder mirroring {@link CongestionResultFilter.Builder} plus GPU batch settings.
+	 * Builder mirroring {@link CongestionResultFilter.Builder} plus GPU batch settings
+	 * and CPU overflow controls.
 	 */
 	public static final class Builder {
 		private final int maxQueueSize;
@@ -196,6 +300,10 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 		private int batchSize = 256;
 		private long batchWaitMs = 30_000L;
 		private double guardBand = 0.1;
+		private int cpuOverflowThreads = Runtime.getRuntime().availableProcessors();
+		private int cpuOverflowQueueSize = -1; // <=0 => same as maxQueueSize
+		/** When GPU remaining capacity is <= this, divert to CPU. <=0 => default 2*batchSize. */
+		private int overflowBelowRemaining = -1;
 
 		private Builder(int maxQueueSize) {
 			this.maxQueueSize = maxQueueSize;
@@ -269,13 +377,70 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 			return this;
 		}
 
+		/** CPU overflow worker threads (default: available processors). */
+		public Builder cpuOverflowThreads(int cpuOverflowThreads) {
+			if (cpuOverflowThreads < 1) {
+				throw new IllegalArgumentException("cpuOverflowThreads must be >= 1");
+			}
+			this.cpuOverflowThreads = cpuOverflowThreads;
+			return this;
+		}
+
+		/** CPU overflow queue capacity (default: same as GPU maxQueueSize).
+		 *  When full, {@code add()} blocks study workers on the CPU path. */
+		public Builder cpuOverflowQueueSize(int cpuOverflowQueueSize) {
+			if (cpuOverflowQueueSize < 1) {
+				throw new IllegalArgumentException("cpuOverflowQueueSize must be >= 1");
+			}
+			this.cpuOverflowQueueSize = cpuOverflowQueueSize;
+			return this;
+		}
+
+		/**
+		 * Divert to CPU when GPU {@code remainingCapacity() <= threshold}.
+		 * Default: {@code 2 * batchSize}.
+		 */
+		public Builder overflowBelowRemaining(int overflowBelowRemaining) {
+			if (overflowBelowRemaining < 0) {
+				throw new IllegalArgumentException("overflowBelowRemaining must be >= 0");
+			}
+			this.overflowBelowRemaining = overflowBelowRemaining;
+			return this;
+		}
+
 		public CongestionResultFilterGPU build() {
 			if (!CongestionCuda.isAvailable()) {
 				throw new IllegalStateException("CUDA backend unavailable: " + CongestionCuda.deviceName());
 			}
+			int overflowThreshold = overflowBelowRemaining >= 0
+				? overflowBelowRemaining
+				: Math.max(1, 2 * batchSize);
+			int cpuQueue = cpuOverflowQueueSize > 0 ? cpuOverflowQueueSize : maxQueueSize;
+
+			CongestionResultFilter.Builder cpuBuilder = CongestionResultFilter.builder(cpuQueue)
+				.seeds(seeds)
+				.checkpoints(checkpoints)
+				.nRotations(nRotations)
+				.threads(cpuOverflowThreads)
+				.workerThreadPrefix("planar-study-cpu-overflow-");
+			if (thresholds != null) {
+				double[] th = new double[thresholds.length];
+				for (int i = 0; i < thresholds.length; i++) {
+					th[i] = thresholds[i];
+				}
+				cpuBuilder.thresholds(th);
+			} else {
+				cpuBuilder.thresholds((double[]) null);
+			}
+			CongestionResultFilter cpuOverflow = cpuBuilder.build();
+
 			CongestionEvaluatorGPU gpuEvaluator =
 					new CongestionEvaluatorGPU(seeds, checkpoints, thresholds, nRotations, guardBand);
-			return new CongestionResultFilterGPU(maxQueueSize, gpuEvaluator, batchSize, batchWaitMs);
+			System.out.println("GPU congestion filter: overflow to CPU when remainingCapacity <= "
+				+ overflowThreshold + " (CPU threads " + cpuOverflowThreads
+				+ ", CPU queue " + cpuQueue + ")");
+			return new CongestionResultFilterGPU(
+				maxQueueSize, gpuEvaluator, cpuOverflow, batchSize, batchWaitMs, overflowThreshold);
 		}
 	}
 

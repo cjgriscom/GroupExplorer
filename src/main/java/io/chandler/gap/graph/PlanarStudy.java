@@ -118,7 +118,7 @@ public class PlanarStudy {
         
         // Fixed study workers for Phase 1/2 (+ sort/seed). Caps ThreadLocal GAP/dreadnaut sessions.
         int studyThreads = Runtime.getRuntime().availableProcessors() + 2;
-        int resultFilterQueueSize = 65535; // Max pending results in AbstractResultFilter before add() blocks
+        int resultFilterQueueSize = 40000; // Max pending results in AbstractResultFilter before add() blocks
         AbstractResultFilter resultFilter;
         /*resultFilter = TrialityResultFilter.builder(resultFilterQueueSize)
             .referenceGroup(generator)
@@ -138,6 +138,9 @@ public class PlanarStudy {
                 .batchSize(256)
                 .batchWaitMs(30_000)
                 .guardBand(0.1)
+                .cpuOverflowThreads(studyThreads * 2 + 2)
+                .cpuOverflowQueueSize(400) // block study workers when CPU overflow backlog hits this
+                .overflowBelowRemaining(512) // divert when GPU queue has <= this many free slots
                 .build();
         } else {
             resultFilter = CongestionResultFilter.builder(resultFilterQueueSize)

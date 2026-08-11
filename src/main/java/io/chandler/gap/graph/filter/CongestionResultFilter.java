@@ -18,7 +18,12 @@ public class CongestionResultFilter extends AbstractResultFilter {
 	private final CongestionEvaluator evaluator;
 
 	private CongestionResultFilter(int maxQueueSize, int threads, CongestionEvaluator evaluator) {
-		super(maxQueueSize, threads);
+		this(maxQueueSize, threads, evaluator, "planar-study-result-filter-");
+	}
+
+	CongestionResultFilter(int maxQueueSize, int threads, CongestionEvaluator evaluator,
+			String workerThreadPrefix) {
+		super(maxQueueSize, threads, workerThreadPrefix);
 		this.evaluator = evaluator;
 	}
 
@@ -47,6 +52,7 @@ public class CongestionResultFilter extends AbstractResultFilter {
 		private Double[] thresholds = null;
 		private int nRotations = 1;
 		private int threads = Runtime.getRuntime().availableProcessors();
+		private String workerThreadPrefix = "planar-study-result-filter-";
 
 		private Builder(int maxQueueSize) {
 			this.maxQueueSize = maxQueueSize;
@@ -105,10 +111,18 @@ public class CongestionResultFilter extends AbstractResultFilter {
 			return this;
 		}
 
+		Builder workerThreadPrefix(String workerThreadPrefix) {
+			if (workerThreadPrefix == null || workerThreadPrefix.isEmpty()) {
+				throw new IllegalArgumentException("workerThreadPrefix must be non-empty");
+			}
+			this.workerThreadPrefix = workerThreadPrefix;
+			return this;
+		}
+
 		public CongestionResultFilter build() {
 			CongestionEvaluator evaluator =
 					new CongestionEvaluator(seeds, checkpoints, thresholds, nRotations);
-			return new CongestionResultFilter(maxQueueSize, threads, evaluator);
+			return new CongestionResultFilter(maxQueueSize, threads, evaluator, workerThreadPrefix);
 		}
 	}
 
