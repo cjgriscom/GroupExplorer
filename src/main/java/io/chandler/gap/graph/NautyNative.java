@@ -76,11 +76,75 @@ public final class NautyNative {
                                               boolean directed,
                                               boolean useTraces) {
         CanonicalGraphHash h = canonicalHash(graph, directed, useTraces);
+        return formatZ(h, directed, useTraces);
+    }
+
+    /**
+     * Build the polygon graph from a combined generator (same geometry as
+     * {@link PlanarStudy#buildGraphFromCombinedGen}) entirely in native code,
+     * then return the dreadnaut {@code z} string.
+     */
+    public static String getCanonicalLabelingFromGen(int[][][] combinedGen,
+                                                     boolean directed,
+                                                     boolean useTraces) {
+        if (!AVAILABLE) {
+            throw new IllegalStateException("libnauty_jni not loaded");
+        }
+        FlatGen flat = flatten(combinedGen);
+        int[] w = nativeCanonicalHashFromGen(flat.points, flat.cycleLens,
+                directed, useTraces);
+        return formatZ(new CanonicalGraphHash(w[0], w[1], w[2]), directed, useTraces);
+    }
+
+    public static CanonicalGraphHash canonicalHashFromGen(int[][][] combinedGen,
+                                                          boolean directed,
+                                                          boolean useTraces) {
+        if (!AVAILABLE) {
+            throw new IllegalStateException("libnauty_jni not loaded");
+        }
+        FlatGen flat = flatten(combinedGen);
+        int[] w = nativeCanonicalHashFromGen(flat.points, flat.cycleLens,
+                directed, useTraces);
+        return new CanonicalGraphHash(w[0], w[1], w[2]);
+    }
+
+    private static String formatZ(CanonicalGraphHash h, boolean directed, boolean useTraces) {
         char engine = (useTraces && !directed) ? 'T' : 'S';
         return "[" + engine
                 + Integer.toHexString(h.w0()) + " "
                 + Integer.toHexString(h.w1()) + " "
                 + Integer.toHexString(h.w2()) + "]";
+    }
+
+    static final class FlatGen {
+        final int[] points;
+        final int[] cycleLens;
+        FlatGen(int[] points, int[] cycleLens) {
+            this.points = points;
+            this.cycleLens = cycleLens;
+        }
+    }
+
+    /** Concatenate all cycles; {@code cycleLens[i]} is the length of cycle {@code i}. */
+    static FlatGen flatten(int[][][] combinedGen) {
+        int nCycles = 0;
+        int nPoints = 0;
+        for (int[][] cs : combinedGen) {
+            for (int[] cyc : cs) {
+                nCycles++;
+                nPoints += cyc.length;
+            }
+        }
+        int[] points = new int[nPoints];
+        int[] cycleLens = new int[nCycles];
+        int pi = 0, ci = 0;
+        for (int[][] cs : combinedGen) {
+            for (int[] cyc : cs) {
+                cycleLens[ci++] = cyc.length;
+                for (int p : cyc) points[pi++] = p;
+            }
+        }
+        return new FlatGen(points, cycleLens);
     }
 
     static final class Packed {
@@ -169,4 +233,6 @@ public final class NautyNative {
     private static native String nativeVersion();
     private static native int[] nativeCanonicalHash(int n, int[] edges,
                                                     boolean directed, boolean useTraces);
+    private static native int[] nativeCanonicalHashFromGen(int[] points, int[] cycleLens,
+                                                           boolean directed, boolean useTraces);
 }

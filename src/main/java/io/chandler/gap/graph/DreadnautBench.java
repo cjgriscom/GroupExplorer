@@ -6,6 +6,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.ToLongFunction;
 
 import org.jgrapht.Graph;
 import org.jgrapht.graph.DefaultEdge;
@@ -42,12 +43,14 @@ public final class DreadnautBench {
         System.out.println("default backend: " + DreadnautInterface.defaultBackend());
         System.out.println("useTraces=" + USE_TRACES + " (undirected; all-2-cycle gens)");
 
+        List<int[][][]> gens = new ArrayList<>();
         List<Graph<Integer, DefaultEdge>> graphs = new ArrayList<>();
         try (PbinFile pf = PbinFile.open(path)) {
             int n = Math.min(pf.size(), limit);
             System.out.printf("loading %d / %d generators…%n", n, pf.size());
             for (int i = 0; i < n; i++) {
                 int[][][] gen = GroupExplorer.parseOperationsArr(pf.get(i));
+                gens.add(gen);
                 graphs.add(PlanarStudy.buildGraphFromCombinedGen(gen, false));
             }
         }
@@ -61,24 +64,29 @@ public final class DreadnautBench {
                 ? new DreadnautInterface(DREADNAUT, USE_TRACES, DreadnautInterface.Backend.NATIVE)
                 : null;
 
-        int check = Math.min(16, graphs.size());
+        int check = Math.min(16, gens.size());
         System.out.println("\n-- correctness (first " + check + ") --");
         int mismatches = 0;
         for (int i = 0; i < check; i++) {
             CanonicalGraphHash hp = CanonicalGraphHash.parse(
-                    process.getCanonicalLabeling(graphs.get(i), false));
+                    process.getCanonicalLabeling(gens.get(i), false));
             if (nativeIface != null) {
-                CanonicalGraphHash hn = CanonicalGraphHash.parse(
+                CanonicalGraphHash hnGraph = CanonicalGraphHash.parse(
                         nativeIface.getCanonicalLabeling(graphs.get(i), false));
-                if (!hp.equals(hn)) {
+                CanonicalGraphHash hnGen = CanonicalGraphHash.parse(
+                        nativeIface.getCanonicalLabeling(gens.get(i), false));
+                if (!hp.equals(hnGraph) || !hp.equals(hnGen)) {
                     mismatches++;
-                    System.out.println("MISMATCH @" + i + " process=" + hp + " native=" + hn);
+                    System.out.println("MISMATCH @" + i
+                            + " process=" + hp
+                            + " nativeGraph=" + hnGraph
+                            + " nativeGen=" + hnGen);
                 }
             }
         }
         if (nativeIface != null) {
             System.out.println(mismatches == 0
-                    ? "OK: process dreadnaut At/z == native Traces/hashgraph_sg"
+                    ? "OK: process == native(graph) == native(gen→JNI build)"
                     : ("FAIL: " + mismatches + " mismatches"));
         } else {
             System.out.println("skipped native compare (library not loaded)");
@@ -86,87 +94,86 @@ public final class DreadnautBench {
 
         final int warmup = 1;
         final int iters = 3;
-        System.out.printf("%n-- serial microbench: %d graphs, warmup=%d iters=%d --%n",
-                graphs.size(), warmup, iters);
+        final int n = gens.size();
+        System.out.printf("%n-- serial microbench: %d entries, warmup=%d iters=%d --%n",
+                n, warmup, iters);
 
-        benchSerial("process dreadnaut", process, graphs, warmup, iters);
+        bench("process (gen)", warmup, iters, n, i -> {
+            String z = process.getCanonicalLabeling(gens.get(i), false);
+            return z.length() + z.charAt(2);
+        });
+
         if (nativeIface != null) {
-            benchSerial("native libnauty", nativeIface, graphs, warmup, iters);
+            bench("native (JGraphT)", warmup, iters, n, i -> {
+                String z = nativeIface.getCanonicalLabeling(graphs.get(i), false);
+                return z.length() + z.charAt(2);
+            });
+            bench("native (gen→JNI)", warmup, iters, n, i -> {
+                String z = nativeIface.getCanonicalLabeling(gens.get(i), false);
+                return z.length() + z.charAt(2);
+            });
         }
 
         int threads = Math.max(2, Runtime.getRuntime().availableProcessors());
-        System.out.printf("%n-- parallel microbench: %d graphs, %d threads, iters=%d --%n",
-                graphs.size(), threads, iters);
-        // Process: one dreadnaut subprocess per task (PlanarStudy-style).
-        benchParallel("process dreadnaut", () -> new DreadnautInterface(
-                DREADNAUT, USE_TRACES, DreadnautInterface.Backend.PROCESS),
-                graphs, threads, iters);
+        System.out.printf("%n-- parallel microbench: %d entries, %d threads, iters=%d --%n",
+                n, threads, iters);
+
+        ThreadLocal<DreadnautInterface> processTl = ThreadLocal.withInitial(
+                () -> new DreadnautInterface(DREADNAUT, USE_TRACES, DreadnautInterface.Backend.PROCESS));
+        benchParallel("process (gen)", threads, iters, n, i -> {
+            String z = processTl.get().getCanonicalLabeling(gens.get(i), false);
+            return z.length() + z.charAt(2);
+        });
+
         if (nativeIface != null && NautyNative.hasTls()) {
-            // Shared TLS-safe native iface across worker threads.
-            benchParallel("native libnauty TLS", () -> nativeIface, graphs, threads, iters);
+            benchParallel("native (gen→JNI TLS)", threads, iters, n, i -> {
+                String z = nativeIface.getCanonicalLabeling(gens.get(i), false);
+                return z.length() + z.charAt(2);
+            });
         } else if (nativeIface != null) {
             System.out.println("  (skip parallel native: library not TLS-enabled)");
         }
     }
 
-    private static void benchSerial(String name, DreadnautInterface iface,
-                                    List<Graph<Integer, DefaultEdge>> graphs,
-                                    int warmup, int iters) {
+    private static void bench(String name, int warmup, int iters, int n,
+                              ToLongFunction<Integer> work) {
         for (int w = 0; w < warmup; w++) {
-            for (Graph<Integer, DefaultEdge> g : graphs) {
-                iface.getCanonicalLabeling(g, false);
-            }
+            for (int i = 0; i < n; i++) work.applyAsLong(i);
         }
         long bestNs = Long.MAX_VALUE;
         long touch = 0;
         for (int it = 0; it < iters; it++) {
             long t0 = System.nanoTime();
             long local = 0;
-            for (Graph<Integer, DefaultEdge> g : graphs) {
-                String z = iface.getCanonicalLabeling(g, false);
-                local += z.length() + z.charAt(2);
-            }
+            for (int i = 0; i < n; i++) local += work.applyAsLong(i);
             bestNs = Math.min(bestNs, System.nanoTime() - t0);
             touch = local;
         }
-        printResult(name, bestNs, graphs.size(), touch);
+        printResult(name, bestNs, n, touch);
     }
 
-    @FunctionalInterface
-    private interface IfaceFactory {
-        DreadnautInterface get();
-    }
-
-    private static void benchParallel(String name, IfaceFactory factory,
-                                      List<Graph<Integer, DefaultEdge>> graphs,
-                                      int threads, int iters) throws Exception {
-        // warmup
-        parallelOnce(factory, graphs, threads);
-
+    private static void benchParallel(String name, int threads, int iters, int n,
+                                      ToLongFunction<Integer> work) throws Exception {
+        runParallel(threads, n, work); // warmup
         long bestNs = Long.MAX_VALUE;
         long touch = 0;
         for (int it = 0; it < iters; it++) {
             long t0 = System.nanoTime();
-            touch = parallelOnce(factory, graphs, threads);
+            touch = runParallel(threads, n, work);
             bestNs = Math.min(bestNs, System.nanoTime() - t0);
         }
-        printResult(name, bestNs, graphs.size(), touch);
+        printResult(name, bestNs, n, touch);
     }
 
-    private static long parallelOnce(IfaceFactory factory,
-                                     List<Graph<Integer, DefaultEdge>> graphs,
-                                     int threads) throws Exception {
+    private static long runParallel(int threads, int n, ToLongFunction<Integer> work)
+            throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         AtomicLong touch = new AtomicLong();
         try {
-            ThreadLocal<DreadnautInterface> local =
-                    ThreadLocal.withInitial(factory::get);
-            List<Future<?>> futures = new ArrayList<>(graphs.size());
-            for (Graph<Integer, DefaultEdge> g : graphs) {
-                futures.add(pool.submit(() -> {
-                    String z = local.get().getCanonicalLabeling(g, false);
-                    touch.addAndGet(z.length() + z.charAt(2));
-                }));
+            List<Future<?>> futures = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                final int idx = i;
+                futures.add(pool.submit(() -> touch.addAndGet(work.applyAsLong(idx))));
             }
             for (Future<?> f : futures) f.get();
         } finally {
@@ -178,7 +185,7 @@ public final class DreadnautBench {
     private static void printResult(String name, long bestNs, int n, long touch) {
         double ms = bestNs / 1_000_000.0;
         double per = bestNs / (double) n / 1_000_000.0;
-        System.out.printf("  %-22s  best=%8.1f ms  (%.2f ms/graph)  touch=%d%n",
+        System.out.printf("  %-24s  best=%8.1f ms  (%.2f ms/graph)  touch=%d%n",
                 name, ms, per, touch);
     }
 

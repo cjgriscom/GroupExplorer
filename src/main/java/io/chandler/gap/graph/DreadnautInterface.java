@@ -87,13 +87,18 @@ public class DreadnautInterface {
      * Returns the canonical labelling for a generator description. When the generators
      * only contain 2-cycles it is safe to treat the graph as undirected, matching the
      * logic previously embedded in {@link PlanarStudy}.
+     * <p>
+     * With {@link Backend#NATIVE}, the polygon graph is built inside JNI (no JGraphT).
      */
     public String getCanonicalLabeling(int[][][] combinedGen, boolean directed) {
         boolean actualDirected = directed && !allTwoCycles(combinedGen);
+        if (backend == Backend.NATIVE) {
+            return NautyNative.getCanonicalLabelingFromGen(combinedGen, actualDirected, useTraces);
+        }
         Graph<Integer, DefaultEdge> graph =
             PlanarStudy.buildGraphFromCombinedGen(combinedGen, actualDirected);
         try {
-            return canonicalize(graph, actualDirected);
+            return canonicalizeProcess(graph, actualDirected);
         } catch (IOException | InterruptedException e) {
             throw new RuntimeException("dreadnaut failed: " + e.getMessage(), e);
         }

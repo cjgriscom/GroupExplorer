@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,13 @@ struct EdgeList {
     std::vector<std::vector<int>> adj;
 };
 
+void dedupe_adj(EdgeList &g) {
+    for (auto &row : g.adj) {
+        std::sort(row.begin(), row.end());
+        row.erase(std::unique(row.begin(), row.end()), row.end());
+    }
+}
+
 EdgeList build_adj(int n, const jint *edges, int nEdges, bool directed) {
     EdgeList g;
     g.n = n;
@@ -47,10 +55,70 @@ EdgeList build_adj(int n, const jint *edges, int nEdges, bool directed) {
         g.adj[static_cast<size_t>(u)].push_back(v);
         if (!directed) g.adj[static_cast<size_t>(v)].push_back(u);
     }
-    for (auto &row : g.adj) {
-        std::sort(row.begin(), row.end());
-        row.erase(std::unique(row.begin(), row.end()), row.end());
+    dedupe_adj(g);
+    return g;
+}
+
+/**
+ * Same geometry as PlanarStudy.buildGraphFromCombinedGen + NautyNative.pack:
+ * each cycle becomes a polygon of edges; vertex labels are remapped to 0..n-1
+ * in sorted order of the distinct labels that appear.
+ *
+ * points: concatenation of all cycles; cycleLens[i] = length of cycle i.
+ */
+EdgeList build_from_gen(const jint *points, int nPoints,
+                        const jint *cycleLens, int nCycles,
+                        bool directed) {
+    std::vector<int> labels;
+    labels.reserve(static_cast<size_t>(nPoints));
+    for (int i = 0; i < nPoints; ++i) labels.push_back(points[i]);
+    std::sort(labels.begin(), labels.end());
+    labels.erase(std::unique(labels.begin(), labels.end()), labels.end());
+
+    EdgeList g;
+    g.n = static_cast<int>(labels.size());
+    g.directed = directed;
+    if (g.n == 0) {
+        g.adj.clear();
+        return g;
     }
+    g.adj.assign(static_cast<size_t>(g.n), {});
+
+    // Dense remap table when labels fit a modest range (typical: 1..N).
+    int minLab = labels.front();
+    int maxLab = labels.back();
+    std::vector<int> dense;
+    const bool useDense = (maxLab - minLab) <= 4000000 && maxLab <= 10000000;
+    if (useDense) {
+        dense.assign(static_cast<size_t>(maxLab + 1), -1);
+        for (int i = 0; i < g.n; ++i) dense[static_cast<size_t>(labels[static_cast<size_t>(i)])] = i;
+    }
+
+    auto remap = [&](int label) -> int {
+        if (useDense) return dense[static_cast<size_t>(label)];
+        auto it = std::lower_bound(labels.begin(), labels.end(), label);
+        return static_cast<int>(it - labels.begin());
+    };
+
+    int off = 0;
+    for (int c = 0; c < nCycles; ++c) {
+        int L = cycleLens[c];
+        if (L < 0 || off + L > nPoints) {
+            throw std::runtime_error("cycle length overrun");
+        }
+        if (L >= 2) {
+            for (int i = 0; i < L; ++i) {
+                int u = remap(points[off + i]);
+                int v = remap(points[off + ((i + 1) % L)]);
+                if (u == v) continue;
+                g.adj[static_cast<size_t>(u)].push_back(v);
+                if (!directed) g.adj[static_cast<size_t>(v)].push_back(u);
+            }
+        }
+        off += L;
+    }
+    if (off != nPoints) throw std::runtime_error("points length mismatch");
+    dedupe_adj(g);
     return g;
 }
 
@@ -90,6 +158,15 @@ jstring grpsize_to_jstring(JNIEnv *env, double grpsize1, int grpsize2) {
 
 int run_canonical(const EdgeList &g, bool useTraces, jint *hashOut,
                   double *grpsize1, int *grpsize2) {
+    if (g.n <= 0) {
+        if (hashOut) {
+            hashOut[0] = hashOut[1] = hashOut[2] = 0;
+        }
+        if (grpsize1) *grpsize1 = 1;
+        if (grpsize2) *grpsize2 = 0;
+        return 0;
+    }
+
     SG_DECL(sg);
     SG_DECL(cg);
     fill_sparsegraph(g, sg);
@@ -178,6 +255,53 @@ Java_io_chandler_gap_graph_NautyNative_nativeCanonicalHash(
         if (ep) env->ReleaseIntArrayElements(edges, ep, JNI_ABORT);
         jclass ex = env->FindClass("java/lang/RuntimeException");
         if (ex) env->ThrowNew(ex, "native nauty canonicalHash failed");
+        return nullptr;
+    }
+
+    jintArray out = env->NewIntArray(3);
+    if (out) env->SetIntArrayRegion(out, 0, 3, hash);
+    return out;
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_io_chandler_gap_graph_NautyNative_nativeCanonicalHashFromGen(
+        JNIEnv *env, jclass,
+        jintArray points, jintArray cycleLens,
+        jboolean directed, jboolean useTraces) {
+    if (points == nullptr || cycleLens == nullptr) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "null generator arrays");
+        return nullptr;
+    }
+    jsize nPoints = env->GetArrayLength(points);
+    jsize nCycles = env->GetArrayLength(cycleLens);
+    jint *pp = env->GetIntArrayElements(points, nullptr);
+    if (pp == nullptr) return nullptr;
+    jint *lp = env->GetIntArrayElements(cycleLens, nullptr);
+    if (lp == nullptr) {
+        env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        return nullptr;
+    }
+
+    jint hash[3] = {0, 0, 0};
+    try {
+        EdgeList g = build_from_gen(pp, nPoints, lp, nCycles, directed == JNI_TRUE);
+        env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        pp = nullptr;
+        lp = nullptr;
+        run_canonical(g, useTraces == JNI_TRUE, hash, nullptr, nullptr);
+    } catch (const std::exception &e) {
+        if (pp) env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        if (lp) env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, e.what());
+        return nullptr;
+    } catch (...) {
+        if (pp) env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        if (lp) env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        jclass ex = env->FindClass("java/lang/RuntimeException");
+        if (ex) env->ThrowNew(ex, "nativeCanonicalHashFromGen failed");
         return nullptr;
     }
 
