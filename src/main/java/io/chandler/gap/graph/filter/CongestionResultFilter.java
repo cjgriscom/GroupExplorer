@@ -18,12 +18,12 @@ public class CongestionResultFilter extends AbstractResultFilter {
 	private final CongestionEvaluator evaluator;
 
 	private CongestionResultFilter(int maxQueueSize, int threads, CongestionEvaluator evaluator) {
-		this(maxQueueSize, threads, evaluator, "planar-study-result-filter-");
+		this(maxQueueSize, threads, evaluator, "planar-study-result-filter-", Thread.NORM_PRIORITY);
 	}
 
 	CongestionResultFilter(int maxQueueSize, int threads, CongestionEvaluator evaluator,
-			String workerThreadPrefix) {
-		super(maxQueueSize, threads, workerThreadPrefix);
+			String workerThreadPrefix, int workerPriority) {
+		super(maxQueueSize, threads, workerThreadPrefix, workerPriority);
 		this.evaluator = evaluator;
 	}
 
@@ -53,6 +53,7 @@ public class CongestionResultFilter extends AbstractResultFilter {
 		private int nRotations = 1;
 		private int threads = Runtime.getRuntime().availableProcessors();
 		private String workerThreadPrefix = "planar-study-result-filter-";
+		private int workerPriority = Thread.NORM_PRIORITY;
 
 		private Builder(int maxQueueSize) {
 			this.maxQueueSize = maxQueueSize;
@@ -119,10 +120,17 @@ public class CongestionResultFilter extends AbstractResultFilter {
 			return this;
 		}
 
+		/** Java thread priority hint ({@link Thread#MIN_PRIORITY}..{@link Thread#MAX_PRIORITY}). */
+		public Builder workerPriority(int workerPriority) {
+			this.workerPriority = workerPriority;
+			return this;
+		}
+
 		public CongestionResultFilter build() {
 			CongestionEvaluator evaluator =
 					new CongestionEvaluator(seeds, checkpoints, thresholds, nRotations);
-			return new CongestionResultFilter(maxQueueSize, threads, evaluator, workerThreadPrefix);
+			return new CongestionResultFilter(
+				maxQueueSize, threads, evaluator, workerThreadPrefix, workerPriority);
 		}
 	}
 

@@ -35,7 +35,7 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 	private CongestionResultFilterGPU(int maxQueueSize, CongestionEvaluatorGPU gpuEvaluator,
 			CongestionResultFilter cpuOverflow, int batchSize, long batchWaitMs,
 			int overflowBelowRemaining) {
-		super(maxQueueSize, 1, "planar-study-gpu-filter-");
+		super(maxQueueSize, 1, "planar-study-gpu-filter-", Thread.MAX_PRIORITY);
 		this.gpuEvaluator = gpuEvaluator;
 		this.cpuOverflow = cpuOverflow;
 		this.batchSize = batchSize;
@@ -422,7 +422,8 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 				.checkpoints(checkpoints)
 				.nRotations(nRotations)
 				.threads(cpuOverflowThreads)
-				.workerThreadPrefix("planar-study-cpu-overflow-");
+				.workerThreadPrefix("planar-study-cpu-overflow-")
+				.workerPriority(Thread.MAX_PRIORITY - 1); // above study workers; below GPU batcher
 			if (thresholds != null) {
 				double[] th = new double[thresholds.length];
 				for (int i = 0; i < thresholds.length; i++) {
@@ -438,7 +439,9 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 					new CongestionEvaluatorGPU(seeds, checkpoints, thresholds, nRotations, guardBand);
 			System.out.println("GPU congestion filter: overflow to CPU when remainingCapacity <= "
 				+ overflowThreshold + " (CPU threads " + cpuOverflowThreads
-				+ ", CPU queue " + cpuQueue + ")");
+				+ ", CPU queue " + cpuQueue
+				+ ", priorities GPU=" + Thread.MAX_PRIORITY
+				+ " CPU=" + (Thread.MAX_PRIORITY - 1) + ")");
 			return new CongestionResultFilterGPU(
 				maxQueueSize, gpuEvaluator, cpuOverflow, batchSize, batchWaitMs, overflowThreshold);
 		}

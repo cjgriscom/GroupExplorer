@@ -57,6 +57,11 @@ public abstract class AbstractResultFilter {
 	}
 
 	protected AbstractResultFilter(int maxQueueSize, int threads, String workerThreadPrefix) {
+		this(maxQueueSize, threads, workerThreadPrefix, Thread.NORM_PRIORITY);
+	}
+
+	protected AbstractResultFilter(int maxQueueSize, int threads, String workerThreadPrefix,
+			int workerPriority) {
 		if (maxQueueSize < 1) {
 			throw new IllegalArgumentException("maxQueueSize must be >= 1");
 		}
@@ -66,6 +71,7 @@ public abstract class AbstractResultFilter {
 		if (workerThreadPrefix == null || workerThreadPrefix.isEmpty()) {
 			throw new IllegalArgumentException("workerThreadPrefix must be non-empty");
 		}
+		int priority = clampPriority(workerPriority);
 		this.maxQueueSize = maxQueueSize;
 		this.queue = new ArrayBlockingQueue<>(maxQueueSize);
 		this.workers = new Thread[threads];
@@ -73,9 +79,20 @@ public abstract class AbstractResultFilter {
 			final int index = i;
 			Thread worker = new Thread(() -> runSupervised(index), workerThreadPrefix + i);
 			worker.setDaemon(true);
+			worker.setPriority(priority);
 			workers[i] = worker;
 			worker.start();
 		}
+	}
+
+	private static int clampPriority(int workerPriority) {
+		if (workerPriority < Thread.MIN_PRIORITY) {
+			return Thread.MIN_PRIORITY;
+		}
+		if (workerPriority > Thread.MAX_PRIORITY) {
+			return Thread.MAX_PRIORITY;
+		}
+		return workerPriority;
 	}
 
 	/** Number of filter worker threads. */
