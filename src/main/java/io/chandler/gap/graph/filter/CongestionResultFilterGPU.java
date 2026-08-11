@@ -4,28 +4,34 @@ import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import io.chandler.gap.graph.CongestionCuda;
 import io.chandler.gap.graph.CongestionEvaluator;
 import io.chandler.gap.graph.CongestionEvaluatorGPU;
+import io.chandler.gap.graph.CongestionGraphPack;
 
 /**
  * GPU-batched result filter using the same congestion pipeline as
  * {@link CongestionResultFilter}. Accumulates up to {@code batchSize} results
- * (or {@code batchWaitMs} since the first item) before submitting a batch to
- * {@link CongestionEvaluatorGPU}.
+ * (or {@code batchWaitMs} since the first item), packs on the filter worker, and
+ * hands prepared batches to a dedicated CUDA thread via a bounded
+ * {@link LinkedBlockingQueue} so packing the next batch overlaps GPU execution.
  * <p>
  * When the GPU input queue is near capacity ({@code remainingCapacity <= overflowBelowRemaining}),
  * new results are diverted to a parallel {@link CongestionResultFilter} CPU overflow pool
  * so study workers are less likely to block on {@link #add}.
  * <p>
- * Guard-band hits after a GPU batch are also deferred to that CPU pool (not run inline on
- * the single GPU thread), so ambiguous graphs do not stall the next CUDA batch.
+ * Guard-band hits after a GPU batch are also deferred to that CPU pool (not run inline),
+ * so ambiguous graphs do not stall the CUDA thread.
  */
 public final class CongestionResultFilterGPU extends AbstractResultFilter {
 	private static final long POLL_CHECK_MS = 100L;
+	/** One slot ahead of the in-flight CUDA batch (double-buffer). */
+	private static final int PREPARED_QUEUE_CAP = 1;
+	private static final PreparedBatch POISON = new PreparedBatch(null, null, null);
 
 	private final CongestionEvaluatorGPU gpuEvaluator;
 	private final CongestionResultFilter cpuOverflow;
@@ -35,22 +41,31 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 	private final int overflowBelowRemaining;
 	private final AtomicInteger overflowedToCpu = new AtomicInteger();
 
+	private final LinkedBlockingQueue<PreparedBatch> preparedQueue =
+			new LinkedBlockingQueue<>(PREPARED_QUEUE_CAP);
+	private final Thread cudaThread;
+
 	private CongestionResultFilterGPU(int maxQueueSize, CongestionEvaluatorGPU gpuEvaluator,
 			CongestionResultFilter cpuOverflow, int batchSize, long batchWaitMs,
 			int overflowBelowRemaining) {
-		super(maxQueueSize, 1, "planar-study-gpu-filter-", Thread.MAX_PRIORITY);
+		super(maxQueueSize, 1, "planar-study-gpu-pack-", Thread.MAX_PRIORITY);
 		this.gpuEvaluator = gpuEvaluator;
 		this.cpuOverflow = cpuOverflow;
 		this.batchSize = batchSize;
 		this.batchWaitMs = batchWaitMs;
 		this.overflowBelowRemaining = overflowBelowRemaining;
+
+		this.cudaThread = new Thread(this::cudaLoop, "planar-study-gpu-cuda");
+		this.cudaThread.setDaemon(true);
+		this.cudaThread.setPriority(Thread.MAX_PRIORITY);
+		this.cudaThread.start();
 	}
 
 	public static Builder builder(int maxQueueSize) {
 		return new Builder(maxQueueSize);
 	}
 
-	/** How many results were sent to the CPU overflow filter. */
+	/** How many results were sent to the CPU overflow filter (capacity divert). */
 	public int overflowedToCpuCount() {
 		return overflowedToCpu.get();
 	}
@@ -124,7 +139,7 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 
 	@Override
 	public int threadCount() {
-		return super.threadCount() + cpuOverflow.threadCount();
+		return super.threadCount() + 1 + cpuOverflow.threadCount();
 	}
 
 	@Override
@@ -145,6 +160,10 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 		cpuOverflow.drain();
 	}
 
+	/**
+	 * Packer loop: accumulate inputs, {@link CongestionEvaluatorGPU#packBatch}, enqueue for CUDA.
+	 * Blocks on the prepared queue when CUDA is behind (backpressure).
+	 */
 	@Override
 	protected void runLoop() {
 		List<QueuedResult> pending = new ArrayList<>(batchSize);
@@ -153,7 +172,7 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 		try {
 			while (!isShutdown()) {
 				if (shouldFlushBatch(pending, batchDeadlineMs)) {
-					flushBatch(pending);
+					submitPrepared(pending);
 					batchDeadlineMs = 0L;
 					continue;
 				}
@@ -191,14 +210,12 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 				pending.add(leftover);
 			}
 			if (!pending.isEmpty()) {
-				flushBatch(pending);
+				submitPrepared(pending);
 			}
 		} finally {
-			// If we abort with items still pending (e.g. unexpected Error after take),
-			// release queued accounting so drain()/producers cannot wedge forever.
 			if (!pending.isEmpty()) {
 				failPendingBatch(pending,
-					new IllegalStateException("GPU filter leaving runLoop with " + pending.size() + " pending"));
+					new IllegalStateException("GPU packer leaving runLoop with " + pending.size() + " pending"));
 			}
 		}
 	}
@@ -219,17 +236,67 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 		return isInputQueueEmpty() && pending.size() == CongestionResultFilterGPU.super.queuedCount();
 	}
 
-	private void flushBatch(List<QueuedResult> pending) {
-		List<String> lines = new ArrayList<>(pending.size());
-		for (QueuedResult item : pending) {
+	/** Pack on this thread, then hand off to the CUDA thread (may block if queue full). */
+	private void submitPrepared(List<QueuedResult> pending) {
+		List<QueuedResult> items = new ArrayList<>(pending);
+		pending.clear();
+		List<String> lines = new ArrayList<>(items.size());
+		for (QueuedResult item : items) {
 			lines.add(item.result);
 		}
 
+		CongestionGraphPack.BatchPack pack;
+		try {
+			pack = gpuEvaluator.packBatch(lines);
+		} catch (Throwable t) {
+			failPendingBatch(items, t);
+			return;
+		}
+
+		try {
+			preparedQueue.put(new PreparedBatch(items, lines, pack));
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			failPendingBatch(items, e);
+		}
+	}
+
+	private void cudaLoop() {
+		try {
+			while (true) {
+				PreparedBatch batch;
+				try {
+					batch = preparedQueue.take();
+				} catch (InterruptedException e) {
+					if (isShutdown() && preparedQueue.isEmpty()) {
+						break;
+					}
+					Thread.currentThread().interrupt();
+					continue;
+				}
+				if (batch == POISON) {
+					break;
+				}
+				processPrepared(batch);
+			}
+			// Drain anything packed after poison race (shouldn't happen).
+			PreparedBatch leftover;
+			while ((leftover = preparedQueue.poll()) != null) {
+				if (leftover == POISON) {
+					continue;
+				}
+				processPrepared(leftover);
+			}
+		} catch (Throwable t) {
+			notifyFailure("GPU cudaLoop crashed", t);
+		}
+	}
+
+	private void processPrepared(PreparedBatch batch) {
+		List<QueuedResult> pending = batch.items;
 		CongestionEvaluatorGPU.BatchOutcome outcome;
 		try {
-			// Do not run guard-band CPU inline — that stalls this sole GPU thread.
-			// Ambiguous graphs are handed to cpuOverflow instead.
-			outcome = gpuEvaluator.evaluateBatch(lines, false);
+			outcome = gpuEvaluator.evaluatePacked(batch.lines, batch.pack, false);
 			if (outcome.results.length != pending.size()) {
 				throw new IllegalStateException(
 						"GPU batch returned " + outcome.results.length + " results for " + pending.size() + " inputs");
@@ -243,14 +310,14 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 		if (deferred > 0) {
 			System.out.println("  GPU batch n=" + pending.size()
 					+ " deferred " + deferred + " guard-band hit(s) to CPU overflow"
-					+ " (gpuRemaining=" + remainingCapacity() + ")");
+					+ " (gpuRemaining=" + remainingCapacity()
+					+ ", preparedQ=" + preparedQueue.size() + ")");
 		}
 
 		for (int i = 0; i < pending.size(); i++) {
 			QueuedResult item = pending.get(i);
 			try {
 				if (outcome.needsGuardBandFallback[i]) {
-					// Full CPU re-eval on overflow pool; do not trust provisional GPU scores.
 					cpuOverflow.add(item.result, item.lastLoop, item.retainCandidate);
 				} else {
 					CongestionEvaluator.Result eval = outcome.results[i];
@@ -275,16 +342,14 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 					t.addSuppressed(t2);
 				}
 			} finally {
-				// Item left the GPU queue (either decided here or re-queued on CPU).
 				markProcessed();
 			}
 		}
-		pending.clear();
 	}
 
-	/** Report failure, print sample inputs for reproduction, reject-to-candidates, clear pending. */
+	/** Report failure, reject-to-candidates, clear pending. */
 	private void failPendingBatch(List<QueuedResult> pending, Throwable t) {
-		notifyFailure("GPU flushBatch n=" + pending.size(), t);
+		notifyFailure("GPU batch n=" + pending.size(), t);
 		int samples = Math.min(5, pending.size());
 		for (int i = 0; i < samples; i++) {
 			System.err.println("  failed-input[" + i + "]: " + pending.get(i).result);
@@ -307,9 +372,32 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 
 	@Override
 	public void close() {
-		super.close();
+		super.close(); // stops packer; it should have submitted or failed any pending
+		try {
+			preparedQueue.put(POISON);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			cudaThread.interrupt();
+		}
+		try {
+			cudaThread.join();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 		cpuOverflow.close();
 		CongestionCuda.shutdown();
+	}
+
+	private static final class PreparedBatch {
+		final List<QueuedResult> items;
+		final List<String> lines;
+		final CongestionGraphPack.BatchPack pack;
+
+		PreparedBatch(List<QueuedResult> items, List<String> lines, CongestionGraphPack.BatchPack pack) {
+			this.items = items;
+			this.lines = lines;
+			this.pack = pack;
+		}
 	}
 
 	/**
@@ -448,7 +536,7 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 				.nRotations(nRotations)
 				.threads(cpuOverflowThreads)
 				.workerThreadPrefix("planar-study-cpu-overflow-")
-				.workerPriority(Thread.MAX_PRIORITY - 1); // above study workers; below GPU batcher
+				.workerPriority(Thread.MAX_PRIORITY - 1); // above study workers; below GPU
 			if (thresholds != null) {
 				double[] th = new double[thresholds.length];
 				for (int i = 0; i < thresholds.length; i++) {
@@ -462,10 +550,11 @@ public final class CongestionResultFilterGPU extends AbstractResultFilter {
 
 			CongestionEvaluatorGPU gpuEvaluator =
 					new CongestionEvaluatorGPU(seeds, checkpoints, thresholds, nRotations, guardBand);
-			System.out.println("GPU congestion filter: overflow to CPU when remainingCapacity <= "
+			System.out.println("GPU congestion filter: pack∥CUDA pipeline (preparedQ=" + PREPARED_QUEUE_CAP
+				+ "), overflow to CPU when remainingCapacity <= "
 				+ overflowThreshold + " (CPU threads " + cpuOverflowThreads
 				+ ", CPU queue " + cpuQueue
-				+ ", priorities GPU=" + Thread.MAX_PRIORITY
+				+ ", priorities pack/CUDA=" + Thread.MAX_PRIORITY
 				+ " CPU=" + (Thread.MAX_PRIORITY - 1) + ")");
 			return new CongestionResultFilterGPU(
 				maxQueueSize, gpuEvaluator, cpuOverflow, batchSize, batchWaitMs, overflowThreshold);

@@ -61,6 +61,11 @@ public final class CongestionEvaluatorGPU {
         }
     }
 
+    /** Pack generators for a later {@link #evaluatePacked} (overlaps with a prior CUDA batch). */
+    public CongestionGraphPack.BatchPack packBatch(List<String> lines) {
+        return CongestionGraphPack.packBatch(lines, seeds);
+    }
+
     /**
      * GPU batch evaluate; runs guard-band CPU fallback inline (ForkJoin) before
      * returning. Prefer {@link #evaluateBatch(List, boolean)} with
@@ -77,11 +82,23 @@ public final class CongestionEvaluatorGPU {
      *        those graphs are provisional and should not be used for accept/reject.
      */
     public BatchOutcome evaluateBatch(List<String> lines, boolean runGuardBandCpuInline) {
+        return evaluatePacked(lines, packBatch(lines), runGuardBandCpuInline);
+    }
+
+    /**
+     * Run CUDA on a pre-packed batch. Same guard-band semantics as
+     * {@link #evaluateBatch(List, boolean)}.
+     */
+    public BatchOutcome evaluatePacked(List<String> lines, CongestionGraphPack.BatchPack batch,
+                                       boolean runGuardBandCpuInline) {
         if (!CongestionCuda.isAvailable()) {
             throw new IllegalStateException("CUDA backend unavailable: " + CongestionCuda.deviceName());
         }
+        if (lines.size() != batch.numGraphs) {
+            throw new IllegalArgumentException(
+                    "lines.size=" + lines.size() + " != pack.numGraphs=" + batch.numGraphs);
+        }
         int numGraphs = lines.size();
-        CongestionGraphPack.BatchPack batch = CongestionGraphPack.packBatch(lines, seeds);
         int scoreCount = numGraphs * checkpoints.length * seeds.length * nRotations;
         float[] scoresOut = new float[scoreCount];
 
