@@ -4,7 +4,8 @@ JNI bridge that **downloads nauty**, builds it with `--enable-tls`, and
 **statically links** `libnauty.a` into `libnauty_jni.so`. No dependency on the
 system `libnauty` (which is usually non-TLS).
 
-Produces the same dreadnaut `z` certificate words as the `dreadnaut` executable.
+Produces the same dreadnaut `z` certificate words as the `dreadnaut` executable,
+and also hosts {@code CongestionGraphPack} native pack helpers (CSR + adjacency).
 
 ## Build
 

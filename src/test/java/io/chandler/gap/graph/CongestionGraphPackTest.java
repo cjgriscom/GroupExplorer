@@ -60,4 +60,27 @@ class CongestionGraphPackTest {
         assertEquals(3, batch.graphEdgeOffsets.length);
         assertTrue(batch.graphEdgeOffsets[2] > 0);
     }
+
+    @Test
+    void javaAndNativePackAgreeWhenNativeAvailable() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(NautyNative.isAvailable());
+        String line = "[(1,2,3)(4,5),(1,4)]";
+        int[][][] gen = io.chandler.gap.GroupExplorer.parseOperationsArr(line);
+        CongestionGraphPack j = CongestionGraphPack.packJava(gen);
+        CongestionGraphPack n = CongestionGraphPack.packNative(gen);
+        assertEquals(j.n, n.n);
+        assertEquals(j.edgeCount, n.edgeCount);
+        assertEquals(j.nodeIds, n.nodeIds);
+        assertTrue(Arrays.equals(j.edgeU, n.edgeU));
+        assertTrue(Arrays.equals(j.edgeV, n.edgeV));
+        assertTrue(Arrays.equals(j.adjacency, n.adjacency));
+
+        CongestionGraphPack.BatchPack batch = CongestionGraphPack.packBatch(
+                Arrays.asList(line, "[(1,2,3)(4,5),(1,5)]"),
+                new long[]{41L, 129L});
+        float[] expect = j.initialPositions(41L);
+        for (int i = 0; i < expect.length; i++) {
+            assertEquals(expect[i], batch.initialPos[i]);
+        }
+    }
 }

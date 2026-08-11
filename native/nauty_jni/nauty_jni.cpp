@@ -15,8 +15,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if !HAVE_TLS
@@ -352,3 +354,399 @@ Java_io_chandler_gap_graph_NautyNative_nativeCanonicalAndGrpsize(
     if (gsChars) env->ReleaseStringUTFChars(gs, gsChars);
     return env->NewStringUTF(buf);
 }
+
+// ================================================================
+// CongestionGraphPack — polygon gen → CSR + adjacency + Java-Random positions
+// Vertex order: sorted distinct labels (stabilized; not HashSet iteration).
+// ================================================================
+
+namespace {
+
+/** Exact match for {@code java.util.Random} (48-bit LCG). */
+class JavaRandom {
+    uint64_t seed_;
+public:
+    explicit JavaRandom(int64_t seed) {
+        seed_ = (static_cast<uint64_t>(seed) ^ 0x5DEECE66DULL) & ((1ULL << 48) - 1);
+    }
+    int next(int bits) {
+        seed_ = (seed_ * 0x5DEECE66DULL + 0xBULL) & ((1ULL << 48) - 1);
+        return static_cast<int>(seed_ >> (48 - bits));
+    }
+    double nextDouble() {
+        const int64_t a = static_cast<int64_t>(next(26));
+        const int64_t b = static_cast<int64_t>(next(27));
+        return ((a << 27) + b) * (1.0 / static_cast<double>(1LL << 53));
+    }
+};
+
+struct CongestionPacked {
+    std::vector<int> nodeIds; // sorted original labels
+    std::vector<int> edgeU;
+    std::vector<int> edgeV;
+    std::vector<uint8_t> adjacency; // n*n, symmetric
+};
+
+CongestionPacked pack_congestion_from_gen(const jint *points, int nPoints,
+                                          const jint *cycleLens, int nCycles,
+                                          uint8_t *adjacencyOut,
+                                          bool ownAdjacency) {
+    std::vector<int> labels;
+    labels.reserve(static_cast<size_t>(nPoints));
+    for (int i = 0; i < nPoints; ++i) labels.push_back(points[i]);
+    std::sort(labels.begin(), labels.end());
+    labels.erase(std::unique(labels.begin(), labels.end()), labels.end());
+
+    CongestionPacked out;
+    out.nodeIds = labels;
+    const int n = static_cast<int>(labels.size());
+    if (n == 0) return out;
+
+    int minLab = labels.front();
+    int maxLab = labels.back();
+    std::vector<int> dense(static_cast<size_t>(maxLab - minLab + 1), -1);
+    for (int i = 0; i < n; ++i)
+        dense[static_cast<size_t>(labels[static_cast<size_t>(i)] - minLab)] = i;
+
+    std::vector<std::pair<int, int>> edges;
+    edges.reserve(static_cast<size_t>(nPoints));
+    int off = 0;
+    for (int c = 0; c < nCycles; ++c) {
+        int L = cycleLens[c];
+        if (L < 0 || off + L > nPoints)
+            throw std::runtime_error("cycle length overrun in congestion pack");
+        if (L >= 2) {
+            for (int i = 0; i < L; ++i) {
+                int lu = points[off + i];
+                int lv = points[off + ((i + 1) % L)];
+                if (lu < minLab || lu > maxLab || lv < minLab || lv > maxLab)
+                    throw std::runtime_error("vertex out of label range");
+                int u = dense[static_cast<size_t>(lu - minLab)];
+                int v = dense[static_cast<size_t>(lv - minLab)];
+                if (u < 0 || v < 0) throw std::runtime_error("unmapped vertex");
+                if (u == v) continue;
+                if (u > v) std::swap(u, v);
+                edges.emplace_back(u, v);
+            }
+        }
+        off += L;
+    }
+    if (off != nPoints) throw std::runtime_error("points length mismatch");
+
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+
+    out.edgeU.resize(edges.size());
+    out.edgeV.resize(edges.size());
+    for (size_t e = 0; e < edges.size(); ++e) {
+        out.edgeU[e] = edges[e].first;
+        out.edgeV[e] = edges[e].second;
+    }
+
+    auto paint = [&](uint8_t *adj) {
+        std::memset(adj, 0, static_cast<size_t>(n) * static_cast<size_t>(n));
+        for (size_t e = 0; e < edges.size(); ++e) {
+            int u = edges[e].first, v = edges[e].second;
+            adj[static_cast<size_t>(u) * static_cast<size_t>(n) + static_cast<size_t>(v)] = 1;
+            adj[static_cast<size_t>(v) * static_cast<size_t>(n) + static_cast<size_t>(u)] = 1;
+        }
+    };
+    if (adjacencyOut != nullptr) {
+        paint(adjacencyOut);
+    } else if (ownAdjacency) {
+        out.adjacency.assign(static_cast<size_t>(n) * static_cast<size_t>(n), 0);
+        paint(out.adjacency.data());
+    }
+    return out;
+}
+
+static void paint_adjacency(uint8_t *adj, int n,
+                            const std::vector<int> &edgeU,
+                            const std::vector<int> &edgeV) {
+    std::memset(adj, 0, static_cast<size_t>(n) * static_cast<size_t>(n));
+    for (size_t e = 0; e < edgeU.size(); ++e) {
+        int u = edgeU[e], v = edgeV[e];
+        adj[static_cast<size_t>(u) * static_cast<size_t>(n) + static_cast<size_t>(v)] = 1;
+        adj[static_cast<size_t>(v) * static_cast<size_t>(n) + static_cast<size_t>(u)] = 1;
+    }
+}
+
+void fill_initial_positions(float *out, int n, int64_t seed) {
+    JavaRandom rng(seed);
+    const int m = n * 3;
+    for (int i = 0; i < m; ++i)
+        out[i] = static_cast<float>(rng.nextDouble());
+}
+
+jobjectArray new_object_array(JNIEnv *env, int len) {
+    jclass objCls = env->FindClass("java/lang/Object");
+    return env->NewObjectArray(len, objCls, nullptr);
+}
+
+jintArray to_jint_array(JNIEnv *env, const std::vector<int> &v) {
+    jintArray a = env->NewIntArray(static_cast<jsize>(v.size()));
+    if (!a) return nullptr;
+    if (!v.empty()) {
+        void *p = env->GetPrimitiveArrayCritical(a, nullptr);
+        if (p) {
+            std::memcpy(p, v.data(), v.size() * sizeof(int));
+            env->ReleasePrimitiveArrayCritical(a, p, 0);
+        } else {
+            env->SetIntArrayRegion(a, 0, static_cast<jsize>(v.size()), v.data());
+        }
+    }
+    return a;
+}
+
+jbyteArray to_jbyte_array(JNIEnv *env, const std::vector<uint8_t> &v) {
+    jbyteArray a = env->NewByteArray(static_cast<jsize>(v.size()));
+    if (!a) return nullptr;
+    if (!v.empty()) {
+        void *p = env->GetPrimitiveArrayCritical(a, nullptr);
+        if (p) {
+            std::memcpy(p, v.data(), v.size());
+            env->ReleasePrimitiveArrayCritical(a, p, 0);
+        } else {
+            env->SetByteArrayRegion(a, 0, static_cast<jsize>(v.size()),
+                                    reinterpret_cast<const jbyte *>(v.data()));
+        }
+    }
+    return a;
+}
+
+jfloatArray to_jfloat_array(JNIEnv *env, const std::vector<float> &v) {
+    jfloatArray a = env->NewFloatArray(static_cast<jsize>(v.size()));
+    if (!a) return nullptr;
+    if (!v.empty()) {
+        void *p = env->GetPrimitiveArrayCritical(a, nullptr);
+        if (p) {
+            std::memcpy(p, v.data(), v.size() * sizeof(float));
+            env->ReleasePrimitiveArrayCritical(a, p, 0);
+        } else {
+            env->SetFloatArrayRegion(a, 0, static_cast<jsize>(v.size()), v.data());
+        }
+    }
+    return a;
+}
+
+} // namespace
+
+/**
+ * Pack one generator.
+ * Returns Object[]{ int[] nodeIds, int[] edgeU, int[] edgeV, byte[] adjacency }.
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_io_chandler_gap_graph_CongestionGraphPack_nativePackOne(
+        JNIEnv *env, jclass,
+        jintArray points, jintArray cycleLens) {
+    if (points == nullptr || cycleLens == nullptr) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "null pack arrays");
+        return nullptr;
+    }
+    jsize nPoints = env->GetArrayLength(points);
+    jsize nCycles = env->GetArrayLength(cycleLens);
+    jint *pp = env->GetIntArrayElements(points, nullptr);
+    jint *lp = env->GetIntArrayElements(cycleLens, nullptr);
+    if (pp == nullptr || lp == nullptr) {
+        if (pp) env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        if (lp) env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        return nullptr;
+    }
+
+    CongestionPacked packed;
+    try {
+        packed = pack_congestion_from_gen(pp, nPoints, lp, nCycles, nullptr, true);
+    } catch (const std::exception &e) {
+        env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, e.what());
+        return nullptr;
+    }
+    env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+    env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+
+    jobjectArray out = new_object_array(env, 4);
+    if (!out) return nullptr;
+    env->SetObjectArrayElement(out, 0, to_jint_array(env, packed.nodeIds));
+    env->SetObjectArrayElement(out, 1, to_jint_array(env, packed.edgeU));
+    env->SetObjectArrayElement(out, 2, to_jint_array(env, packed.edgeV));
+    env->SetObjectArrayElement(out, 3, to_jbyte_array(env, packed.adjacency));
+    return out;
+}
+
+/**
+ * Pack a batch of generators (same n required).
+ *
+ * points / cycleLens: concatenation across graphs.
+ * cyclesPerGraph[g]: number of cycles in graph g (sum = cycleLens.length).
+ * seeds: Java Random seeds for initial positions.
+ *
+ * Returns Object[]{
+ *   int[1] { nVertices },
+ *   int[] graphEdgeOffsets (numGraphs+1),
+ *   int[] graphEdgeCounts,
+ *   int[] edgeU, int[] edgeV,
+ *   byte[] adjacency (numGraphs*n*n),
+ *   float[] initialPos (numGraphs*seeds*n*3),
+ *   int[][] nodeIdsPerGraph
+ * }
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_io_chandler_gap_graph_CongestionGraphPack_nativePackBatch(
+        JNIEnv *env, jclass,
+        jintArray points, jintArray cycleLens, jintArray cyclesPerGraph,
+        jlongArray seeds) {
+    if (points == nullptr || cycleLens == nullptr || cyclesPerGraph == nullptr
+            || seeds == nullptr) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "null packBatch arrays");
+        return nullptr;
+    }
+
+    const int numGraphs = env->GetArrayLength(cyclesPerGraph);
+    const int numSeeds = env->GetArrayLength(seeds);
+    if (numGraphs <= 0) {
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, "empty packBatch");
+        return nullptr;
+    }
+
+    jint *pp = env->GetIntArrayElements(points, nullptr);
+    jint *lp = env->GetIntArrayElements(cycleLens, nullptr);
+    jint *cp = env->GetIntArrayElements(cyclesPerGraph, nullptr);
+    jlong *sp = env->GetLongArrayElements(seeds, nullptr);
+    if (!pp || !lp || !cp || !sp) {
+        if (pp) env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        if (lp) env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        if (cp) env->ReleaseIntArrayElements(cyclesPerGraph, cp, JNI_ABORT);
+        if (sp) env->ReleaseLongArrayElements(seeds, sp, JNI_ABORT);
+        return nullptr;
+    }
+
+    const int nPointsTotal = env->GetArrayLength(points);
+    const int nCyclesTotal = env->GetArrayLength(cycleLens);
+
+    std::vector<CongestionPacked> graphs;
+    graphs.reserve(static_cast<size_t>(numGraphs));
+    try {
+        int pointOff = 0;
+        int cycleOff = 0;
+        for (int g = 0; g < numGraphs; ++g) {
+            const int nCyc = cp[g];
+            if (nCyc < 0 || cycleOff + nCyc > nCyclesTotal)
+                throw std::runtime_error("cyclesPerGraph overrun");
+            int nPts = 0;
+            for (int c = 0; c < nCyc; ++c) nPts += lp[cycleOff + c];
+            if (pointOff + nPts > nPointsTotal)
+                throw std::runtime_error("points overrun");
+            graphs.push_back(pack_congestion_from_gen(
+                    pp + pointOff, nPts, lp + cycleOff, nCyc, nullptr, false));
+            pointOff += nPts;
+            cycleOff += nCyc;
+        }
+        if (pointOff != nPointsTotal || cycleOff != nCyclesTotal)
+            throw std::runtime_error("trailing generator data");
+    } catch (const std::exception &e) {
+        env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+        env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+        env->ReleaseIntArrayElements(cyclesPerGraph, cp, JNI_ABORT);
+        env->ReleaseLongArrayElements(seeds, sp, JNI_ABORT);
+        jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+        if (ex) env->ThrowNew(ex, e.what());
+        return nullptr;
+    }
+    env->ReleaseIntArrayElements(points, pp, JNI_ABORT);
+    env->ReleaseIntArrayElements(cycleLens, lp, JNI_ABORT);
+    env->ReleaseIntArrayElements(cyclesPerGraph, cp, JNI_ABORT);
+
+    const int nVertices = static_cast<int>(graphs[0].nodeIds.size());
+    for (int g = 1; g < numGraphs; ++g) {
+        if (static_cast<int>(graphs[static_cast<size_t>(g)].nodeIds.size()) != nVertices) {
+            env->ReleaseLongArrayElements(seeds, sp, JNI_ABORT);
+            jclass ex = env->FindClass("java/lang/IllegalArgumentException");
+            if (ex) env->ThrowNew(ex, "mixed vertex counts in batch");
+            return nullptr;
+        }
+    }
+
+    std::vector<int> offsets(static_cast<size_t>(numGraphs + 1));
+    std::vector<int> counts(static_cast<size_t>(numGraphs));
+    int totalEdges = 0;
+    for (int g = 0; g < numGraphs; ++g) {
+        offsets[static_cast<size_t>(g)] = totalEdges;
+        counts[static_cast<size_t>(g)] = static_cast<int>(graphs[static_cast<size_t>(g)].edgeU.size());
+        totalEdges += counts[static_cast<size_t>(g)];
+    }
+    offsets[static_cast<size_t>(numGraphs)] = totalEdges;
+
+    std::vector<int> edgeU(static_cast<size_t>(totalEdges));
+    std::vector<int> edgeV(static_cast<size_t>(totalEdges));
+    int eo = 0;
+    for (int g = 0; g < numGraphs; ++g) {
+        auto &gp = graphs[static_cast<size_t>(g)];
+        std::copy(gp.edgeU.begin(), gp.edgeU.end(), edgeU.begin() + eo);
+        std::copy(gp.edgeV.begin(), gp.edgeV.end(), edgeV.begin() + eo);
+        eo += counts[static_cast<size_t>(g)];
+    }
+
+    const size_t adjStride = static_cast<size_t>(nVertices) * static_cast<size_t>(nVertices);
+    const jsize adjLen = static_cast<jsize>(static_cast<size_t>(numGraphs) * adjStride);
+    jbyteArray adjArr = env->NewByteArray(adjLen);
+    if (!adjArr) {
+        env->ReleaseLongArrayElements(seeds, sp, JNI_ABORT);
+        return nullptr;
+    }
+    {
+        void *adjPtr = env->GetPrimitiveArrayCritical(adjArr, nullptr);
+        if (!adjPtr) {
+            env->ReleaseLongArrayElements(seeds, sp, JNI_ABORT);
+            return nullptr;
+        }
+        auto *adj = static_cast<uint8_t *>(adjPtr);
+        for (int g = 0; g < numGraphs; ++g) {
+            paint_adjacency(adj + static_cast<size_t>(g) * adjStride, nVertices,
+                            graphs[static_cast<size_t>(g)].edgeU,
+                            graphs[static_cast<size_t>(g)].edgeV);
+        }
+        env->ReleasePrimitiveArrayCritical(adjArr, adjPtr, 0);
+    }
+
+    std::vector<float> initialPos(
+            static_cast<size_t>(numGraphs) * static_cast<size_t>(numSeeds)
+            * static_cast<size_t>(nVertices) * 3u);
+    for (int g = 0; g < numGraphs; ++g) {
+        for (int s = 0; s < numSeeds; ++s) {
+            const size_t base =
+                    (static_cast<size_t>(g) * static_cast<size_t>(numSeeds) + static_cast<size_t>(s))
+                    * static_cast<size_t>(nVertices) * 3u;
+            fill_initial_positions(initialPos.data() + base, nVertices, sp[s]);
+        }
+    }
+    env->ReleaseLongArrayElements(seeds, sp, JNI_ABORT);
+
+    // nodeIdsPerGraph
+    jclass intArrCls = env->FindClass("[I");
+    jobjectArray nodeIdsArr = env->NewObjectArray(numGraphs, intArrCls, nullptr);
+    for (int g = 0; g < numGraphs; ++g) {
+        env->SetObjectArrayElement(nodeIdsArr, g,
+                                   to_jint_array(env, graphs[static_cast<size_t>(g)].nodeIds));
+    }
+
+    jint nVertBox[1] = {nVertices};
+    jintArray nVertArr = env->NewIntArray(1);
+    env->SetIntArrayRegion(nVertArr, 0, 1, nVertBox);
+
+    jobjectArray out = new_object_array(env, 8);
+    env->SetObjectArrayElement(out, 0, nVertArr);
+    env->SetObjectArrayElement(out, 1, to_jint_array(env, offsets));
+    env->SetObjectArrayElement(out, 2, to_jint_array(env, counts));
+    env->SetObjectArrayElement(out, 3, to_jint_array(env, edgeU));
+    env->SetObjectArrayElement(out, 4, to_jint_array(env, edgeV));
+    env->SetObjectArrayElement(out, 5, adjArr);
+    env->SetObjectArrayElement(out, 6, to_jfloat_array(env, initialPos));
+    env->SetObjectArrayElement(out, 7, nodeIdsArr);
+    return out;
+}
+
