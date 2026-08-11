@@ -118,7 +118,7 @@ public class PlanarStudy {
         
         // Fixed study workers for Phase 1/2 (+ sort/seed). Caps ThreadLocal GAP/dreadnaut sessions.
         int studyThreads = Runtime.getRuntime().availableProcessors() + 2;
-        int resultFilterQueueSize = 40000; // Max pending results in AbstractResultFilter before add() blocks
+        int resultFilterQueueSize = 50000; // Max pending results in AbstractResultFilter before add() blocks
         AbstractResultFilter resultFilter;
         /*resultFilter = TrialityResultFilter.builder(resultFilterQueueSize)
             .referenceGroup(generator)
@@ -138,8 +138,8 @@ public class PlanarStudy {
                 .batchSize(256)
                 .batchWaitMs(30_000)
                 .guardBand(0.1)
-                .cpuOverflowThreads(studyThreads * 2 + 2)
-                .cpuOverflowQueueSize(400) // block study workers when CPU overflow backlog hits this
+                .cpuOverflowThreads(studyThreads)
+                .cpuOverflowQueueSize(150) // block study workers when CPU overflow backlog hits this
                 .overflowBelowRemaining(512) // divert when GPU queue has <= this many free slots
                 .build();
         } else {
@@ -172,7 +172,7 @@ public class PlanarStudy {
         boolean DYNAMIC_LASTLOOP_ORDER = true;
         int LASTLOOP_PROBE_SAMPLES = 24;           // disjoint-passing samples per probe window
         int LASTLOOP_PROBE_EVERY_CANDIDATES = 1;   // 1 = probe each candidate; raise to probe less often
-        int LASTLOOP_REPROBE_EVERY_DISJOINT = 8000; // 0 = no mid-candidate re-probe
+        int LASTLOOP_REPROBE_EVERY_DISJOINT = 20000; // 0 = no mid-candidate re-probe
 
         MemorySettings mem = MemorySettings.COMPRESS_LONG;
 
