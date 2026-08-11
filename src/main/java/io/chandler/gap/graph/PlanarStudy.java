@@ -1673,41 +1673,6 @@ public class PlanarStudy {
         }
     }
 
-    private static CanonicalGraphHash getCanonicalLabelingOrQuarantine(
-        DreadnautInterface dreadnaut,
-        Graph<Integer, DefaultEdge> graph,
-        int[][][] candidate,
-        boolean directed,
-        QuarantineLog quarantine,
-        AtomicInteger errors
-    ) {
-        try {
-            return CanonicalGraphHash.parse(dreadnaut.getCanonicalLabeling(graph, directed));
-        } catch (RuntimeException e) {
-            if (isAbnormalDreadnautExit(e)) {
-                if (quarantine != null) {
-                    quarantine.logFailure(GroupExplorer.generatorsToString(candidate), e.getMessage());
-                }
-            } else {
-                System.err.println("Failed to compute canonical labeling: " + e.getMessage());
-            }
-            if (errors != null) {
-                errors.incrementAndGet();
-            }
-            return null;
-        }
-    }
-
-    /** Same rule as {@link DreadnautInterface}: all-2-cycles graphs are treated as undirected. */
-    private static boolean generatorsAreAllTwoCycles(int[][][] combinedGen) {
-        for (int[][] cycle : combinedGen) {
-            for (int[] polygon : cycle) {
-                if (polygon.length != 2) return false;
-            }
-        }
-        return true;
-    }
-
     /**
      * Cycle-type signature of one generator: sorted cycle lengths (fixed points omitted
      * since they are not present in the cycle array). Same signature ⇒ same conjugacy
@@ -1953,15 +1918,21 @@ public class PlanarStudy {
      * Checks whether any duplicate polygon appears in the combined generator array.
      * Two polygons are considered duplicates if their canonical (sorted) representation is equal.
      */
+    /**
+     * True if more than {@code maxAllowed} polygons share the same vertex multiset
+     * (order ignored: {@code [1,2,3]} ≡ {@code [2,1,3]}).
+     */
     private static boolean hasDuplicatePolygon(int[][][] combinedGen, int maxAllowed) {
-        int count = 0;
-        Set<String> set = new HashSet<>();
+        int estimate = 0;
+        for (int[][] cycle : combinedGen) {
+            estimate += cycle.length;
+        }
+        Set<SortedPolygonKey> seen = new HashSet<>(Math.max(16, estimate));
+        int duplicates = 0;
         for (int[][] cycle : combinedGen) {
             for (int[] polygon : cycle) {
-                String canon = canonicalPolygon(polygon);
-                if (!set.add(canon)) {
-                    count++;
-                    if (count > maxAllowed) {
+                if (!seen.add(SortedPolygonKey.of(polygon))) {
+                    if (++duplicates > maxAllowed) {
                         return true;
                     }
                 }
@@ -1969,15 +1940,36 @@ public class PlanarStudy {
         }
         return false;
     }
-    
-    /**
-     * Computes a canonical representation of a polygon (an int array) by sorting.
-     * This is used in duplicate checks to ignore ordering differences (e.g. [1,2,3] vs [2,1,3]).
-     */
-    private static String canonicalPolygon(int[] polygon) {
-        int[] copy = Arrays.copyOf(polygon, polygon.length);
-        Arrays.sort(copy);
-        return Arrays.toString(copy);
+
+    /** Sorted vertex multiset key for {@link #hasDuplicatePolygon}. */
+    private static final class SortedPolygonKey {
+        private final int[] sorted;
+        private final int hash;
+
+        private SortedPolygonKey(int[] sorted) {
+            this.sorted = sorted;
+            this.hash = Arrays.hashCode(sorted);
+        }
+
+        static SortedPolygonKey of(int[] polygon) {
+            int[] copy = Arrays.copyOf(polygon, polygon.length);
+            Arrays.sort(copy);
+            return new SortedPolygonKey(copy);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (!(o instanceof SortedPolygonKey)) {
+                return false;
+            }
+            SortedPolygonKey other = (SortedPolygonKey) o;
+            return Arrays.equals(sorted, other.sorted);
+        }
     }
     
     /**
