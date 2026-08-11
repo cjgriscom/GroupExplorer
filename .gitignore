@@ -20,4 +20,7 @@ assets/number_templates/
 assets/ocr_output/
 **/__pycache__/
 native/**/*.so
+native/nauty_jni/vendor/
 lib/libcongestion_cuda.so
+lib/libnauty_jni.so
+lib/libpbin_factorial.so

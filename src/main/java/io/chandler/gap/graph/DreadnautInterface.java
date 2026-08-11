@@ -19,15 +19,49 @@ import org.jgrapht.Graph;
 import org.jgrapht.graph.DefaultEdge;
 
 /**
- * Wrapper around the {@code dreadnaut} executable.
+ * Wrapper around the {@code dreadnaut} executable, with an optional in-process
+ * backend via {@link NautyNative} (TLS-enabled bundled libnauty).
+ * <p>
+ * Select backend with {@code -Ddreadnaut.backend=process|native}.
+ * Default is {@code native} when {@link NautyNative#hasTls()} (built by
+ * {@code native/nauty_jni/build.sh}); otherwise {@code process}.
  */
 public class DreadnautInterface {
+    public enum Backend { PROCESS, NATIVE }
+
     private final String dreadnautPath;
     private final boolean useTraces;
+    private final Backend backend;
 
     public DreadnautInterface(String dreadnautPath, boolean useTraces) {
+        this(dreadnautPath, useTraces, defaultBackend());
+    }
+
+    public DreadnautInterface(String dreadnautPath, boolean useTraces, Backend backend) {
         this.dreadnautPath = dreadnautPath;
         this.useTraces = useTraces;
+        this.backend = backend != null ? backend : defaultBackend();
+        if (this.backend == Backend.NATIVE && !NautyNative.isAvailable()) {
+            throw new IllegalStateException("dreadnaut.backend=native but libnauty_jni not loaded");
+        }
+    }
+
+    public Backend getBackend() {
+        return backend;
+    }
+
+    public static Backend defaultBackend() {
+        String prop = System.getProperty("dreadnaut.backend");
+        if (prop != null) {
+            switch (prop.trim().toLowerCase()) {
+                case "process": return Backend.PROCESS;
+                case "native": return Backend.NATIVE;
+                default: break;
+            }
+        }
+        // Only auto-select native when the bundled library is TLS-safe for
+        // PlanarStudy's multi-threaded workers.
+        return NautyNative.hasTls() ? Backend.NATIVE : Backend.PROCESS;
     }
 
     public static void main(String[] args) throws IOException, InterruptedException {
@@ -74,9 +108,18 @@ public class DreadnautInterface {
     }
 
     private String canonicalize(Graph<Integer, DefaultEdge> graph, boolean directed) throws IOException, InterruptedException {
+        if (backend == Backend.NATIVE) {
+            return NautyNative.getCanonicalLabeling(graph, directed, useTraces);
+        }
+        return canonicalizeProcess(graph, directed);
+    }
+
+    private String canonicalizeProcess(Graph<Integer, DefaultEdge> graph, boolean directed)
+            throws IOException, InterruptedException {
         StringBuilder script = new StringBuilder();
         script.append("l=0\n");
         script.append("-m\n");
+        // Match historical scripts: Traces (At) when requested+undirected, else dense nauty (Ad).
         script.append(useTraces && !directed ? "At" : "Ad").append("\n");
         if (directed) {
             script.append("d\n");
