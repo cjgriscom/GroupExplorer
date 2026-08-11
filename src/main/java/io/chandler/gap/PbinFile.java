@@ -334,7 +334,47 @@ public final class PbinFile implements Closeable {
         }
     }
 
-    private static int[] factorialDecode(BigInteger acc, int N, int k) {
+    /**
+     * Implementation of the factorial-number-system point unpacker.
+     * {@code java} = {@link BigInteger}; {@code limb} = pure-Java uint32 limbs;
+     * {@code native} = GMP via JNI ({@link PbinFactorialNative}). Default prefers
+     * native when the shared library is loaded.
+     */
+    public enum FactorialDecodeBackend {
+        JAVA, LIMB, NATIVE
+    }
+
+    private static volatile FactorialDecodeBackend factorialBackend = defaultBackend();
+
+    private static FactorialDecodeBackend defaultBackend() {
+        String prop = System.getProperty("pbin.factorial");
+        if (prop != null) {
+            switch (prop.trim().toLowerCase()) {
+                case "java": return FactorialDecodeBackend.JAVA;
+                case "limb": return FactorialDecodeBackend.LIMB;
+                case "native": return FactorialDecodeBackend.NATIVE;
+                default: break;
+            }
+        }
+        return PbinFactorialNative.isAvailable()
+                ? FactorialDecodeBackend.NATIVE
+                : FactorialDecodeBackend.JAVA;
+    }
+
+    public static FactorialDecodeBackend getFactorialDecodeBackend() {
+        return factorialBackend;
+    }
+
+    public static void setFactorialDecodeBackend(FactorialDecodeBackend backend) {
+        if (backend == null) throw new NullPointerException("backend");
+        if (backend == FactorialDecodeBackend.NATIVE && !PbinFactorialNative.isAvailable()) {
+            throw new IllegalStateException("libpbin_factorial not available");
+        }
+        factorialBackend = backend;
+    }
+
+    /** Baseline: java.math.BigInteger divideAndRemainder loop + Fenwick. */
+    static int[] factorialDecodeJava(BigInteger acc, int N, int k) {
         int[] indices = new int[k];
         for (int i = k - 1; i >= 0; i--) {
             int remaining = N - i;
@@ -349,6 +389,60 @@ public final class PbinFile implements Closeable {
             ft.remove(points[i]);
         }
         return points;
+    }
+
+    /**
+     * Pure-Java port of pbin.cpp BigInt: little-endian uint32 limbs with
+     * single-limb divmod. Useful fallback / comparison; GMP native is faster.
+     */
+    static int[] factorialDecodeLimb(byte[] bigEndianUnsigned, int N, int k) {
+        int[] words = limbsFromBigEndian(bigEndianUnsigned);
+        int nWords = words.length;
+        int[] indices = new int[k];
+        for (int i = k - 1; i >= 0; i--) {
+            int remaining = N - i;
+            long rem = 0;
+            for (int wi = nWords - 1; wi >= 0; wi--) {
+                rem = (rem << 32) | (words[wi] & 0xFFFFFFFFL);
+                words[wi] = (int) (rem / remaining);
+                rem %= remaining;
+            }
+            while (nWords > 0 && words[nWords - 1] == 0) nWords--;
+            indices[i] = (int) rem;
+        }
+        FenwickTree ft = new FenwickTree(N);
+        int[] points = new int[k];
+        for (int i = 0; i < k; i++) {
+            points[i] = ft.kth(indices[i]);
+            ft.remove(points[i]);
+        }
+        return points;
+    }
+
+    private static int[] limbsFromBigEndian(byte[] data) {
+        int start = 0;
+        while (start < data.length && data[start] == 0) start++;
+        int useful = data.length - start;
+        if (useful == 0) return new int[0];
+        int nWords = (useful + 3) / 4;
+        int[] w = new int[nWords];
+        for (int i = 0; i < useful; i++) {
+            int fromEnd = useful - 1 - i;
+            w[fromEnd / 4] |= (data[start + i] & 0xFF) << (8 * (fromEnd % 4));
+        }
+        return w;
+    }
+
+    static int[] factorialDecode(byte[] bigEndianUnsigned, int N, int k) {
+        switch (factorialBackend) {
+            case NATIVE:
+                return PbinFactorialNative.factorialDecode(bigEndianUnsigned, N, k);
+            case LIMB:
+                return factorialDecodeLimb(bigEndianUnsigned, N, k);
+            case JAVA:
+            default:
+                return factorialDecodeJava(new BigInteger(1, bigEndianUnsigned), N, k);
+        }
     }
 
     private static String decodeGenerator(byte[] raw, int start, int len,
@@ -378,8 +472,7 @@ public final class PbinFile implements Closeable {
                 byte[] biBytes = new byte[biLen];
                 System.arraycopy(raw, pos[0], biBytes, 0, biLen);
                 pos[0] += biLen;
-                BigInteger packed = new BigInteger(1, biBytes);
-                points = factorialDecode(packed, N, total);
+                points = factorialDecode(biBytes, N, total);
             } else {
                 pos[0] += biLen;
                 points = new int[0];
